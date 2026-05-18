@@ -137,7 +137,7 @@ install_prerequisites() {
     log_step "Installation des outils de base..."
     run_cmd apt-get install -y \
         curl wget git ca-certificates gnupg lsb-release \
-        sudo apt-transport-https software-properties-common \
+        sudo apt-transport-https \
         tar gzip jq
 
     log_success "Prérequis installés"
