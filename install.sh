@@ -8,6 +8,10 @@
 
 set -euo pipefail
 
+# S'assurer que les commandes système sont disponibles quand lancé via "curl | bash"
+# (groupadd, usermod, useradd, etc. sont dans /usr/sbin qui peut être absent du PATH)
+export PATH="/usr/sbin:/sbin:/usr/bin:/bin:/usr/local/bin:${PATH}"
+
 # =============================================================================
 # ARGUMENTS
 # =============================================================================
