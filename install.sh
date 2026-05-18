@@ -1,0 +1,825 @@
+#!/bin/bash
+# =============================================================================
+# Caleope — Script d'installation
+# Organisation : Gaiver-IT
+# Repo         : https://github.com/gaiver-it/caleope
+# Usage        : apt install -y curl && curl -fsSL https://raw.githubusercontent.com/gaiver-it/caleope/main/install.sh | bash
+# =============================================================================
+
+set -euo pipefail
+
+# =============================================================================
+# ARGUMENTS
+# =============================================================================
+
+LOG_MODE="classic"
+
+parse_args() {
+    for arg in "$@"; do
+        case $arg in
+            --debug)   LOG_MODE="debug"   ;;
+            --classic) LOG_MODE="classic" ;;
+        esac
+    done
+}
+
+# =============================================================================
+# VARIABLES
+# =============================================================================
+
+CALEOPE_USER="user-caleope"
+CALEOPE_ROOT="/opt/gaiver-it/caleope"
+CALEOPE_GROUP="caleope"
+
+GITHUB_REPO="gaiver-it/caleope"
+GITHUB_RAW="https://raw.githubusercontent.com/${GITHUB_REPO}/main"
+GITHUB_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+
+GO_VERSION="1.24.3"
+GO_ARCH="linux-amd64"
+GO_URL="https://go.dev/dl/go${GO_VERSION}.${GO_ARCH}.tar.gz"
+
+SOCKET_PATH="/run/caleoped.sock"
+
+# Ports
+PORT_TRAEFIK_HTTP=80
+PORT_TRAEFIK_HTTPS=443
+PORT_TRAEFIK_DASHBOARD=8080
+PORT_PORTAINER=8010
+PORT_COCKPIT=8020
+
+# Réseaux Docker
+DOCKER_NET_PUBLIC="caleope-public"
+DOCKER_NET_INTERNAL="caleope-internal"
+
+# Couleurs
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+GRAY='\033[0;90m'
+NC='\033[0m'
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+log_debug()   { [[ "${LOG_MODE}" == "debug" ]] && echo -e "${GRAY}[DEBUG]${NC}   $1" || true; }
+log_step()    { echo -e "${BLUE}[▶]${NC} $1"; }
+log_success() { echo -e "${GREEN}[✔]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[⚠]${NC} $1"; }
+log_error()   { echo -e "${RED}[✘]${NC} $1"; exit 1; }
+
+log_section() {
+    if [[ "${LOG_MODE}" == "debug" ]]; then
+        echo -e "\n${CYAN}========== $1 ==========${NC}\n"
+    else
+        echo -e "\n${CYAN}◆ $1${NC}"
+    fi
+}
+
+run_cmd() {
+    if [[ "${LOG_MODE}" == "debug" ]]; then
+        "$@"
+    else
+        "$@" &>/dev/null
+    fi
+}
+
+# =============================================================================
+# VÉRIFICATIONS
+# =============================================================================
+
+check_root() {
+    log_debug "Vérification des droits root..."
+    [[ $EUID -eq 0 ]] || log_error "Ce script doit être exécuté en root"
+    log_debug "Droits root OK"
+}
+
+check_debian() {
+    log_debug "Vérification du système..."
+    [[ -f /etc/debian_version ]] || log_error "Ce script est prévu pour Debian uniquement"
+    DEBIAN_VERSION=$(cat /etc/debian_version)
+    log_debug "Debian détecté : ${DEBIAN_VERSION}"
+}
+
+check_debian_codename() {
+    log_debug "Vérification du codename Debian..."
+    CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
+    SUPPORTED=("bookworm" "bullseye" "trixie")
+
+    if [[ ! " ${SUPPORTED[*]} " =~ " ${CODENAME} " ]]; then
+        log_warning "Codename '${CODENAME}' non supporté officiellement, fallback sur 'bookworm'"
+        DOCKER_CODENAME="bookworm"
+    else
+        # Trixie n'a pas encore de repo Docker dédié → fallback bookworm
+        [[ "${CODENAME}" == "trixie" ]] && DOCKER_CODENAME="bookworm" || DOCKER_CODENAME="${CODENAME}"
+    fi
+    log_debug "Codename Docker : ${DOCKER_CODENAME}"
+}
+
+check_user() {
+    log_debug "Vérification de l'utilisateur ${CALEOPE_USER}..."
+    id "${CALEOPE_USER}" &>/dev/null || log_error "L'utilisateur '${CALEOPE_USER}' n'existe pas. Crée-le avant de lancer ce script : useradd -m -s /bin/bash ${CALEOPE_USER}"
+    log_debug "Utilisateur ${CALEOPE_USER} OK"
+}
+
+# =============================================================================
+# PRÉREQUIS SYSTÈME
+# =============================================================================
+
+install_prerequisites() {
+    log_section "Prérequis système"
+    log_step "Mise à jour des paquets..."
+    run_cmd apt-get update
+
+    log_step "Installation des outils de base..."
+    run_cmd apt-get install -y \
+        curl wget git ca-certificates gnupg lsb-release \
+        sudo apt-transport-https software-properties-common \
+        tar gzip jq
+
+    log_success "Prérequis installés"
+}
+
+# =============================================================================
+# DOCKER
+# =============================================================================
+
+install_docker() {
+    log_section "Docker Engine"
+
+    if command -v docker &>/dev/null; then
+        log_warning "Docker déjà installé : $(docker --version)"
+        return 0
+    fi
+
+    log_step "Suppression des anciennes versions..."
+    run_cmd apt-get remove -y docker.io docker-doc docker-compose \
+        podman-docker containerd runc 2>/dev/null || true
+
+    log_step "Ajout du dépôt officiel Docker..."
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL "https://download.docker.com/linux/debian/gpg" \
+        -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
+
+    echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+        https://download.docker.com/linux/debian ${DOCKER_CODENAME} stable" \
+        > /etc/apt/sources.list.d/docker.list
+
+    log_step "Installation de Docker Engine..."
+    run_cmd apt-get update
+    run_cmd apt-get install -y \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+
+    run_cmd systemctl enable docker
+    run_cmd systemctl start docker
+
+    usermod -aG docker "${CALEOPE_USER}"
+
+    log_success "Docker installé : $(docker --version)"
+}
+
+# =============================================================================
+# RÉSEAUX DOCKER
+# =============================================================================
+
+create_docker_networks() {
+    log_section "Réseaux Docker"
+
+    for net in "${DOCKER_NET_PUBLIC}" "${DOCKER_NET_INTERNAL}"; do
+        if docker network inspect "${net}" &>/dev/null; then
+            log_warning "Réseau '${net}' existe déjà"
+        else
+            log_step "Création du réseau '${net}'..."
+            docker network create --driver bridge "${net}"
+            log_success "Réseau '${net}' créé"
+        fi
+    done
+}
+
+# =============================================================================
+# GO (pour compiler caleoped si pas de release dispo)
+# =============================================================================
+
+install_go() {
+    log_section "Go ${GO_VERSION}"
+
+    if command -v go &>/dev/null; then
+        local current
+        current=$(go version | awk '{print $3}' | sed 's/go//')
+        log_warning "Go déjà installé : ${current}"
+        # Mettre le lien symlink au cas où
+        ln -sf /usr/local/go/bin/go /usr/bin/go 2>/dev/null || true
+        return 0
+    fi
+
+    log_step "Téléchargement de Go ${GO_VERSION}..."
+    local tmp
+    tmp=$(mktemp -d)
+    wget -q "${GO_URL}" -O "${tmp}/go.tar.gz"
+
+    log_step "Installation de Go..."
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf "${tmp}/go.tar.gz"
+    rm -rf "${tmp}"
+
+    # Rendre Go accessible globalement (user ET sudo)
+    ln -sf /usr/local/go/bin/go /usr/bin/go
+    ln -sf /usr/local/go/bin/gofmt /usr/bin/gofmt
+
+    log_success "Go installé : $(go version)"
+}
+
+# =============================================================================
+# BINAIRES CALEOPE
+# =============================================================================
+
+install_caleope_binaries() {
+    log_section "Binaires Caleope (caleoped + caleope-store)"
+
+    # Essayer d'abord de télécharger les binaires pré-compilés depuis GitHub Releases
+    if download_binaries_from_release; then
+        return 0
+    fi
+
+    # Fallback : compiler depuis les sources
+    log_warning "Aucune release GitHub trouvée, compilation depuis les sources..."
+    compile_from_source
+}
+
+download_binaries_from_release() {
+    log_step "Recherche de la dernière release GitHub..."
+
+    # Récupérer l'URL de la dernière release via l'API GitHub
+    local release_info
+    release_info=$(curl -fsSL "${GITHUB_API}" 2>/dev/null) || {
+        log_debug "API GitHub inaccessible ou repo sans releases"
+        return 1
+    }
+
+    # Extraire les URLs des binaires (jq parse le JSON)
+    local daemon_url cli_url
+    daemon_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleoped-linux-amd64") | .browser_download_url' 2>/dev/null)
+    cli_url=$(echo "${release_info}"    | jq -r '.assets[] | select(.name == "caleope-store-linux-amd64") | .browser_download_url' 2>/dev/null)
+
+    if [[ -z "${daemon_url}" || -z "${cli_url}" ]]; then
+        log_debug "Binaires non trouvés dans la release"
+        return 1
+    fi
+
+    local version
+    version=$(echo "${release_info}" | jq -r '.tag_name')
+    log_step "Téléchargement des binaires version ${version}..."
+
+    wget -q "${daemon_url}" -O /usr/local/bin/caleoped
+    wget -q "${cli_url}"    -O /usr/local/bin/caleope-store
+
+    chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope-store
+
+    log_success "Binaires installés depuis la release ${version}"
+    return 0
+}
+
+compile_from_source() {
+    # S'assurer que Go est disponible
+    command -v go &>/dev/null || install_go
+
+    local tmp
+    tmp=$(mktemp -d)
+    local src="${tmp}/caleope"
+
+    log_step "Clonage des sources..."
+    git clone --depth=1 "https://github.com/${GITHUB_REPO}.git" "${src}"
+
+    log_step "Compilation du daemon..."
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+        go build -ldflags="-s -w" \
+        -o /usr/local/bin/caleoped \
+        "${src}/cmd/caleoped/"
+
+    log_step "Compilation du CLI..."
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+        go build -ldflags="-s -w" \
+        -o /usr/local/bin/caleope-store \
+        "${src}/cmd/caleope-store/"
+
+    chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope-store
+    rm -rf "${tmp}"
+
+    log_success "Binaires compilés et installés"
+}
+
+# =============================================================================
+# STRUCTURE CALEOPE
+# =============================================================================
+
+create_structure() {
+    log_section "Structure des répertoires Caleope"
+    log_step "Création de l'arborescence..."
+
+    local dirs=(
+        "${CALEOPE_ROOT}/core/cache/official/apps"
+        "${CALEOPE_ROOT}/core/portainer"
+        "${CALEOPE_ROOT}/core/traefik"
+        "${CALEOPE_ROOT}/apps-store"
+        "${CALEOPE_ROOT}/apps-installed"
+        "${CALEOPE_ROOT}/app-config"
+        "${CALEOPE_ROOT}/app-data"
+        "${CALEOPE_ROOT}/runtime/apps"
+        "${CALEOPE_ROOT}/runtime/events"
+        "${CALEOPE_ROOT}/backups"
+        "${CALEOPE_ROOT}/logs"
+        # Données des services core
+        "${CALEOPE_ROOT}/data/portainer"
+        "${CALEOPE_ROOT}/data/traefik/certs"
+    )
+
+    for dir in "${dirs[@]}"; do
+        mkdir -p "${dir}"
+        log_debug "Créé : ${dir}"
+    done
+
+    chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}"
+    chmod -R 755 "${CALEOPE_ROOT}"
+
+    log_success "Arborescence créée dans ${CALEOPE_ROOT}"
+}
+
+# =============================================================================
+# GROUPE CALEOPE (accès au socket)
+# =============================================================================
+
+setup_caleope_group() {
+    log_section "Groupe système Caleope"
+
+    groupadd -f "${CALEOPE_GROUP}"
+    log_debug "Groupe '${CALEOPE_GROUP}' créé (ou existait déjà)"
+
+    usermod -aG "${CALEOPE_GROUP}" "${CALEOPE_USER}"
+    log_success "Utilisateur '${CALEOPE_USER}' ajouté au groupe '${CALEOPE_GROUP}'"
+}
+
+# =============================================================================
+# SERVICE SYSTEMD CALEOPED
+# =============================================================================
+
+install_caleoped_service() {
+    log_section "Service caleoped"
+
+    log_step "Installation du fichier service..."
+    cat > /etc/systemd/system/caleoped.service << EOF
+[Unit]
+Description=Caleope Application Daemon
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=${CALEOPE_GROUP}
+ExecStartPre=/bin/rm -f ${SOCKET_PATH}
+ExecStart=/usr/local/bin/caleoped --base-dir ${CALEOPE_ROOT} --socket ${SOCKET_PATH}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+Environment=HOME=/root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=caleoped
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable caleoped
+    systemctl start caleoped
+
+    # Attendre que le socket soit créé (max 10s)
+    local retries=0
+    until [[ -S "${SOCKET_PATH}" ]] || [[ $retries -ge 10 ]]; do
+        sleep 1
+        ((retries++))
+    done
+
+    if [[ -S "${SOCKET_PATH}" ]]; then
+        log_success "Daemon caleoped actif"
+    else
+        log_warning "Daemon démarré mais socket non détecté — vérifier : journalctl -u caleoped"
+    fi
+}
+
+# =============================================================================
+# TRAEFIK
+# =============================================================================
+
+deploy_traefik() {
+    log_section "Traefik (reverse proxy)"
+
+    if docker ps --format '{{.Names}}' | grep -q "^traefik$"; then
+        log_warning "Traefik déjà en cours d'exécution"
+        return 0
+    fi
+
+    local IP
+    IP=$(hostname -I | awk '{print $1}')
+
+    log_step "Génération de la configuration Traefik..."
+
+    # traefik.yml — configuration statique
+    cat > "${CALEOPE_ROOT}/data/traefik/traefik.yml" << EOF
+# Configuration statique Traefik — gérée par Caleope
+# Ne pas modifier manuellement
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+api:
+  dashboard: true
+  insecure: true   # dashboard accessible sur :8080 (réseau interne uniquement)
+
+entryPoints:
+  web:
+    address: ":${PORT_TRAEFIK_HTTP}"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+
+  websecure:
+    address: ":${PORT_TRAEFIK_HTTPS}"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false    # Les apps doivent explicitement activer Traefik
+    network: ${DOCKER_NET_PUBLIC}
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: admin@${IP}.nip.io
+      storage: /certs/acme.json
+      httpChallenge:
+        entryPoint: web
+EOF
+
+    # Dossier de config dynamique (pour futures règles manuelles)
+    mkdir -p "${CALEOPE_ROOT}/data/traefik/dynamic"
+
+    # compose.yml de Traefik
+    cat > "${CALEOPE_ROOT}/core/traefik/compose.yml" << EOF
+services:
+  traefik:
+    image: traefik:v3.3
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "${PORT_TRAEFIK_HTTP}:${PORT_TRAEFIK_HTTP}"
+      - "${PORT_TRAEFIK_HTTPS}:${PORT_TRAEFIK_HTTPS}"
+      - "${PORT_TRAEFIK_DASHBOARD}:${PORT_TRAEFIK_DASHBOARD}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${CALEOPE_ROOT}/data/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ${CALEOPE_ROOT}/data/traefik/dynamic:/etc/traefik/dynamic:ro
+      - ${CALEOPE_ROOT}/data/traefik/certs:/certs
+    networks:
+      - ${DOCKER_NET_PUBLIC}
+      - ${DOCKER_NET_INTERNAL}
+
+networks:
+  ${DOCKER_NET_PUBLIC}:
+    external: true
+  ${DOCKER_NET_INTERNAL}:
+    external: true
+EOF
+
+    chown -R "${CALEOPE_USER}:${CALEOPE_USER}" \
+        "${CALEOPE_ROOT}/core/traefik" \
+        "${CALEOPE_ROOT}/data/traefik"
+
+    log_step "Démarrage de Traefik..."
+    docker compose -f "${CALEOPE_ROOT}/core/traefik/compose.yml" up -d
+
+    local retries=0
+    until docker ps --format '{{.Names}}' | grep -q "^traefik$" || [[ $retries -ge 15 ]]; do
+        sleep 1
+        ((retries++))
+    done
+
+    if docker ps --format '{{.Names}}' | grep -q "^traefik$"; then
+        log_success "Traefik actif"
+        log_debug "Dashboard : http://${IP}:${PORT_TRAEFIK_DASHBOARD}"
+    else
+        log_warning "Traefik ne semble pas démarré — vérifier : docker logs traefik"
+    fi
+}
+
+# =============================================================================
+# PORTAINER
+# =============================================================================
+
+deploy_portainer() {
+    log_section "Portainer CE"
+
+    if docker ps --format '{{.Names}}' | grep -q "^portainer$"; then
+        log_warning "Portainer déjà en cours d'exécution"
+        return 0
+    fi
+
+    cat > "${CALEOPE_ROOT}/core/portainer/compose.yml" << EOF
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "${PORT_PORTAINER}:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CALEOPE_ROOT}/data/portainer:/data
+    networks:
+      - ${DOCKER_NET_INTERNAL}
+
+networks:
+  ${DOCKER_NET_INTERNAL}:
+    external: true
+EOF
+
+    chown "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}/core/portainer/compose.yml"
+
+    log_step "Démarrage de Portainer..."
+    docker compose -f "${CALEOPE_ROOT}/core/portainer/compose.yml" up -d
+
+    local retries=0
+    until docker ps --format '{{.Names}}' | grep -q "^portainer$" || [[ $retries -ge 15 ]]; do
+        sleep 1
+        ((retries++))
+    done
+
+    if docker ps --format '{{.Names}}' | grep -q "^portainer$"; then
+        local IP
+        IP=$(hostname -I | awk '{print $1}')
+        log_success "Portainer actif"
+
+        echo ""
+        echo -e "${RED}╔══════════════════════════════════════════════════════╗${NC}"
+        echo -e "${RED}║  ⚠️  ACTION REQUISE DANS LES 5 PROCHAINES MINUTES  ║${NC}"
+        echo -e "${RED}║                                                      ║${NC}"
+        echo -e "${RED}║  Connecte-toi sur Portainer et crée ton compte admin ║${NC}"
+        echo -e "${RED}║  avant que le timer de sécurité expire               ║${NC}"
+        echo -e "${RED}║                                                      ║${NC}"
+        echo -e "${RED}║  → https://${IP}:${PORT_PORTAINER}                       ║${NC}"
+        echo -e "${RED}╚══════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${YELLOW}Appuie sur [Entrée] une fois ton compte Portainer créé...${NC}"
+        read -r
+    else
+        log_warning "Portainer ne semble pas démarré — vérifier : docker logs portainer"
+    fi
+}
+
+# =============================================================================
+# COCKPIT
+# =============================================================================
+
+install_cockpit() {
+    log_section "Cockpit"
+
+    if ss -tlnp | grep -q ":${PORT_COCKPIT}"; then
+        log_warning "Cockpit déjà actif sur le port ${PORT_COCKPIT}"
+        return 0
+    fi
+
+    log_step "Installation de Cockpit..."
+    run_cmd apt-get install -y cockpit
+
+    log_step "Configuration du port ${PORT_COCKPIT}..."
+    systemctl stop cockpit.service 2>/dev/null || true
+    systemctl stop cockpit.socket  2>/dev/null || true
+
+    mkdir -p /etc/cockpit
+    cat > /etc/cockpit/cockpit.conf << EOF
+[WebService]
+ListenStream=${PORT_COCKPIT}
+EOF
+
+    mkdir -p /etc/systemd/system/cockpit.socket.d/
+    cat > /etc/systemd/system/cockpit.socket.d/listen.conf << EOF
+[Socket]
+ListenStream=
+ListenStream=${PORT_COCKPIT}
+EOF
+
+    log_step "Activation de Cockpit..."
+    systemctl daemon-reload
+    systemctl enable cockpit.socket
+    systemctl restart cockpit.socket
+    systemctl restart cockpit.service 2>/dev/null || true
+
+    sleep 3
+
+    if ss -tlnp | grep -q ":${PORT_COCKPIT}"; then
+        log_success "Cockpit actif sur le port ${PORT_COCKPIT}"
+    else
+        log_warning "Cockpit démarré — port ${PORT_COCKPIT} non encore détecté"
+    fi
+}
+
+# =============================================================================
+# SUDO
+# =============================================================================
+
+configure_sudo() {
+    log_section "Configuration sudo"
+    run_cmd apt-get install -y sudo
+    usermod -aG sudo "${CALEOPE_USER}"
+    log_success "'${CALEOPE_USER}' ajouté au groupe sudo"
+}
+
+# =============================================================================
+# INITIALISATION RUNTIME CALEOPE
+# =============================================================================
+
+init_caleope_runtime() {
+    log_section "Initialisation du runtime Caleope"
+
+    # Initialiser repos.json avec le repo officiel
+    cat > "${CALEOPE_ROOT}/runtime/repos.json" << EOF
+[
+  {
+    "name": "official",
+    "url": "https://github.com/${GITHUB_REPO}-store",
+    "trust": "official",
+    "local_dir": "${CALEOPE_ROOT}/core/cache/official",
+    "last_sync": "0001-01-01T00:00:00Z"
+  }
+]
+EOF
+
+    # Initialiser ports.json vide
+    echo "{}" > "${CALEOPE_ROOT}/runtime/ports.json"
+
+    chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}/runtime"
+
+    log_success "Runtime initialisé"
+}
+
+# =============================================================================
+# FICHIER RÉSUMÉ
+# =============================================================================
+
+generate_links_file() {
+    local IP
+    IP=$(hostname -I | awk '{print $1}')
+
+    cat > "${CALEOPE_ROOT}/LIENS.md" << EOF
+# Caleope — Accès aux services
+
+## Services
+
+| Service            | URL                                         |
+|--------------------|---------------------------------------------|
+| Traefik dashboard  | http://${IP}:${PORT_TRAEFIK_DASHBOARD}      |
+| Portainer          | https://${IP}:${PORT_PORTAINER}             |
+| Cockpit            | https://${IP}:${PORT_COCKPIT}               |
+
+---
+
+## Caleope CLI
+
+\`\`\`bash
+caleope-store ping
+caleope-store list
+caleope-store search <terme>
+caleope-store install <app>
+\`\`\`
+
+---
+
+## Arborescence
+
+- Racine      : ${CALEOPE_ROOT}
+- Apps store  : ${CALEOPE_ROOT}/apps-store
+- Apps datas  : ${CALEOPE_ROOT}/app-data
+- Runtime     : ${CALEOPE_ROOT}/runtime
+
+---
+
+## Notes
+
+- Déconnecte/reconnecte ta session pour Docker sans sudo
+- Le daemon Caleope : systemctl status caleoped
+- Logs daemon : journalctl -u caleoped -f
+EOF
+
+    chown "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}/LIENS.md"
+}
+
+# =============================================================================
+# RÉSUMÉ FINAL
+# =============================================================================
+
+print_summary() {
+    local IP
+    IP=$(hostname -I | awk '{print $1}')
+
+    # Test rapide du daemon
+    local daemon_status="❌ inactif"
+    systemctl is-active --quiet caleoped && daemon_status="✅ actif"
+
+    echo ""
+    echo -e "${GREEN}"
+    echo "  ██████╗ █████╗ ██╗     ███████╗ ██████╗ ██████╗ ███████╗"
+    echo " ██╔════╝██╔══██╗██║     ██╔════╝██╔═══██╗██╔══██╗██╔════╝"
+    echo " ██║     ███████║██║     █████╗  ██║   ██║██████╔╝█████╗  "
+    echo " ██║     ██╔══██║██║     ██╔══╝  ██║   ██║██╔═══╝ ██╔══╝  "
+    echo " ╚██████╗██║  ██║███████╗███████╗╚██████╔╝██║     ███████╗"
+    echo "  ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝"
+    echo -e "${NC}"
+    echo -e "${CYAN}Installation terminée !${NC}"
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║                   Services actifs                    ║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║${NC}  🔀 Traefik     → ${YELLOW}http://${IP}:${PORT_TRAEFIK_DASHBOARD}${NC}"
+    echo -e "${CYAN}║${NC}  🐳 Portainer   → ${YELLOW}https://${IP}:${PORT_PORTAINER}${NC}"
+    echo -e "${CYAN}║${NC}  🖥️  Cockpit     → ${YELLOW}https://${IP}:${PORT_COCKPIT}${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║                   Caleope Daemon                     ║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║${NC}  Statut : ${daemon_status}"
+    echo -e "${CYAN}║${NC}  Socket : ${SOCKET_PATH}"
+    echo -e "${CYAN}║${NC}  Logs   : ${YELLOW}journalctl -u caleoped -f${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║                   Prochaines étapes                  ║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
+    echo -e "${CYAN}║${NC}  ${YELLOW}⚠️  Reconnecte-toi en tant que ${CALEOPE_USER}${NC}"
+    echo -e "${CYAN}║${NC}     ${YELLOW}pour utiliser Docker et caleope-store${NC}"
+    echo -e "${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}  ${GREEN}caleope-store ping${NC}           # tester le daemon"
+    echo -e "${CYAN}║${NC}  ${GREEN}caleope-store search media${NC}   # chercher une app"
+    echo -e "${CYAN}║${NC}  ${GREEN}caleope-store install jellyfin${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  📄 Résumé complet : ${YELLOW}${CALEOPE_ROOT}/LIENS.md${NC}"
+    echo ""
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+main() {
+    parse_args "$@"
+
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════╗"
+    echo "║      Caleope — Installation              ║"
+    echo "║           by Gaiver-IT                   ║"
+    echo "║              v0.1.0                      ║"
+    echo "╚══════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    if [[ "${LOG_MODE}" == "debug" ]]; then
+        echo -e "${GRAY}Mode : DEBUG${NC}\n"
+    else
+        echo -e "${GRAY}Mode : CLASSIC  |  --debug pour plus de détails${NC}\n"
+    fi
+
+    # Vérifications préalables
+    check_root
+    check_debian
+    check_debian_codename
+    check_user
+
+    # Installation dans l'ordre
+    install_prerequisites
+    install_docker
+    create_docker_networks
+    create_structure
+    setup_caleope_group
+    install_caleope_binaries   # release GitHub → fallback compile
+    init_caleope_runtime
+    install_caleoped_service
+    deploy_traefik
+    deploy_portainer
+    install_cockpit
+    configure_sudo
+    generate_links_file
+    print_summary
+}
+
+main "$@"
