@@ -1,0 +1,64 @@
+# /etc/systemd/system/caleoped.service
+#
+# Service systemd pour le daemon Caleope.
+#
+# COMMENT ÇA MARCHE :
+# systemd est le gestionnaire de services de Debian.
+# Ce fichier lui dit comment lancer, surveiller et arrêter caleoped.
+#
+# INSTALLATION :
+#   sudo cp caleoped.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now caleoped
+#
+# COMMANDES UTILES :
+#   sudo systemctl status caleoped    → état du daemon
+#   sudo systemctl restart caleoped   → redémarrer
+#   journalctl -u caleoped -f         → logs en temps réel
+
+[Unit]
+# Description = nom affiché par systemctl
+Description=Caleope Application Daemon
+# After = lancer seulement après que le réseau ET Docker soient prêts
+After=network.target docker.service
+# Requires = dépendance stricte (si Docker s'arrête, caleoped aussi)
+Requires=docker.service
+
+[Service]
+# Type=simple = le processus lancé EST le daemon (pas de fork)
+Type=simple
+
+# Utilisateur dédié (plus sécurisé que root)
+# À créer : sudo useradd -r -s /bin/false caleope
+User=root
+Group=root
+
+# Commande de démarrage
+ExecStart=/usr/local/bin/caleoped --base-dir /opt/gaiver-it/caleope --socket /run/caleoped.sock
+
+# Nettoyage du socket avant démarrage (au cas où le daemon aurait crashé)
+ExecStartPre=/bin/rm -f /run/caleoped.sock
+
+# Redémarrage automatique si le daemon plante (pas si arrêt volontaire)
+Restart=on-failure
+RestartSec=5s
+
+# Timeout pour l'arrêt propre (SIGTERM) avant SIGKILL forcé
+TimeoutStopSec=30
+
+# Variables d'environnement
+Environment=HOME=/root
+
+# Logs vers journald (accessible via journalctl)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=caleoped
+
+# Limites de sécurité
+# NoNewPrivileges = le daemon ne peut pas gagner de nouveaux privilèges
+NoNewPrivileges=true
+
+[Install]
+# WantedBy = dans quel "target" (niveau de démarrage) ce service est activé
+# multi-user.target = système normal multi-utilisateurs (sans interface graphique)
+WantedBy=multi-user.target

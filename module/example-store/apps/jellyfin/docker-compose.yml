@@ -1,0 +1,40 @@
+# Template Docker Compose pour Jellyfin
+# Les {{.Variable}} sont remplacés par Caleope lors de la génération.
+# Ce fichier NE DOIT PAS être lancé directement — utiliser le compose.yml généré.
+
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+
+    environment:
+      - JELLYFIN_PublishedServerUrl=https://{{.Domain}}
+
+    ports:
+      # Port dynamique alloué par Caleope (ex: 8234:8096)
+      {{- range .Ports}}
+      - "{{.Host}}:{{.Container}}"
+      {{- end}}
+
+    volumes:
+      # Bind mounts — données persistantes sur l'hôte
+      {{- range .Volumes}}
+      - {{$.BaseDir}}/{{.Source}}:{{.Target}}
+      {{- end}}
+
+    labels:
+      # Labels Traefik — générés automatiquement par Caleope
+      - "traefik.enable=true"
+      - "traefik.http.routers.jellyfin.rule=Host(`{{.Domain}}`)"
+      - "traefik.http.routers.jellyfin.entrypoints=websecure"
+      - "traefik.http.routers.jellyfin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
+      - "traefik.docker.network=caleope-public"
+
+    networks:
+      - caleope-public
+
+networks:
+  caleope-public:
+    external: true
