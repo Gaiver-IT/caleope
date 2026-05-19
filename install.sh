@@ -327,7 +327,6 @@ create_structure() {
     log_step "Création de l'arborescence..."
 
     local dirs=(
-        "${CALEOPE_ROOT}/core/cache/official/apps"
         "${CALEOPE_ROOT}/core/portainer"
         "${CALEOPE_ROOT}/core/traefik"
         "${CALEOPE_ROOT}/apps-store"
@@ -648,7 +647,7 @@ EOF
 configure_sudo() {
     log_section "Configuration sudo"
     run_cmd apt-get install -y sudo
-    usermod -aG sudo "${CALEOPE_USER}"
+    /usr/sbin/usermod -aG sudo "${CALEOPE_USER}"
     log_success "'${CALEOPE_USER}' ajouté au groupe sudo"
 }
 
@@ -678,6 +677,35 @@ EOF
     chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}/runtime"
 
     log_success "Runtime initialisé"
+}
+
+# =============================================================================
+# SYNC INITIALE DU STORE
+# =============================================================================
+
+sync_store() {
+    log_section "Synchronisation du store Caleope"
+
+    local store_dir="${CALEOPE_ROOT}/core/cache/official"
+    local store_url="https://github.com/${GITHUB_REPO}-store"
+
+    # Supprimer le dossier s'il existe déjà mais est vide (créé par mkdir -p)
+    # git clone refuse de cloner dans un dossier non vide
+    if [[ -d "${store_dir}" ]] && [[ -z "$(ls -A "${store_dir}")" ]]; then
+        rm -rf "${store_dir}"
+        log_debug "Dossier cache vide supprimé pour permettre le clone"
+    fi
+
+    if [[ -d "${store_dir}/.git" ]]; then
+        log_step "Mise à jour du store..."
+        git -C "${store_dir}" pull --ff-only
+    else
+        log_step "Téléchargement du store depuis GitHub..."
+        git clone --depth=1 "${store_url}" "${store_dir}"
+    fi
+
+    chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${store_dir}"
+    log_success "Store synchronisé — $(find "${store_dir}/apps" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l) application(s) disponible(s)"
 }
 
 # =============================================================================
@@ -810,6 +838,7 @@ main() {
     check_user
 
     # Installation dans l'ordre
+    configure_sudo             # En premier — nécessaire pour la suite
     install_prerequisites
     install_docker
     create_docker_networks
@@ -817,11 +846,11 @@ main() {
     setup_caleope_group
     install_caleope_binaries   # release GitHub → fallback compile
     init_caleope_runtime
+    sync_store                 # git clone du store officiel
     install_caleoped_service
     deploy_traefik
     deploy_portainer
     install_cockpit
-    configure_sudo
     generate_links_file
     print_summary
 }
