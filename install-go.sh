@@ -9,3 +9,4 @@ sudo ln -sf /usr/local/go/bin/gofmt /usr/bin/gofmt
 
 # Vérifier
 go version
+sudo apt install -y make
