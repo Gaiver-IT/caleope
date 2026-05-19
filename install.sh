@@ -56,6 +56,11 @@ PORT_COCKPIT=8020
 DOCKER_NET_PUBLIC="caleope-public"
 DOCKER_NET_INTERNAL="caleope-internal"
 
+# Config interactive (remplie par ask_config)
+CALEOPE_DOMAIN=""
+CALEOPE_EMAIL=""
+CALEOPE_PROXY_MODE=""   # "npm" = NPM en amont, "traefik" = Traefik gère les certs
+
 # Couleurs
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -88,6 +93,68 @@ run_cmd() {
         "$@"
     else
         "$@" &>/dev/null
+    fi
+}
+
+# =============================================================================
+# CONFIGURATION INTERACTIVE
+# =============================================================================
+
+ask_config() {
+    log_section "Configuration de Caleope"
+
+    echo ""
+    echo -e "${CYAN}  Quelques questions pour configurer ton installation.${NC}"
+    echo ""
+
+    # ── Domaine de base ──
+    while [[ -z "${CALEOPE_DOMAIN}" ]]; do
+        echo -e "${BLUE}  Domaine de base pour ce serveur Caleope${NC}"
+        echo -e "  ${GRAY}Ex: caleope.mondomaine.com${NC}"
+        echo -e "  ${GRAY}Les apps seront accessibles sur jellyfin.<domaine>, nextcloud.<domaine>...${NC}"
+        read -rp "  → Domaine : " CALEOPE_DOMAIN
+    done
+
+    # ── Mode reverse proxy ──
+    echo ""
+    echo -e "${BLUE}  Mode reverse proxy${NC}"
+    echo -e "  ${GRAY}1) NPM/Caddy/autre en amont  — Traefik reçoit du HTTP, pas de gestion des certs${NC}"
+    echo -e "  ${GRAY}2) Traefik natif             — Traefik gère HTTPS et Let's Encrypt directement${NC}"
+    while [[ "${CALEOPE_PROXY_MODE}" != "npm" && "${CALEOPE_PROXY_MODE}" != "traefik" ]]; do
+        read -rp "  → Choix [1/2] : " proxy_choice
+        case "${proxy_choice}" in
+            1) CALEOPE_PROXY_MODE="npm" ;;
+            2) CALEOPE_PROXY_MODE="traefik" ;;
+            *) echo -e "  ${RED}Choix invalide, entre 1 ou 2${NC}" ;;
+        esac
+    done
+
+    # ── Email Let's Encrypt (seulement si mode traefik) ──
+    if [[ "${CALEOPE_PROXY_MODE}" == "traefik" ]]; then
+        echo ""
+        echo -e "${BLUE}  Email pour Let's Encrypt${NC}"
+        echo -e "  ${GRAY}Utilisé pour les notifications de renouvellement de certificats${NC}"
+        while [[ -z "${CALEOPE_EMAIL}" ]]; do
+            read -rp "  → Email : " CALEOPE_EMAIL
+        done
+    fi
+
+    # ── Résumé ──
+    echo ""
+    echo -e "${CYAN}  ┌─────────────────────────────────────────┐${NC}"
+    echo -e "${CYAN}  │           Récapitulatif                 │${NC}"
+    echo -e "${CYAN}  ├─────────────────────────────────────────┤${NC}"
+    echo -e "${CYAN}  │${NC}  Domaine    : ${YELLOW}${CALEOPE_DOMAIN}${NC}"
+    echo -e "${CYAN}  │${NC}  Proxy mode : ${YELLOW}${CALEOPE_PROXY_MODE}${NC}"
+    [[ -n "${CALEOPE_EMAIL}" ]] &&     echo -e "${CYAN}  │${NC}  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"
+    echo -e "${CYAN}  └─────────────────────────────────────────┘${NC}"
+    echo ""
+    read -rp "  Confirmer ? [O/n] : " confirm
+    if [[ "${confirm,,}" == "n" ]]; then
+        CALEOPE_DOMAIN=""
+        CALEOPE_PROXY_MODE=""
+        CALEOPE_EMAIL=""
+        ask_config
     fi
 }
 
@@ -433,20 +500,49 @@ deploy_traefik() {
     local IP
     IP=$(hostname -I | awk '{print $1}')
 
-    log_step "Génération de la configuration Traefik..."
+    log_step "Génération de la configuration Traefik (mode: ${CALEOPE_PROXY_MODE})..."
 
-    # traefik.yml — configuration statique
-    cat > "${CALEOPE_ROOT}/data/traefik/traefik.yml" << EOF
-# Configuration statique Traefik — gérée par Caleope
-# Ne pas modifier manuellement
+    mkdir -p "${CALEOPE_ROOT}/data/traefik/dynamic"
+    touch "${CALEOPE_ROOT}/data/traefik/certs/acme.json"
+    chmod 600 "${CALEOPE_ROOT}/data/traefik/certs/acme.json"
 
+    # traefik.yml — deux modes selon config
+    if [[ "${CALEOPE_PROXY_MODE}" == "npm" ]]; then
+        # Mode NPM : Traefik reçoit HTTP depuis NPM, pas de gestion des certs
+        cat > "${CALEOPE_ROOT}/data/traefik/traefik.yml" << EOF
 global:
   checkNewVersion: false
   sendAnonymousUsage: false
 
 api:
   dashboard: true
-  insecure: true   # dashboard accessible sur :8080 (réseau interne uniquement)
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":${PORT_TRAEFIK_HTTP}"
+  websecure:
+    address: ":${PORT_TRAEFIK_HTTPS}"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: ${DOCKER_NET_PUBLIC}
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+EOF
+    else
+        # Mode Traefik natif : gestion Let's Encrypt directe
+        cat > "${CALEOPE_ROOT}/data/traefik/traefik.yml" << EOF
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+api:
+  dashboard: true
+  insecure: true
 
 entryPoints:
   web:
@@ -456,14 +552,14 @@ entryPoints:
         entryPoint:
           to: websecure
           scheme: https
-
+          permanent: true
   websecure:
     address: ":${PORT_TRAEFIK_HTTPS}"
 
 providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
-    exposedByDefault: false    # Les apps doivent explicitement activer Traefik
+    exposedByDefault: false
     network: ${DOCKER_NET_PUBLIC}
   file:
     directory: /etc/traefik/dynamic
@@ -472,22 +568,22 @@ providers:
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: admin@${IP}.nip.io
+      email: ${CALEOPE_EMAIL}
       storage: /certs/acme.json
       httpChallenge:
         entryPoint: web
 EOF
+    fi
 
-    # Dossier de config dynamique (pour futures règles manuelles)
-    mkdir -p "${CALEOPE_ROOT}/data/traefik/dynamic"
-
-    # compose.yml de Traefik
+    # compose.yml Traefik (commun aux deux modes)
     cat > "${CALEOPE_ROOT}/core/traefik/compose.yml" << EOF
 services:
   traefik:
-    image: traefik:v3.3
+    image: traefik:v2.11
     container_name: traefik
     restart: unless-stopped
+    environment:
+      - DOCKER_API_VERSION=1.45
     ports:
       - "${PORT_TRAEFIK_HTTP}:${PORT_TRAEFIK_HTTP}"
       - "${PORT_TRAEFIK_HTTPS}:${PORT_TRAEFIK_HTTPS}"
@@ -500,6 +596,11 @@ services:
     networks:
       - ${DOCKER_NET_PUBLIC}
       - ${DOCKER_NET_INTERNAL}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(\`traefik.${CALEOPE_DOMAIN}\`)"
+      - "traefik.http.routers.dashboard.entrypoints=web"
+      - "traefik.http.routers.dashboard.service=api@internal"
 
 networks:
   ${DOCKER_NET_PUBLIC}:
@@ -680,6 +781,33 @@ EOF
 }
 
 # =============================================================================
+# SAUVEGARDE DE LA CONFIG
+# =============================================================================
+
+save_config() {
+    log_section "Sauvegarde de la configuration"
+
+    # caleope.conf — fichier de config persistante
+    # Utilisé par caleope-store pour construire les domaines automatiquement
+    cat > "${CALEOPE_ROOT}/caleope.conf" << EOF
+# Configuration Caleope — généré à l'installation
+# Modifiable à tout moment, rechargé par le daemon
+
+CALEOPE_DOMAIN=${CALEOPE_DOMAIN}
+CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}
+CALEOPE_EMAIL=${CALEOPE_EMAIL}
+CALEOPE_VERSION=0.1.0
+EOF
+
+    chmod 644 "${CALEOPE_ROOT}/caleope.conf"
+    chown "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}/caleope.conf"
+
+    log_success "Config sauvegardée dans ${CALEOPE_ROOT}/caleope.conf"
+    log_debug "  CALEOPE_DOMAIN=${CALEOPE_DOMAIN}"
+    log_debug "  CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}"
+}
+
+# =============================================================================
 # SYNC INITIALE DU STORE
 # =============================================================================
 
@@ -837,6 +965,9 @@ main() {
     check_debian_codename
     check_user
 
+    # Configuration interactive (domaine, mode proxy, email)
+    ask_config
+
     # Installation dans l'ordre
     configure_sudo             # En premier — nécessaire pour la suite
     install_prerequisites
@@ -846,6 +977,7 @@ main() {
     setup_caleope_group
     install_caleope_binaries   # release GitHub → fallback compile
     init_caleope_runtime
+    save_config                # Sauvegarder domaine + mode proxy dans caleope.conf
     sync_store                 # git clone du store officiel
     install_caleoped_service
     deploy_traefik
