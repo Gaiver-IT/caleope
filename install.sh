@@ -944,6 +944,11 @@ print_summary() {
 main() {
     parse_args "$@"
 
+    # Quand lancé via "curl | bash", stdin est le pipe — pas le terminal.
+    # read échoue avec EOF → set -e tue le script. On force stdin vers /dev/tty.
+    [[ -t 0 ]] || exec < /dev/tty
+
+
     clear
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════╗"
