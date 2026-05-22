@@ -826,7 +826,8 @@ sync_store() {
 
     if [[ -d "${store_dir}/.git" ]]; then
         log_step "Mise à jour du store..."
-        git -C "${store_dir}" pull --ff-only
+        git -C "${store_dir}" fetch origin
+        git -C "${store_dir}" reset --hard origin/main
     else
         log_step "Téléchargement du store depuis GitHub..."
         git clone --depth=1 "${store_url}" "${store_dir}"
