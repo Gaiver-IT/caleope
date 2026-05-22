@@ -2,6 +2,8 @@
 
 apt install -y curl && curl -fsSL https://raw.githubusercontent.com/gaiver-it/caleope/main/install.sh | bash
 
+Une fois l'installation finissant par " 📄 Résumé complet : /opt/gaiver-it/caleope/LIENS.md" vous pouvez faire Ctrl + c pour reprendre la main sur votre terminal
+
 # License
 
 Caleope is licensed under the GNU AGPLv3.
