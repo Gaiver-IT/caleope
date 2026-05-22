@@ -60,6 +60,49 @@ type AppBackup struct {
 }
 
 // ─────────────────────────────────────────────
+// BACKUP — manifest d'une sauvegarde
+// Stocké dans backups/<app>/<timestamp>/manifest.json
+// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────
+// SUPERVISION — snapshot de métriques
+// ─────────────────────────────────────────────
+
+// AppStats contient les métriques live d'une application.
+type AppStats struct {
+	AppID      string  `json:"app_id"`
+	Name       string  `json:"name"`
+	Status     string  `json:"status"`
+	CPUPercent float64 `json:"cpu_percent"`
+	MemoryMB   float64 `json:"memory_mb"`
+	DiskMB     int64   `json:"disk_mb"` // -1 si non calculé (mode simple)
+	Port       int     `json:"port"`
+}
+
+// StatsSnapshot est le résultat d'une collecte complète.
+type StatsSnapshot struct {
+	Timestamp   time.Time  `json:"timestamp"`
+	Apps        []AppStats `json:"apps"`
+	MemUsedMB   float64    `json:"mem_used_mb"`
+	MemTotalMB  float64    `json:"mem_total_mb"`
+	DiskUsedGB  float64    `json:"disk_used_gb"`
+	DiskTotalGB float64    `json:"disk_total_gb"`
+}
+
+// ─────────────────────────────────────────────
+// BACKUP — manifest d'une sauvegarde
+// ─────────────────────────────────────────────
+
+type BackupManifest struct {
+	App            string    `json:"app"`
+	AppName        string    `json:"app_name"`
+	Timestamp      time.Time `json:"timestamp"`
+	CaleopeVersion string    `json:"caleope_version"`
+	HasData        bool      `json:"has_data"`
+	HasConfig      bool      `json:"has_config"`
+}
+
+// ─────────────────────────────────────────────
 // RUNTIME APP — état d'une app installée
 // Stocké dans runtime/apps/<id>.json
 // ─────────────────────────────────────────────
@@ -104,6 +147,33 @@ type Event struct {
 	Type      string            `json:"event"`   // install, update, remove, error...
 	App       string            `json:"app,omitempty"`
 	Meta      map[string]string `json:"meta,omitempty"` // données additionnelles libres
+}
+
+// ─────────────────────────────────────────────
+// NETWORK LOCATIONS — emplacements réseau montables
+// Stockés dans runtime/locations/<name>.json
+// ─────────────────────────────────────────────
+
+// NetworkLocationType définit le protocole de l'emplacement.
+type NetworkLocationType string
+
+const (
+	LocationSMB  NetworkLocationType = "smb"
+	LocationCIFS NetworkLocationType = "cifs" // alias smb
+	LocationSFTP NetworkLocationType = "sftp"
+)
+
+// NetworkLocation représente un emplacement réseau monté ou montable.
+type NetworkLocation struct {
+	Name       string              `json:"name"`
+	Type       NetworkLocationType `json:"type"`
+	Host       string              `json:"host"`        // hostname ou IP
+	Share      string              `json:"share"`       // chemin du partage (SMB: //host/share, SFTP: /path)
+	Username   string              `json:"username"`
+	MountPoint string              `json:"mount_point"` // /opt/gaiver-it/caleope/mounts/<name>
+	Mounted    bool                `json:"mounted"`
+	AddedAt    time.Time           `json:"added_at"`
+	Options    string              `json:"options,omitempty"` // options de montage supplémentaires
 }
 
 // ─────────────────────────────────────────────

@@ -19,14 +19,18 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/gaiver-it/caleope/internal/api"
+	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
 	"github.com/gaiver-it/caleope/internal/install"
+	"github.com/gaiver-it/caleope/internal/metrics"
+	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
 	"github.com/gaiver-it/caleope/internal/store"
 )
@@ -35,8 +39,9 @@ func main() {
 	// ── Flags CLI du daemon ──
 	// flag.String("nom", "défaut", "description") = argument en ligne de commande
 	// Ex: caleoped --base-dir /opt/gaiver-it/caleope
-	baseDir := flag.String("base-dir", "/opt/gaiver-it/caleope", "Répertoire base Caleope")
-	socketPath := flag.String("socket", "/run/caleoped.sock", "Chemin du socket UNIX")
+	baseDir    := flag.String("base-dir",  "/opt/gaiver-it/caleope", "Répertoire base Caleope")
+	socketPath := flag.String("socket",   "/run/caleoped.sock",    "Chemin du socket UNIX")
+	apiPort    := flag.Int("api-port",   8765,                    "Port de l'API REST HTTP")
 	flag.Parse()
 
 	fmt.Println("╔══════════════════════════════════╗")
@@ -65,8 +70,34 @@ func main() {
 	em := events.NewEmitter(*baseDir)
 
 	installer := install.NewInstaller(rt, st, dc, em, *baseDir)
+	bkp := backup.NewManager(rt, dc, *baseDir)
+	col := metrics.NewCollector(rt, *baseDir)
+	net := network.NewManager(*baseDir)
 
-	server := api.NewServer(*socketPath, rt, st, installer, em, *baseDir)
+	// Endpoint Prometheus sur :9100/metrics (pour Grafana)
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			snap, err := col.Collect(false)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+			fmt.Fprint(w, metrics.PrometheusText(snap))
+		})
+		fmt.Println("✓ Prometheus metrics sur :9100/metrics")
+		_ = http.ListenAndServe(":9100", mux)
+	}()
+
+	server := api.NewServer(*socketPath, rt, st, installer, bkp, dc, col, em, net, *baseDir)
+
+	// API REST HTTP
+	go func() {
+		if err := server.StartHTTP(*apiPort); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  API REST: %v\n", err)
+		}
+	}()
 
 	// ── Gestion des signaux système (graceful shutdown) ──
 	// make(chan os.Signal, 1) = créer un canal bufferisé de signaux

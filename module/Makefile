@@ -8,7 +8,7 @@
 
 # Variables
 BINARY_DAEMON  = caleoped
-BINARY_CLI     = caleope-store
+BINARY_CLI     = caleope
 BUILD_DIR      = ./build
 INSTALL_DIR    = /usr/local/bin
 SERVICE_DIR    = /etc/systemd/system
@@ -32,7 +32,7 @@ build:
 	@echo "🔨 Compilation..."
 	@mkdir -p $(BUILD_DIR)
 	$(GO_ENV) go build $(GO_FLAGS) -o $(BUILD_DIR)/$(BINARY_DAEMON) ./cmd/caleoped/
-	$(GO_ENV) go build $(GO_FLAGS) -o $(BUILD_DIR)/$(BINARY_CLI)    ./cmd/caleope-store/
+	$(GO_ENV) go build $(GO_FLAGS) -o $(BUILD_DIR)/$(BINARY_CLI)    ./cmd/caleope/
 	@echo "✅ Binaires dans $(BUILD_DIR)/"
 	@ls -lh $(BUILD_DIR)/
 
@@ -59,7 +59,7 @@ install: build
 	@echo ""
 	@echo "Pour vérifier :"
 	@echo "  systemctl status caleoped"
-	@echo "  caleope-store ping"
+	@echo "  caleope ping"
 
 ## uninstall : Désinstaller complètement
 uninstall:

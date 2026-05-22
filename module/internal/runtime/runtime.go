@@ -326,6 +326,7 @@ type Config struct {
 	ProxyMode string // "npm" ou "traefik"
 	Email     string // email Let's Encrypt
 	Version   string
+	Channel   string // "stable" ou "alpha"
 }
 
 // GetConfig lit et parse caleope.conf.
@@ -362,6 +363,8 @@ func (m *Manager) GetConfig() (*Config, error) {
 			cfg.Email = val
 		case "CALEOPE_VERSION":
 			cfg.Version = val
+		case "CALEOPE_CHANNEL":
+			cfg.Channel = val
 		}
 	}
 	return cfg, nil

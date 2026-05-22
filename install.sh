@@ -56,6 +56,7 @@ DOCKER_NET_INTERNAL="caleope-internal"
 CALEOPE_DOMAIN=""
 CALEOPE_EMAIL=""
 CALEOPE_PROXY_MODE=""   # "npm" = NPM en amont, "traefik" = Traefik gère les certs
+CALEOPE_CHANNEL=""      # "stable" = releases officielles, "alpha" = pré-releases
 
 # Couleurs
 RED='\033[0;31m'
@@ -125,6 +126,20 @@ ask_config() {
         esac
     done
 
+    # ── Canal de mise à jour ──
+    echo ""
+    echo -e "${BLUE}  Canal de mises à jour${NC}"
+    echo -e "  ${GRAY}1) Stable ${GREEN}(recommandé)${GRAY} — versions validées et testées${NC}"
+    echo -e "  ${GRAY}2) Alpha                — dernières fonctionnalités, peut être instable${NC}"
+    while [[ "${CALEOPE_CHANNEL}" != "stable" && "${CALEOPE_CHANNEL}" != "alpha" ]]; do
+        read -rp "  → Choix [1/2] : " channel_choice </dev/tty
+        case "${channel_choice}" in
+            1) CALEOPE_CHANNEL="stable" ;;
+            2) CALEOPE_CHANNEL="alpha"  ;;
+            *) echo -e "  ${RED}Choix invalide${NC}" ;;
+        esac
+    done
+
     # ── Email Let's Encrypt (seulement si mode traefik) ──
     if [[ "${CALEOPE_PROXY_MODE}" == "traefik" ]]; then
         echo ""
@@ -142,6 +157,7 @@ ask_config() {
     echo -e "${CYAN}  ├─────────────────────────────────────────┤${NC}"
     echo -e "${CYAN}  │${NC}  Domaine    : ${YELLOW}${CALEOPE_DOMAIN}${NC}"
     echo -e "${CYAN}  │${NC}  Proxy mode : ${YELLOW}${CALEOPE_PROXY_MODE}${NC}"
+    echo -e "${CYAN}  │${NC}  Canal      : ${YELLOW}${CALEOPE_CHANNEL}${NC}"
     [[ -n "${CALEOPE_EMAIL}" ]] &&     echo -e "${CYAN}  │${NC}  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"
     echo -e "${CYAN}  └─────────────────────────────────────────┘${NC}"
     echo ""
@@ -280,14 +296,25 @@ install_caleope_binaries() {
 }
 
 download_binaries_from_release() {
-    log_step "Recherche de la dernière release GitHub..."
+    log_step "Recherche de la dernière release GitHub (canal: ${CALEOPE_CHANNEL:-stable})..."
 
-    # Récupérer l'URL de la dernière release via l'API GitHub
+    # stable → /releases/latest (ignore les pré-releases)
+    # alpha  → /releases?per_page=1 (inclut les pré-releases, plus récent en premier)
     local release_info
-    release_info=$(curl -fsSL "${GITHUB_API}" 2>/dev/null) || {
-        log_debug "API GitHub inaccessible ou repo sans releases"
-        return 1
-    }
+    if [[ "${CALEOPE_CHANNEL:-stable}" == "alpha" ]]; then
+        local raw
+        raw=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=1" 2>/dev/null) || {
+            log_debug "API GitHub inaccessible"
+            return 1
+        }
+        # L'endpoint renvoie un tableau — on extrait le premier élément
+        release_info=$(echo "${raw}" | jq '.[0]' 2>/dev/null)
+    else
+        release_info=$(curl -fsSL "${GITHUB_API}" 2>/dev/null) || {
+            log_debug "API GitHub inaccessible ou repo sans releases"
+            return 1
+        }
+    fi
 
     # Extraire les URLs des binaires (jq parse le JSON)
     local daemon_url cli_url
@@ -724,6 +751,7 @@ save_config() {
 CALEOPE_DOMAIN=${CALEOPE_DOMAIN}
 CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}
 CALEOPE_EMAIL=${CALEOPE_EMAIL}
+CALEOPE_CHANNEL=${CALEOPE_CHANNEL}
 CALEOPE_VERSION=0.1.0
 EOF
 

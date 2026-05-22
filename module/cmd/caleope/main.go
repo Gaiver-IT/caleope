@@ -1,12 +1,12 @@
-// cmd/caleope-store/main.go
+// cmd/caleope/main.go
 //
 // 💻 LE CLI — interface utilisateur en ligne de commande
 //
-// caleope-store est le client du daemon.
+// caleope est le client du daemon.
 // Il traduit les commandes humaines en requêtes API JSON sur le socket UNIX.
 //
 // FLUX :
-//   $ caleope-store install jellyfin
+//   $ caleope install jellyfin
 //   → CLI construit {"command":"install","args":{"app":"jellyfin"}}
 //   → CLI envoie sur /run/caleoped.sock
 //   → daemon traite et répond
@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
@@ -60,6 +61,10 @@ func main() {
 		cmdLogs(args)
 	case "search":
 		cmdSearch(args)
+	case "events":
+		cmdEvents(args)
+	case "location", "locations":
+		cmdLocation(args)
 	case "top":
 		cmdTop(args)
 	case "stop":
@@ -79,9 +84,11 @@ func main() {
 	case "upgrade":
 		cmdUpgrade(args)
 	case "version", "--version", "-v":
-		fmt.Printf("caleope-store %s (commit: %s)\n", version.Version, version.Commit)
+		fmt.Printf("caleope %s (commit: %s)\n", version.Version, version.Commit)
 	case "ping":
 		cmdPing()
+	case "token":
+		cmdToken()
 	case "help", "--help", "-h":
 		printHelp()
 	default:
@@ -97,7 +104,7 @@ func main() {
 
 func cmdInstall(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store install <app> [--domain <domaine>] [--channel stable|latest|nightly]")
+		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly]")
 	}
 
 	apiArgs := map[string]string{
@@ -105,7 +112,7 @@ func cmdInstall(args []string) {
 	}
 
 	// Parser les flags optionnels
-	// Ex: caleope-store install jellyfin --domain media.home.local --channel latest
+	// Ex: caleope install jellyfin --domain media.home.local --channel latest
 	for i := 1; i < len(args)-1; i++ {
 		switch args[i] {
 		case "--domain":
@@ -135,7 +142,7 @@ func cmdInstall(args []string) {
 
 func cmdRemove(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store remove <app> [--keep-data]")
+		die("Usage: caleope remove <app> [--keep-data]")
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
@@ -213,7 +220,7 @@ func cmdList(args []string) {
 
 func cmdInfo(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store info <app>")
+		die("Usage: caleope info <app>")
 	}
 
 	resp := callDaemon("info", map[string]string{"app": args[0]})
@@ -228,7 +235,7 @@ func cmdInfo(args []string) {
 
 func cmdLogs(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store logs <app> [--tail <n>]")
+		die("Usage: caleope logs <app> [--tail <n>]")
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
@@ -253,7 +260,7 @@ func cmdLogs(args []string) {
 
 func cmdSearch(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store search <terme>")
+		die("Usage: caleope search <terme>")
 	}
 
 	resp := callDaemon("search", map[string]string{"term": args[0]})
@@ -281,6 +288,185 @@ func cmdSearch(args []string) {
 		)
 	}
 	w.Flush()
+}
+
+func cmdEvents(args []string) {
+	apiArgs := map[string]string{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--app":
+			if i+1 < len(args) {
+				apiArgs["app"] = args[i+1]
+				i++
+			}
+		case "--type":
+			if i+1 < len(args) {
+				apiArgs["type"] = args[i+1]
+				i++
+			}
+		case "--limit", "-n":
+			if i+1 < len(args) {
+				apiArgs["limit"] = args[i+1]
+				i++
+			}
+		}
+	}
+
+	resp := callDaemon("events", apiArgs)
+	if !resp.Success {
+		die("❌ " + resp.Error)
+	}
+
+	evts, ok := resp.Data.([]interface{})
+	if !ok || len(evts) == 0 {
+		fmt.Println("Aucun événement.")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TIMESTAMP\tTYPE\tAPP\tDÉTAILS")
+	fmt.Fprintln(w, "─────────────────────\t────────────────\t────────────\t───────")
+	for _, e := range evts {
+		ev, _ := e.(map[string]interface{})
+		ts := strField(ev, "timestamp")
+		if len(ts) > 19 {
+			ts = ts[:19]
+		}
+		evType := strField(ev, "event")
+		app := strField(ev, "app")
+		meta := ""
+		if m, ok := ev["meta"].(map[string]interface{}); ok {
+			var parts []string
+			for k, v := range m {
+				parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+			}
+			meta = strings.Join(parts, " ")
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ts, evType, app, meta)
+	}
+	w.Flush()
+}
+
+func cmdLocation(args []string) {
+	if len(args) == 0 {
+		// Liste par défaut
+		resp := callDaemon("location-list", nil)
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		locs, ok := resp.Data.([]interface{})
+		if !ok || len(locs) == 0 {
+			fmt.Println("Aucun emplacement réseau configuré.")
+			fmt.Println("  caleope location add <nom> --type smb --host <host> --share <partage> --user <user>")
+			return
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "NOM\tTYPE\tHÔTE\tPARTAGE\tMONTÉ\tPOINT DE MONTAGE")
+		fmt.Fprintln(w, "───\t────\t────\t───────\t──────\t────────────────")
+		for _, l := range locs {
+			loc, _ := l.(map[string]interface{})
+			mounted := "non"
+			if loc["mounted"] == true {
+				mounted = "✓"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				strField(loc, "name"), strField(loc, "type"),
+				strField(loc, "host"), strField(loc, "share"),
+				mounted, strField(loc, "mount_point"))
+		}
+		w.Flush()
+		return
+	}
+
+	sub := args[0]
+	rest := args[1:]
+
+	switch sub {
+	case "list", "ls":
+		cmdLocation(nil)
+
+	case "add":
+		if len(rest) == 0 {
+			die("Usage: caleope location add <nom> --type smb|cifs|sftp --host <host> --share <partage> [--user <user>] [--password <pass>]")
+		}
+		apiArgs := map[string]string{"name": rest[0]}
+		for i := 1; i < len(rest); i++ {
+			switch rest[i] {
+			case "--type":
+				if i+1 < len(rest) {
+					apiArgs["type"] = rest[i+1]
+					i++
+				}
+			case "--host":
+				if i+1 < len(rest) {
+					apiArgs["host"] = rest[i+1]
+					i++
+				}
+			case "--share", "--path":
+				if i+1 < len(rest) {
+					apiArgs["share"] = rest[i+1]
+					i++
+				}
+			case "--user", "--username":
+				if i+1 < len(rest) {
+					apiArgs["username"] = rest[i+1]
+					i++
+				}
+			case "--password":
+				if i+1 < len(rest) {
+					apiArgs["password"] = rest[i+1]
+					i++
+				}
+			case "--options":
+				if i+1 < len(rest) {
+					apiArgs["options"] = rest[i+1]
+					i++
+				}
+			}
+		}
+		resp := callDaemon("location-add", apiArgs)
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		if m, ok := resp.Data.(map[string]interface{}); ok {
+			fmt.Printf("✅ %s\n", m["message"])
+			fmt.Printf("   Point de montage : %s\n", m["mount_point"])
+		}
+
+	case "remove", "rm":
+		if len(rest) == 0 {
+			die("Usage: caleope location remove <nom>")
+		}
+		resp := callDaemon("location-remove", map[string]string{"name": rest[0]})
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		fmt.Printf("✅ Emplacement '%s' supprimé\n", rest[0])
+
+	case "mount":
+		if len(rest) == 0 {
+			die("Usage: caleope location mount <nom>")
+		}
+		fmt.Printf("🔗 Montage de '%s'...\n", rest[0])
+		resp := callDaemon("location-mount", map[string]string{"name": rest[0]})
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		fmt.Printf("✅ '%s' monté\n", rest[0])
+
+	case "unmount":
+		if len(rest) == 0 {
+			die("Usage: caleope location unmount <nom>")
+		}
+		resp := callDaemon("location-unmount", map[string]string{"name": rest[0]})
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		fmt.Printf("✅ '%s' démonté\n", rest[0])
+
+	default:
+		die("Sous-commande inconnue: " + sub + "\n  Utilisez: add, remove, mount, unmount, list")
+	}
 }
 
 func cmdTop(args []string) {
@@ -352,13 +538,32 @@ func printTop(advanced bool) {
 	fmt.Println()
 
 	// ── Tableau apps ──
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	// Largeurs des colonnes (en caractères visibles)
+	const (
+		wApp    = 16
+		wStatus = 12
+		wCPU    = 7
+		wRAM    = 9
+		wDisk   = 9
+		wPort   = 6
+	)
+
 	if advanced {
-		fmt.Fprintln(w, "  APP\tÉTAT\tCPU\tRAM\tDISK\tPORT")
-		fmt.Fprintln(w, "  ───\t────\t───\t───\t────\t────")
+		fmt.Printf("  %s%s%s%s%s%s\n",
+			padR("APP", wApp), padR("ÉTAT", wStatus),
+			padR("CPU", wCPU), padR("RAM", wRAM),
+			padR("DISK", wDisk), "PORT")
+		fmt.Printf("  %s%s%s%s%s%s\n",
+			padR("───", wApp), padR("────", wStatus),
+			padR("───", wCPU), padR("───", wRAM),
+			padR("────", wDisk), "────")
 	} else {
-		fmt.Fprintln(w, "  APP\tÉTAT\tCPU\tRAM\tPORT")
-		fmt.Fprintln(w, "  ───\t────\t───\t───\t────")
+		fmt.Printf("  %s%s%s%s%s\n",
+			padR("APP", wApp), padR("ÉTAT", wStatus),
+			padR("CPU", wCPU), padR("RAM", wRAM), "PORT")
+		fmt.Printf("  %s%s%s%s%s\n",
+			padR("───", wApp), padR("────", wStatus),
+			padR("───", wCPU), padR("───", wRAM), "────")
 	}
 
 	for _, a := range snap.Apps {
@@ -379,12 +584,16 @@ func printTop(advanced bool) {
 					disk = fmt.Sprintf("%d MB", a.DiskMB)
 				}
 			}
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\n", a.Name, status, cpu, ram, disk, port)
+			fmt.Printf("  %s%s%s%s%s%s\n",
+				padR(a.Name, wApp), padRANSI(status, wStatus),
+				padR(cpu, wCPU), padR(ram, wRAM),
+				padR(disk, wDisk), port)
 		} else {
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n", a.Name, status, cpu, ram, port)
+			fmt.Printf("  %s%s%s%s%s\n",
+				padR(a.Name, wApp), padRANSI(status, wStatus),
+				padR(cpu, wCPU), padR(ram, wRAM), port)
 		}
 	}
-	w.Flush()
 
 	if len(snap.Apps) == 0 {
 		fmt.Println("  Aucune application installée.")
@@ -411,6 +620,38 @@ func formatStatusTop(status string) string {
 	}
 }
 
+// padR pad un string à droite jusqu'à width caractères visibles.
+func padR(s string, width int) string {
+	n := utf8.RuneCountInString(s)
+	if n >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-n)
+}
+
+// padRANSI pad un string contenant des séquences ANSI.
+// Calcule la largeur visible en ignorant les séquences \033[...m.
+func padRANSI(s string, width int) string {
+	visible := 0
+	i := 0
+	runes := []rune(s)
+	for i < len(runes) {
+		if runes[i] == '\033' && i+1 < len(runes) && runes[i+1] == '[' {
+			for i < len(runes) && runes[i] != 'm' {
+				i++
+			}
+			i++ // skip 'm'
+		} else {
+			visible++
+			i++
+		}
+	}
+	if visible >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visible)
+}
+
 func colorPct(pct float64) string {
 	s := fmt.Sprintf("%.0f%%", pct)
 	if pct >= 90 {
@@ -423,7 +664,7 @@ func colorPct(pct float64) string {
 
 func cmdStopStart(action string, args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store " + action + " <app>")
+		die("Usage: caleope " + action + " <app>")
 	}
 	icons := map[string]string{"stop": "⏹", "start": "▶️", "restart": "🔄"}
 	labels := map[string]string{"stop": "Arrêt", "start": "Démarrage", "restart": "Redémarrage"}
@@ -439,7 +680,7 @@ func cmdStopStart(action string, args []string) {
 
 func cmdBackup(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store backup <app>")
+		die("Usage: caleope backup <app>")
 	}
 
 	fmt.Printf("💾 Sauvegarde de '%s'...\n", args[0])
@@ -455,7 +696,7 @@ func cmdBackup(args []string) {
 
 func cmdRestore(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store restore <app> [--backup <timestamp>]")
+		die("Usage: caleope restore <app> [--backup <timestamp>]")
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
@@ -484,7 +725,7 @@ func cmdRestore(args []string) {
 
 func cmdBackupList(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope-store backups <app>")
+		die("Usage: caleope backups <app>")
 	}
 
 	resp := callDaemon("backup-list", map[string]string{"app": args[0]})
@@ -559,6 +800,19 @@ func cmdUpgrade(args []string) {
 	}
 }
 
+func cmdToken() {
+	resp := callDaemon("token", nil)
+	if !resp.Success {
+		die("❌ " + resp.Error)
+	}
+	if m, ok := resp.Data.(map[string]interface{}); ok {
+		fmt.Printf("🔑 Token API : %s\n", m["token"])
+		fmt.Println()
+		fmt.Println("Usage (curl) :")
+		fmt.Printf("  curl -H 'Authorization: Bearer %s' http://localhost:8765/api/v1/apps\n", m["token"])
+	}
+}
+
 func cmdPing() {
 	resp := callDaemon("ping", nil)
 	if !resp.Success {
@@ -614,10 +868,10 @@ func callDaemon(command string, args map[string]string) types.APIResponse {
 // ─────────────────────────────────────────────
 
 func printHelp() {
-	fmt.Println(`Caleope Store — Gestionnaire d'applications self-hosted
+	fmt.Println(`Caleope — Gestionnaire d'applications self-hosted
 
 Usage:
-  caleope-store <commande> [options]
+  caleope <commande> [options]
 
 Commandes:
   install <app>     Installer une application
@@ -646,18 +900,40 @@ Commandes:
     --backup <ts>   Timestamp du backup (défaut : le plus récent)
   backups <app>     Lister les sauvegardes disponibles
 
+  events            Historique des événements système
+    --app <app>     Filtrer par application
+    --type <type>   Filtrer par type (app_started, app_stopped, install…)
+    --limit <n>     Nombre d'événements (défaut : 50)
+
+  location          Gérer les emplacements réseau (SMB, CIFS, SFTP)
+  location list     Lister les emplacements configurés
+  location add <n>  Ajouter un emplacement
+    --type smb|cifs|sftp
+    --host <host>   Adresse du serveur
+    --share <part>  Nom du partage / chemin distant
+    --user <user>   Nom d'utilisateur (optionnel)
+    --password <pw> Mot de passe (optionnel)
+    --options <opt> Options de montage supplémentaires
+  location remove <n>   Supprimer un emplacement (démonte si monté)
+  location mount <n>    Monter un emplacement
+  location unmount <n>  Démonter un emplacement
+
   update            Synchroniser les dépôts Git
   upgrade           Mettre à jour Caleope vers la dernière version
     --check         Vérifier sans installer
+  token             Afficher le token d'accès à l'API REST (:8765)
   version           Afficher la version installée
   ping              Vérifier que le daemon est actif
 
 Exemples:
-  caleope-store install jellyfin --domain media.home.local
-  caleope-store install nextcloud --domain cloud.home.local
-  caleope-store list
-  caleope-store remove jellyfin
-  caleope-store search media`)
+  caleope install jellyfin --domain media.home.local
+  caleope install nextcloud --domain cloud.home.local
+  caleope list
+  caleope remove jellyfin
+  caleope search media
+  caleope events --app nextcloud --limit 20
+  caleope location add nas --type smb --host 192.168.1.10 --share backup --user ewen
+  caleope location mount nas`)
 }
 
 func formatStatus(status string) string {

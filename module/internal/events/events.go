@@ -19,11 +19,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gaiver-it/caleope/pkg/types"
 )
+
+// EventFilter filtre les events à lire.
+type EventFilter struct {
+	App   string // filtrer par app (vide = toutes)
+	Type  string // filtrer par type d'event (vide = tous)
+	Limit int    // nombre max de résultats (0 = 50 par défaut)
+}
 
 // Emitter gère l'écriture des événements.
 type Emitter struct {
@@ -109,4 +117,58 @@ func (e *Emitter) BackupCreated(appID string, path string) error {
 	return e.Emit("app.backup", appID, map[string]string{
 		"path": path,
 	})
+}
+
+// ─── Lecture des événements ───
+
+// Read lit les derniers events depuis events.jsonl, avec filtres optionnels.
+// Retourne les events les plus récents en premier.
+func (e *Emitter) Read(filter EventFilter) ([]types.Event, error) {
+	filePath := filepath.Join(e.eventsDir, "events.jsonl")
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []types.Event{}, nil
+		}
+		return nil, fmt.Errorf("lecture events: %w", err)
+	}
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	// Parser chaque ligne JSONL
+	var all []types.Event
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		var ev types.Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		// Filtrer par app
+		if filter.App != "" && ev.App != filter.App {
+			continue
+		}
+		// Filtrer par type
+		if filter.Type != "" && ev.Type != filter.Type {
+			continue
+		}
+		all = append(all, ev)
+	}
+
+	// Garder les N derniers (les plus récents)
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+
+	// Inverser : plus récent en premier
+	for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
+		all[i], all[j] = all[j], all[i]
+	}
+
+	return all, nil
 }

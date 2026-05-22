@@ -130,12 +130,21 @@ func (s *Store) gitClone(url, destDir string) error {
 }
 
 func (s *Store) gitPull(repoDir string) error {
-	cmd := exec.Command("git", "-C", repoDir, "pull", "--ff-only")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git pull dans %s: %w", repoDir, err)
+	// fetch + reset --hard : le cache est en lecture seule, on écrase toujours les modifs locales
+	fetch := exec.Command("git", "-C", repoDir, "fetch", "origin")
+	fetch.Stdout = os.Stdout
+	fetch.Stderr = os.Stderr
+	if err := fetch.Run(); err != nil {
+		return fmt.Errorf("git fetch dans %s: %w", repoDir, err)
 	}
+
+	reset := exec.Command("git", "-C", repoDir, "reset", "--hard", "origin/main")
+	reset.Stdout = os.Stdout
+	reset.Stderr = os.Stderr
+	if err := reset.Run(); err != nil {
+		return fmt.Errorf("git reset dans %s: %w", repoDir, err)
+	}
+
 	return nil
 }
 

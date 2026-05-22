@@ -419,6 +419,14 @@ func (i *Installer) buildEnvFile(manifest *types.AppManifest, opts InstallOption
 		sb.WriteString(fmt.Sprintf("CALEOPE_PARAM_%s=%s\n", strings.ToUpper(k), v))
 	}
 
+	// Fusionner secrets.env écrit par setup.sh pour rendre ses variables disponibles
+	// dans la substitution YAML de docker compose (ex: ${ONLYOFFICE_DOMAIN})
+	secretsPath := filepath.Join(i.baseDir, "app-config", manifest.ID, "secrets.env")
+	if data, err := os.ReadFile(secretsPath); err == nil {
+		sb.WriteString("\n")
+		sb.Write(data)
+	}
+
 	return sb.String()
 }
 

@@ -23,11 +23,16 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/gaiver-it/caleope/internal/backup"
+	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
 	"github.com/gaiver-it/caleope/internal/install"
+	"github.com/gaiver-it/caleope/internal/metrics"
+	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/pkg/types"
@@ -43,8 +48,13 @@ type Server struct {
 	rt         *runtime.Manager
 	st         *store.Store
 	installer  *install.Installer
+	bkp        *backup.Manager
+	dc         *docker.Client
+	col        *metrics.Collector
 	emitter    *events.Emitter
+	net        *network.Manager
 	baseDir    string
+	token      string
 }
 
 func NewServer(
@@ -52,7 +62,11 @@ func NewServer(
 	rt *runtime.Manager,
 	st *store.Store,
 	installer *install.Installer,
+	bkp *backup.Manager,
+	dc *docker.Client,
+	col *metrics.Collector,
 	emitter *events.Emitter,
+	net *network.Manager,
 	baseDir string,
 ) *Server {
 	return &Server{
@@ -60,8 +74,13 @@ func NewServer(
 		rt:         rt,
 		st:         st,
 		installer:  installer,
+		bkp:        bkp,
+		dc:         dc,
+		col:        col,
 		emitter:    emitter,
+		net:        net,
 		baseDir:    baseDir,
+		token:      loadOrCreateToken(baseDir),
 	}
 }
 
@@ -130,7 +149,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	switch req.Command {
 	case "install":
-		err = s.handleInstall(req.Args)
+		data, err = s.handleInstall(req.Args)
 	case "remove":
 		err = s.handleRemove(req.Args)
 	case "list":
@@ -141,19 +160,52 @@ func (s *Server) handleConnection(conn net.Conn) {
 		data, err = s.handleLogs(req.Args)
 	case "search":
 		data, err = s.handleSearch(req.Args)
+	case "stats":
+		data, err = s.handleStats(req.Args)
+	case "stop":
+		err = s.handleStop(req.Args)
+	case "start":
+		err = s.handleStart(req.Args)
+	case "restart":
+		err = s.handleRestart(req.Args)
+	case "backup":
+		data, err = s.handleBackup(req.Args)
+	case "restore":
+		err = s.handleRestore(req.Args)
+	case "backup-list":
+		data, err = s.handleBackupList(req.Args)
 	case "update":
 		err = s.handleUpdate(req.Args)
 	case "upgrade":
 		data, err = s.handleUpgrade(req.Args)
+	case "events":
+		data, err = s.handleEvents(req.Args)
+	case "location-list":
+		data, err = s.handleLocationList()
+	case "location-add":
+		data, err = s.handleLocationAdd(req.Args)
+	case "location-remove":
+		err = s.handleLocationRemove(req.Args)
+	case "location-mount":
+		err = s.handleLocationMount(req.Args)
+	case "location-unmount":
+		err = s.handleLocationUnmount(req.Args)
 	case "ping":
 		cfg, _ := s.rt.GetConfig()
+		channel := cfg.Channel
+		if channel == "" {
+			channel = "stable"
+		}
 		data = map[string]string{
 			"status":     "ok",
 			"version":    version.Version,
 			"commit":     version.Commit,
 			"domain":     cfg.Domain,
 			"proxy_mode": cfg.ProxyMode,
+			"channel":    channel,
 		}
+	case "token":
+		data = map[string]string{"token": s.token}
 	default:
 		err = fmt.Errorf("commande inconnue: %s", req.Command)
 	}
@@ -170,10 +222,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 // HANDLERS — un par commande
 // ─────────────────────────────────────────────
 
-func (s *Server) handleInstall(args map[string]string) error {
+func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	appID, ok := args["app"]
 	if !ok || appID == "" {
-		return fmt.Errorf("argument 'app' manquant")
+		return nil, fmt.Errorf("argument 'app' manquant")
 	}
 
 	// Résoudre le domaine :
@@ -195,7 +247,17 @@ func (s *Server) handleInstall(args map[string]string) error {
 		}(),
 	}
 
-	return s.installer.Install(opts)
+	if err := s.installer.Install(opts); err != nil {
+		return nil, err
+	}
+
+	// Lire les notes post-install écrites par setup.sh (credentials, instructions...)
+	notesPath := filepath.Join(s.baseDir, "apps-installed", appID, "post-install.txt")
+	if notes, err := os.ReadFile(notesPath); err == nil {
+		return map[string]string{"notes": string(notes)}, nil
+	}
+
+	return nil, nil
 }
 
 func (s *Server) handleRemove(args map[string]string) error {
@@ -235,12 +297,19 @@ func (s *Server) handleLogs(args map[string]string) (interface{}, error) {
 		return nil, err
 	}
 
-	// TODO: implémenter docker logs via le client
-	return map[string]string{
-		"app":        appID,
-		"compose_dir": app.ComposeDir,
-		"message":    "logs via 'docker compose logs' dans " + app.ComposeDir,
-	}, nil
+	tail := 100
+	if t := args["tail"]; t != "" {
+		if n, err := fmt.Sscanf(t, "%d", &tail); n != 1 || err != nil {
+			tail = 100
+		}
+	}
+
+	logs, err := s.dc.Logs(app.ComposeDir, tail)
+	if err != nil {
+		return nil, fmt.Errorf("impossible de lire les logs: %w", err)
+	}
+
+	return map[string]string{"logs": logs}, nil
 }
 
 func (s *Server) handleSearch(args map[string]string) (interface{}, error) {
@@ -252,18 +321,175 @@ func (s *Server) handleSearch(args map[string]string) (interface{}, error) {
 	return s.st.Search(term, repos)
 }
 
+func (s *Server) handleStats(args map[string]string) (interface{}, error) {
+	withDisk := args["disk"] == "true"
+	return s.col.Collect(withDisk)
+}
+
+func (s *Server) handleStop(args map[string]string) error {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return fmt.Errorf("argument 'app' manquant")
+	}
+	app, err := s.rt.GetApp(appID)
+	if err != nil {
+		return err
+	}
+	if err := s.dc.Stop(app.ComposeDir); err != nil {
+		return err
+	}
+	app.Status = types.StatusStopped
+	_ = s.emitter.AppStopped(appID)
+	return s.rt.SaveApp(app)
+}
+
+func (s *Server) handleStart(args map[string]string) error {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return fmt.Errorf("argument 'app' manquant")
+	}
+	app, err := s.rt.GetApp(appID)
+	if err != nil {
+		return err
+	}
+	if err := s.dc.Start(app.ComposeDir); err != nil {
+		return err
+	}
+	app.Status = types.StatusRunning
+	_ = s.emitter.AppStarted(appID)
+	return s.rt.SaveApp(app)
+}
+
+func (s *Server) handleRestart(args map[string]string) error {
+	if err := s.handleStop(args); err != nil {
+		return err
+	}
+	return s.handleStart(args)
+}
+
+func (s *Server) handleBackup(args map[string]string) (interface{}, error) {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+
+	backupDir, err := s.bkp.Backup(appID)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]string{
+		"backup_dir": backupDir,
+		"message":    fmt.Sprintf("Backup de '%s' créé dans %s", appID, backupDir),
+	}, nil
+}
+
+func (s *Server) handleRestore(args map[string]string) error {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return fmt.Errorf("argument 'app' manquant")
+	}
+
+	return s.bkp.Restore(appID, args["backup"])
+}
+
+func (s *Server) handleBackupList(args map[string]string) (interface{}, error) {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+
+	return s.bkp.ListBackups(appID)
+}
+
 func (s *Server) handleUpdate(args map[string]string) error {
-	// Synchroniser les repos
 	repos, err := s.rt.GetRepos()
 	if err != nil {
 		return err
 	}
+	var syncErr error
 	for i := range repos {
 		if err := s.st.SyncRepo(&repos[i]); err != nil {
 			fmt.Printf("⚠️  Erreur sync repo %s: %v\n", repos[i].Name, err)
+			syncErr = err
 		}
 	}
-	return nil
+	return syncErr
+}
+
+// ─────────────────────────────────────────────
+// EVENTS
+// ─────────────────────────────────────────────
+
+func (s *Server) handleEvents(args map[string]string) (interface{}, error) {
+	filter := events.EventFilter{
+		App:  args["app"],
+		Type: args["type"],
+	}
+	if n := args["limit"]; n != "" {
+		fmt.Sscanf(n, "%d", &filter.Limit)
+	}
+	return s.emitter.Read(filter)
+}
+
+// ─────────────────────────────────────────────
+// NETWORK LOCATIONS
+// ─────────────────────────────────────────────
+
+func (s *Server) handleLocationList() (interface{}, error) {
+	return s.net.List()
+}
+
+func (s *Server) handleLocationAdd(args map[string]string) (interface{}, error) {
+	name := args["name"]
+	if name == "" {
+		return nil, fmt.Errorf("argument 'name' manquant")
+	}
+	locType := types.NetworkLocationType(args["type"])
+	if locType == "" {
+		return nil, fmt.Errorf("argument 'type' manquant (smb, cifs, sftp)")
+	}
+
+	loc := types.NetworkLocation{
+		Name:     name,
+		Type:     locType,
+		Host:     args["host"],
+		Share:    args["share"],
+		Username: args["username"],
+		Options:  args["options"],
+	}
+
+	if err := s.net.Add(loc, args["password"]); err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"message":     fmt.Sprintf("Emplacement '%s' ajouté", name),
+		"mount_point": s.net.MountPoint(name),
+	}, nil
+}
+
+func (s *Server) handleLocationRemove(args map[string]string) error {
+	name := args["name"]
+	if name == "" {
+		return fmt.Errorf("argument 'name' manquant")
+	}
+	return s.net.Remove(name)
+}
+
+func (s *Server) handleLocationMount(args map[string]string) error {
+	name := args["name"]
+	if name == "" {
+		return fmt.Errorf("argument 'name' manquant")
+	}
+	return s.net.Mount(name)
+}
+
+func (s *Server) handleLocationUnmount(args map[string]string) error {
+	name := args["name"]
+	if name == "" {
+		return fmt.Errorf("argument 'name' manquant")
+	}
+	return s.net.Unmount(name)
 }
 
 // ─────────────────────────────────────────────
@@ -287,8 +513,22 @@ func isClosedError(err error) bool {
 }
 
 func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
-	// Récupérer la dernière version disponible sur GitHub
-	apiURL := "https://api.github.com/repos/gaiver-it/caleope/releases/latest"
+	// Déterminer le canal (stable ou alpha) depuis caleope.conf
+	cfg, _ := s.rt.GetConfig()
+	channel := cfg.Channel
+	if channel == "" {
+		channel = "stable"
+	}
+
+	// Choisir l'endpoint GitHub selon le canal
+	// stable → /releases/latest (ignore les pré-releases)
+	// alpha  → /releases?per_page=1 (inclut les pré-releases, plus récent en premier)
+	var apiURL string
+	if channel == "alpha" {
+		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases?per_page=1"
+	} else {
+		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases/latest"
+	}
 
 	cmd := exec.Command("curl", "-fsSL", apiURL)
 	out, err := cmd.Output()
@@ -296,13 +536,22 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		return nil, fmt.Errorf("impossible de contacter GitHub: %w", err)
 	}
 
-	// Parser le JSON de la release
-	var release struct {
+	// Parser le JSON de la release (format différent selon le canal)
+	type releaseInfo struct {
 		TagName string `json:"tag_name"`
 		HTMLURL string `json:"html_url"`
 	}
-	if err := json.Unmarshal(out, &release); err != nil {
-		return nil, fmt.Errorf("réponse GitHub invalide: %w", err)
+	var release releaseInfo
+	if channel == "alpha" {
+		var releases []releaseInfo
+		if err := json.Unmarshal(out, &releases); err != nil || len(releases) == 0 {
+			return nil, fmt.Errorf("réponse GitHub invalide (canal alpha): %w", err)
+		}
+		release = releases[0]
+	} else {
+		if err := json.Unmarshal(out, &release); err != nil {
+			return nil, fmt.Errorf("réponse GitHub invalide: %w", err)
+		}
 	}
 
 	latest := release.TagName
@@ -335,7 +584,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	for _, bin := range []struct{ name, dest string }{
 		{"caleoped-linux-amd64", "/usr/local/bin/caleoped.new"},
-		{"caleope-store-linux-amd64", "/usr/local/bin/caleope-store.new"},
+		{"caleope-linux-amd64", "/usr/local/bin/caleope.new"},
 	} {
 		dlCmd := exec.Command("curl", "-fsSL",
 			fmt.Sprintf("%s/%s", baseURL, bin.name),
@@ -353,12 +602,15 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// Remplacer les binaires (move atomique)
 	for _, pair := range []struct{ src, dst string }{
 		{"/usr/local/bin/caleoped.new", "/usr/local/bin/caleoped"},
-		{"/usr/local/bin/caleope-store.new", "/usr/local/bin/caleope-store"},
+		{"/usr/local/bin/caleope.new", "/usr/local/bin/caleope"},
 	} {
 		if err := exec.Command("mv", "-f", pair.src, pair.dst).Run(); err != nil {
 			return nil, fmt.Errorf("remplacement %s: %w", pair.dst, err)
 		}
 	}
+
+	// Symlink de compatibilité : caleope-store → caleope
+	_ = exec.Command("ln", "-sf", "/usr/local/bin/caleope", "/usr/local/bin/caleope-store").Run()
 
 	// Mettre à jour caleope.conf
 	confPath := fmt.Sprintf("%s/caleope.conf", s.baseDir)
