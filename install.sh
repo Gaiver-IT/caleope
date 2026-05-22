@@ -475,7 +475,7 @@ EOF
     local retries=0
     until [[ -S "${SOCKET_PATH}" ]] || [[ $retries -ge 10 ]]; do
         sleep 1
-        ((retries++))
+        ((retries++))|| true
     done
 
     if [[ -S "${SOCKET_PATH}" ]]; then
@@ -619,7 +619,7 @@ EOF
     local retries=0
     until docker ps --format '{{.Names}}' | grep -q "^traefik$" || [[ $retries -ge 15 ]]; do
         sleep 1
-        ((retries++))
+        ((retries++))|| true
     done
 
     if docker ps --format '{{.Names}}' | grep -q "^traefik$"; then
@@ -669,7 +669,7 @@ EOF
     local retries=0
     until docker ps --format '{{.Names}}' | grep -q "^portainer$" || [[ $retries -ge 15 ]]; do
         sleep 1
-        ((retries++))
+        ((retries++))|| true
     done
 
     if docker ps --format '{{.Names}}' | grep -q "^portainer$"; then
