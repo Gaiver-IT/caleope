@@ -48,8 +48,32 @@ sync_with_remote() {
     echo ""
     echo -e "${CYAN}[0/4]${NC} Synchronisation avec GitHub..."
 
-    local branch
+    local root branch
+    root=$(git rev-parse --show-toplevel)
     branch=$(git branch --show-current)
+
+    # ── Annuler tout merge/rebase en cours ──
+    if [[ -f "${root}/.git/MERGE_HEAD" ]]; then
+        echo -e "      ${YELLOW}⚠️  Merge en cours détecté — abandon${NC}"
+        git merge --abort
+    fi
+    if [[ -d "${root}/.git/rebase-merge" ]] || [[ -d "${root}/.git/rebase-apply" ]]; then
+        echo -e "      ${YELLOW}⚠️  Rebase en cours détecté — abandon${NC}"
+        git rebase --abort
+    fi
+
+    # ── Commiter les modifications locales ──
+    # (on ne stash pas : le stash échoue si des fichiers sont en conflit)
+    if [[ -n "$(git -C "${root}" status --porcelain)" ]]; then
+        echo -e "      Commit des modifications locales en cours..."
+        git -C "${root}" add -A
+        git -C "${root}" commit -m "chore: modifications pré-release (${VERSION})"
+        echo -e "      ${GREEN}✔ Modifications commitées${NC}"
+    fi
+
+    # ── Récupérer les refs distants ──
+    git fetch origin --tags --prune --prune-tags 2>/dev/null || true
+
     local local_sha remote_sha
     local_sha=$(git rev-parse HEAD)
     remote_sha=$(git rev-parse "origin/${branch}" 2>/dev/null || echo "")
@@ -59,35 +83,18 @@ sync_with_remote() {
         return 0
     fi
 
-    local had_stash=false
-    if [[ -n "$(git status --porcelain)" ]]; then
-        echo -e "      Mise de côté des modifications locales..."
-        git stash push -u -m "caleope-release-sync"
-        had_stash=true
-    fi
-
-    git pull --rebase
-
-    if [[ "${had_stash}" == "true" ]]; then
-        echo -e "      Réapplication des modifications locales..."
-        local root
-        root=$(git rev-parse --show-toplevel)
-        if ! git stash pop; then
-            # En cas de conflit, la version locale (stash) l'emporte.
-            # Utiliser -C root car les chemins de git diff sont relatifs à la racine du repo,
-            # pas au CWD (module/) depuis lequel release.sh est lancé.
-            while IFS= read -r f; do
-                git -C "${root}" checkout --theirs -- "${f}"
-                git -C "${root}" add -- "${f}"
-            done < <(git -C "${root}" diff --name-only --diff-filter=U)
-            git stash drop
-            echo -e "      ${YELLOW}⚠️  Conflits résolus en faveur des fichiers locaux${NC}"
-        fi
+    # ── Rebase sur le remote, notre version gagne les conflits ──
+    # Note: pendant un rebase, "-X theirs" = garder nos commits locaux rejoués
+    echo -e "      Récupération des commits distants..."
+    if ! GIT_EDITOR=true git pull --rebase -X theirs origin "${branch}" 2>&1; then
+        echo -e "      ${YELLOW}⚠️  Rebase complexe — bascule sur merge (notre version gagne)${NC}"
+        git rebase --abort 2>/dev/null || true
+        git merge -X ours "origin/${branch}" --no-edit
     fi
 
     local synced
-    synced=$(git log --oneline "${local_sha}..HEAD" | wc -l | tr -d ' ')
-    echo -e "      ${GREEN}✔ Synchronisé — ${synced} commit(s) récupéré(s)${NC}"
+    synced=$(git log --oneline "${local_sha}..HEAD" 2>/dev/null | wc -l | tr -d ' ')
+    echo -e "      ${GREEN}✔ Synchronisé (+${synced} commit(s) distants)${NC}"
 }
 
 # =============================================================================
