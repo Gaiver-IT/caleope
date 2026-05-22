@@ -39,10 +39,6 @@ GITHUB_REPO="gaiver-it/caleope"
 GITHUB_RAW="https://raw.githubusercontent.com/${GITHUB_REPO}/main"
 GITHUB_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
-GO_VERSION="1.24.3"
-GO_ARCH="linux-amd64"
-GO_URL="https://go.dev/dl/go${GO_VERSION}.${GO_ARCH}.tar.gz"
-
 SOCKET_PATH="/run/caleoped.sock"
 
 # Ports
@@ -274,53 +270,13 @@ create_docker_networks() {
 }
 
 # =============================================================================
-# GO (pour compiler caleoped si pas de release dispo)
-# =============================================================================
-
-install_go() {
-    log_section "Go ${GO_VERSION}"
-
-    if command -v go &>/dev/null; then
-        local current
-        current=$(go version | awk '{print $3}' | sed 's/go//')
-        log_warning "Go déjà installé : ${current}"
-        # Mettre le lien symlink au cas où
-        ln -sf /usr/local/go/bin/go /usr/bin/go 2>/dev/null || true
-        return 0
-    fi
-
-    log_step "Téléchargement de Go ${GO_VERSION}..."
-    local tmp
-    tmp=$(mktemp -d)
-    wget -q "${GO_URL}" -O "${tmp}/go.tar.gz"
-
-    log_step "Installation de Go..."
-    rm -rf /usr/local/go
-    tar -C /usr/local -xzf "${tmp}/go.tar.gz"
-    rm -rf "${tmp}"
-
-    # Rendre Go accessible globalement (user ET sudo)
-    ln -sf /usr/local/go/bin/go /usr/bin/go
-    ln -sf /usr/local/go/bin/gofmt /usr/bin/gofmt
-
-    log_success "Go installé : $(go version)"
-}
-
-# =============================================================================
 # BINAIRES CALEOPE
 # =============================================================================
 
 install_caleope_binaries() {
-    log_section "Binaires Caleope (caleoped + caleope-store)"
+    log_section "Binaires Caleope (caleoped + caleope)"
 
-    # Essayer d'abord de télécharger les binaires pré-compilés depuis GitHub Releases
-    if download_binaries_from_release; then
-        return 0
-    fi
-
-    # Fallback : compiler depuis les sources
-    log_warning "Aucune release GitHub trouvée, compilation depuis les sources..."
-    compile_from_source
+    download_binaries_from_release || log_error "Impossible de télécharger les binaires Caleope depuis GitHub. Vérifie ta connexion ou https://github.com/${GITHUB_REPO}/releases"
 }
 
 download_binaries_from_release() {
@@ -336,7 +292,7 @@ download_binaries_from_release() {
     # Extraire les URLs des binaires (jq parse le JSON)
     local daemon_url cli_url
     daemon_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleoped-linux-amd64") | .browser_download_url' 2>/dev/null)
-    cli_url=$(echo "${release_info}"    | jq -r '.assets[] | select(.name == "caleope-store-linux-amd64") | .browser_download_url' 2>/dev/null)
+    cli_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleope-linux-amd64") | .browser_download_url' 2>/dev/null)
 
     if [[ -z "${daemon_url}" || -z "${cli_url}" ]]; then
         log_debug "Binaires non trouvés dans la release"
@@ -348,41 +304,13 @@ download_binaries_from_release() {
     log_step "Téléchargement des binaires version ${version}..."
 
     wget -q "${daemon_url}" -O /usr/local/bin/caleoped
-    wget -q "${cli_url}"    -O /usr/local/bin/caleope-store
+    wget -q "${cli_url}"    -O /usr/local/bin/caleope
 
-    chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope-store
+    chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope
+    ln -sf /usr/local/bin/caleope /usr/local/bin/caleope-store
 
     log_success "Binaires installés depuis la release ${version}"
     return 0
-}
-
-compile_from_source() {
-    # S'assurer que Go est disponible
-    command -v go &>/dev/null || install_go
-
-    local tmp
-    tmp=$(mktemp -d)
-    local src="${tmp}/caleope"
-
-    log_step "Clonage des sources..."
-    git clone --depth=1 "https://github.com/${GITHUB_REPO}.git" "${src}"
-
-    log_step "Compilation du daemon..."
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-        go build -ldflags="-s -w" \
-        -o /usr/local/bin/caleoped \
-        "${src}/cmd/caleoped/"
-
-    log_step "Compilation du CLI..."
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-        go build -ldflags="-s -w" \
-        -o /usr/local/bin/caleope-store \
-        "${src}/cmd/caleope-store/"
-
-    chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope-store
-    rm -rf "${tmp}"
-
-    log_success "Binaires compilés et installés"
 }
 
 # =============================================================================
@@ -475,7 +403,7 @@ EOF
     local retries=0
     until [[ -S "${SOCKET_PATH}" ]] || [[ $retries -ge 10 ]]; do
         sleep 1
-        ((retries++))|| true
+        (( retries++ )) || true
     done
 
     if [[ -S "${SOCKET_PATH}" ]]; then
@@ -619,7 +547,7 @@ EOF
     local retries=0
     until docker ps --format '{{.Names}}' | grep -q "^traefik$" || [[ $retries -ge 15 ]]; do
         sleep 1
-        ((retries++))|| true
+        (( retries++ )) || true
     done
 
     if docker ps --format '{{.Names}}' | grep -q "^traefik$"; then
@@ -669,7 +597,7 @@ EOF
     local retries=0
     until docker ps --format '{{.Names}}' | grep -q "^portainer$" || [[ $retries -ge 15 ]]; do
         sleep 1
-        ((retries++))|| true
+        (( retries++ )) || true
     done
 
     if docker ps --format '{{.Names}}' | grep -q "^portainer$"; then
@@ -788,7 +716,7 @@ save_config() {
     log_section "Sauvegarde de la configuration"
 
     # caleope.conf — fichier de config persistante
-    # Utilisé par caleope-store pour construire les domaines automatiquement
+    # Utilisé par caleope pour construire les domaines automatiquement
     cat > "${CALEOPE_ROOT}/caleope.conf" << EOF
 # Configuration Caleope — généré à l'installation
 # Modifiable à tout moment, rechargé par le daemon
@@ -823,8 +751,8 @@ sync_store() {
         rm -rf "${store_dir}"
         log_debug "Dossier cache vide supprimé pour permettre le clone"
     fi
-    git config --global --add safe.directory "${store_dir}"
 
+    git config --global --add safe.directory "${store_dir}"
 
     if [[ -d "${store_dir}/.git" ]]; then
         log_step "Mise à jour du store..."
@@ -863,10 +791,10 @@ generate_links_file() {
 ## Caleope CLI
 
 \`\`\`bash
-caleope-store ping
-caleope-store list
-caleope-store search <terme>
-caleope-store install <app>
+caleope ping
+caleope list
+caleope search <terme>
+caleope install <app>
 \`\`\`
 
 ---
@@ -929,11 +857,11 @@ print_summary() {
     echo -e "${CYAN}║                   Prochaines étapes                  ║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║${NC}  ${YELLOW}⚠️  Reconnecte-toi en tant que ${CALEOPE_USER}${NC}"
-    echo -e "${CYAN}║${NC}     ${YELLOW}pour utiliser Docker et caleope-store${NC}"
+    echo -e "${CYAN}║${NC}     ${YELLOW}pour utiliser Docker et caleope${NC}"
     echo -e "${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}  ${GREEN}caleope-store ping${NC}           # tester le daemon"
-    echo -e "${CYAN}║${NC}  ${GREEN}caleope-store search media${NC}   # chercher une app"
-    echo -e "${CYAN}║${NC}  ${GREEN}caleope-store install jellyfin${NC}"
+    echo -e "${CYAN}║${NC}  ${GREEN}caleope ping${NC}           # tester le daemon"
+    echo -e "${CYAN}║${NC}  ${GREEN}caleope search media${NC}   # chercher une app"
+    echo -e "${CYAN}║${NC}  ${GREEN}caleope install jellyfin${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  📄 Résumé complet : ${YELLOW}${CALEOPE_ROOT}/LIENS.md${NC}"
@@ -946,10 +874,6 @@ print_summary() {
 
 main() {
     parse_args "$@"
-
-    # Quand lancé via "curl | bash", stdin est le pipe — pas le terminal.
-    # read échoue avec EOF → set -e tue le script. On force stdin vers /dev/tty.
-
 
     clear
     echo -e "${CYAN}"
