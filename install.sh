@@ -469,7 +469,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable caleoped
-    systemctl start caleoped
+    systemctl start caleoped || true
 
     # Attendre que le socket soit créé (max 10s)
     local retries=0
