@@ -823,6 +823,8 @@ sync_store() {
         rm -rf "${store_dir}"
         log_debug "Dossier cache vide supprimé pour permettre le clone"
     fi
+    git config --global --add safe.directory "${store_dir}"
+
 
     if [[ -d "${store_dir}/.git" ]]; then
         log_step "Mise à jour du store..."
