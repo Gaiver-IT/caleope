@@ -112,7 +112,7 @@ ask_config() {
         echo -e "${BLUE}  Domaine de base pour ce serveur Caleope${NC}"
         echo -e "  ${GRAY}Ex: caleope.mondomaine.com${NC}"
         echo -e "  ${GRAY}Les apps seront accessibles sur jellyfin.<domaine>, nextcloud.<domaine>...${NC}"
-        read -rp "  → Domaine : " CALEOPE_DOMAIN
+        read -rp "  → Domaine : " CALEOPE_DOMAIN </dev/tty
     done
 
     # ── Mode reverse proxy ──
@@ -121,7 +121,7 @@ ask_config() {
     echo -e "  ${GRAY}1) NPM/Caddy/autre en amont  — Traefik reçoit du HTTP, pas de gestion des certs${NC}"
     echo -e "  ${GRAY}2) Traefik natif             — Traefik gère HTTPS et Let's Encrypt directement${NC}"
     while [[ "${CALEOPE_PROXY_MODE}" != "npm" && "${CALEOPE_PROXY_MODE}" != "traefik" ]]; do
-        read -rp "  → Choix [1/2] : " proxy_choice
+        read -rp "  → Choix [1/2] : " proxy_choice </dev/tty
         case "${proxy_choice}" in
             1) CALEOPE_PROXY_MODE="npm" ;;
             2) CALEOPE_PROXY_MODE="traefik" ;;
@@ -135,7 +135,7 @@ ask_config() {
         echo -e "${BLUE}  Email pour Let's Encrypt${NC}"
         echo -e "  ${GRAY}Utilisé pour les notifications de renouvellement de certificats${NC}"
         while [[ -z "${CALEOPE_EMAIL}" ]]; do
-            read -rp "  → Email : " CALEOPE_EMAIL
+            read -rp "  → Email : " CALEOPE_EMAIL </dev/tty
         done
     fi
 
@@ -149,7 +149,7 @@ ask_config() {
     [[ -n "${CALEOPE_EMAIL}" ]] &&     echo -e "${CYAN}  │${NC}  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"
     echo -e "${CYAN}  └─────────────────────────────────────────┘${NC}"
     echo ""
-    read -rp "  Confirmer ? [O/n] : " confirm
+    read -rp "  Confirmer ? [O/n] : " confirm </dev/tty
     if [[ "${confirm,,}" == "n" ]]; then
         CALEOPE_DOMAIN=""
         CALEOPE_PROXY_MODE=""
@@ -688,7 +688,7 @@ EOF
         echo -e "${RED}╚══════════════════════════════════════════════════════╝${NC}"
         echo ""
         echo -e "${YELLOW}Appuie sur [Entrée] une fois ton compte Portainer créé...${NC}"
-        read -r
+        read -r </dev/tty
     else
         log_warning "Portainer ne semble pas démarré — vérifier : docker logs portainer"
     fi
@@ -949,7 +949,6 @@ main() {
 
     # Quand lancé via "curl | bash", stdin est le pipe — pas le terminal.
     # read échoue avec EOF → set -e tue le script. On force stdin vers /dev/tty.
-    [[ -t 0 ]] || exec < /dev/tty
 
 
     clear
