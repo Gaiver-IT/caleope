@@ -133,7 +133,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
     git status --short
     echo ""
     read -rp "  Continuer quand même ? [o/N] " confirm
-    [[ "${confirm,,}" == "o" ]] || { echo "Annulé."; exit 0; }
+    [[ "$(echo "${confirm}" | tr "[:upper:]" "[:lower:]")" == "o" ]] || { echo "Annulé."; exit 0; }
     echo ""
 fi
 
@@ -224,7 +224,7 @@ if [[ "${RELEASE_TYPE}" == "mineure" ]]; then
     echo -e "  Es-tu sûr que toutes les fonctionnalités prévues sont en place ?"
     echo ""
     read -rp "  Confirmer la montée de version mineure ? [o/N] " confirm
-    [[ "${confirm,,}" == "o" ]] || { echo "Annulé."; exit 0; }
+    [[ "$(echo "${confirm}" | tr "[:upper:]" "[:lower:]")" == "o" ]] || { echo "Annulé."; exit 0; }
 fi
 
 if [[ "${RELEASE_TYPE}" == "majeure" ]]; then
@@ -269,7 +269,7 @@ echo -e "${CYAN}  │${NC}  Branche : $(git branch --show-current)"
 echo -e "${CYAN}  └─────────────────────────────────────────┘${NC}"
 echo ""
 read -rp "  Lancer la release ? [O/n] " confirm
-[[ "${confirm,,}" != "n" ]] || { echo "Annulé."; exit 0; }
+[[ "$(echo "${confirm}" | tr "[:upper:]" "[:lower:]")" != "n" ]] || { echo "Annulé."; exit 0; }
 
 sync_with_remote
 echo ""
