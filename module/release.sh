@@ -321,8 +321,13 @@ echo -e "      ${GREEN}✔ Code et tag poussés${NC}"
 # ── Créer la release GitHub ──
 echo -e "${CYAN}[4/4]${NC} Création de la release GitHub..."
 
+# Auto-récupération du token depuis le keychain macOS (GitHub Desktop le stocke là)
+if [[ -z "${GITHUB_TOKEN:-}" ]] && command -v security &>/dev/null; then
+    GITHUB_TOKEN=$(security find-internet-password -s github.com -w 2>/dev/null || echo "")
+fi
+
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-    echo -e "${YELLOW}⚠️  GITHUB_TOKEN non défini — upload manuel requis${NC}"
+    echo -e "${YELLOW}⚠️  Token GitHub non trouvé — upload manuel requis${NC}"
     echo -e "   → https://github.com/${GITHUB_REPO_SLUG}/releases/new?tag=${VERSION}"
     exit 0
 fi
