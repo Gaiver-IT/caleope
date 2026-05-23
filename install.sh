@@ -223,6 +223,12 @@ install_prerequisites() {
         sudo apt-transport-https \
         tar gzip jq
 
+    log_step "Installation des outils réseau (montages SMB/SFTP)..."
+    run_cmd apt-get install -y \
+        cifs-utils \
+        sshfs \
+        fuse3
+
     log_success "Prérequis installés"
 }
 

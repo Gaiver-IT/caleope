@@ -32,6 +32,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/term"
+
 	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
 )
@@ -422,6 +424,17 @@ func cmdLocation(args []string) {
 					apiArgs["options"] = rest[i+1]
 					i++
 				}
+			}
+		}
+		// Demander le mot de passe interactivement si --user présent mais pas --password
+		// (évite d'avoir le mot de passe dans l'historique bash, et évite les problèmes
+		//  avec les caractères spéciaux comme ! qui déclenchent l'expansion d'historique)
+		if apiArgs["username"] != "" && apiArgs["password"] == "" {
+			fmt.Printf("🔑 Mot de passe pour %s@%s : ", apiArgs["username"], apiArgs["host"])
+			password, err := readPassword()
+			fmt.Println() // saut de ligne après la saisie masquée
+			if err == nil && password != "" {
+				apiArgs["password"] = password
 			}
 		}
 		resp := callDaemon("location-add", apiArgs)
@@ -833,6 +846,20 @@ func cmdPing() {
 // ─────────────────────────────────────────────
 // COMMUNICATION AVEC LE DAEMON
 // ─────────────────────────────────────────────
+
+// readPassword lit un mot de passe sans l'afficher (mode raw terminal).
+// Utilise golang.org/x/term — cross-platform (Linux + macOS).
+// Fallback sur lecture normale si le terminal n'est pas interactif (pipe).
+func readPassword() (string, error) {
+	pwd, err := term.ReadPassword(int(os.Stdin.Fd()))
+	if err != nil {
+		// Pas un terminal (ex: pipe) — lire normalement
+		var line string
+		fmt.Scanln(&line)
+		return line, nil
+	}
+	return string(pwd), nil
+}
 
 // callDaemon envoie une requête au daemon et retourne la réponse.
 func callDaemon(command string, args map[string]string) types.APIResponse {
