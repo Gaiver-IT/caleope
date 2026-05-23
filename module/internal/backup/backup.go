@@ -49,7 +49,8 @@ func (m *Manager) Backup(appID string) (string, error) {
 		return "", fmt.Errorf("application '%s' non trouvée: %w", appID, err)
 	}
 
-	timestamp := time.Now().Format("2006-01-02T15-04-05")
+	now := time.Now()
+	timestamp := now.Format("2006-01-02T15-04-05")
 	backupDir := filepath.Join(m.baseDir, "backups", appID, timestamp)
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
 		return "", fmt.Errorf("création dossier backup: %w", err)
@@ -71,7 +72,7 @@ func (m *Manager) Backup(appID string) (string, error) {
 	manifest := types.BackupManifest{
 		App:            appID,
 		AppName:        app.Name,
-		Timestamp:      time.Now(),
+		Timestamp:      now, // même instant que le nom de dossier
 		CaleopeVersion: version.Version,
 	}
 
