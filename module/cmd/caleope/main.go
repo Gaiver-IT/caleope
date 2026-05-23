@@ -444,6 +444,7 @@ func cmdLocation(args []string) {
 		if m, ok := resp.Data.(map[string]interface{}); ok {
 			fmt.Printf("✅ %s\n", m["message"])
 			fmt.Printf("   Point de montage : %s\n", m["mount_point"])
+			printLocationMountResult(m)
 		}
 
 	case "remove", "rm":
@@ -465,7 +466,12 @@ func cmdLocation(args []string) {
 		if !resp.Success {
 			die("❌ " + resp.Error)
 		}
-		fmt.Printf("✅ '%s' monté\n", rest[0])
+		if m, ok := resp.Data.(map[string]interface{}); ok {
+			fmt.Printf("✅ '%s' monté sur %s\n", rest[0], m["mount_point"])
+			printLocationMountResult(m)
+		} else {
+			fmt.Printf("✅ '%s' monté\n", rest[0])
+		}
 
 	case "unmount":
 		if len(rest) == 0 {
@@ -846,6 +852,31 @@ func cmdPing() {
 // ─────────────────────────────────────────────
 // COMMUNICATION AVEC LE DAEMON
 // ─────────────────────────────────────────────
+
+// printLocationMountResult affiche le résultat d'un montage (succès + fichiers, ou erreur).
+// m est la map de la réponse API location-add ou location-mount.
+func printLocationMountResult(m map[string]interface{}) {
+	mounted, _ := m["mounted"].(bool)
+	if !mounted {
+		if mountErr, ok := m["mount_error"].(string); ok && mountErr != "" {
+			fmt.Printf("\n   ⚠️  Montage automatique échoué :\n      %s\n", mountErr)
+			fmt.Printf("   → Corrige le problème puis relance : caleope location mount <nom>\n")
+		}
+		return
+	}
+
+	// Montage réussi — afficher les fichiers
+	files, hasFiles := m["files"].([]interface{})
+	if !hasFiles || len(files) == 0 {
+		fmt.Printf("   📂 Montage OK — dossier vide\n")
+		return
+	}
+
+	fmt.Printf("\n   📂 Contenu (%d entrée(s)) :\n", len(files))
+	for _, f := range files {
+		fmt.Printf("      %s\n", f)
+	}
+}
 
 // readPassword lit un mot de passe sans l'afficher (mode raw terminal).
 // Utilise golang.org/x/term — cross-platform (Linux + macOS).

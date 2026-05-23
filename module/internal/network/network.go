@@ -351,3 +351,60 @@ func (m *Manager) saveLocation(loc types.NetworkLocation) error {
 	}
 	return os.WriteFile(m.locationFile(loc.Name), data, 0600)
 }
+
+// ─────────────────────────────────────────────
+// INSPECTION
+// ─────────────────────────────────────────────
+
+// ListFiles retourne le contenu (premier niveau) du point de montage.
+// Utilisé après un montage réussi pour confirmer que la liaison fonctionne.
+// Retourne au maximum maxEntries entrées.
+func (m *Manager) ListFiles(name string, maxEntries int) ([]string, error) {
+	mountPoint := m.MountPoint(name)
+
+	if !m.isMounted(mountPoint) {
+		return nil, fmt.Errorf("'%s' n'est pas monté", name)
+	}
+
+	entries, err := os.ReadDir(mountPoint)
+	if err != nil {
+		return nil, fmt.Errorf("lecture du point de montage: %w", err)
+	}
+
+	if maxEntries <= 0 {
+		maxEntries = 20
+	}
+
+	var files []string
+	for i, e := range entries {
+		if i >= maxEntries {
+			files = append(files, fmt.Sprintf("... (%d fichiers/dossiers supplémentaires)", len(entries)-maxEntries))
+			break
+		}
+		if e.IsDir() {
+			files = append(files, e.Name()+"/")
+		} else {
+			info, err := e.Info()
+			if err == nil {
+				files = append(files, fmt.Sprintf("%s  (%s)", e.Name(), humanSize(info.Size())))
+			} else {
+				files = append(files, e.Name())
+			}
+		}
+	}
+	return files, nil
+}
+
+// humanSize formate une taille en octets de façon lisible.
+func humanSize(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}

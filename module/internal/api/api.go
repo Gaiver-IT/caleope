@@ -187,7 +187,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	case "location-remove":
 		err = s.handleLocationRemove(req.Args)
 	case "location-mount":
-		err = s.handleLocationMount(req.Args)
+		data, err = s.handleLocationMount(req.Args)
 	case "location-unmount":
 		err = s.handleLocationUnmount(req.Args)
 	case "ping":
@@ -252,7 +252,8 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	}
 
 	// Lire les notes post-install écrites par setup.sh (credentials, instructions...)
-	notesPath := filepath.Join(s.baseDir, "apps-installed", appID, "post-install.txt")
+	// setup.sh écrit dans app-config/<app>/post-install.txt
+	notesPath := filepath.Join(s.baseDir, "app-config", appID, "post-install.txt")
 	if notes, err := os.ReadFile(notesPath); err == nil {
 		return map[string]string{"notes": string(notes)}, nil
 	}
@@ -462,10 +463,26 @@ func (s *Server) handleLocationAdd(args map[string]string) (interface{}, error) 
 	if err := s.net.Add(loc, args["password"]); err != nil {
 		return nil, err
 	}
-	return map[string]string{
+
+	// Tentative de montage immédiat pour valider les identifiants
+	result := map[string]interface{}{
 		"message":     fmt.Sprintf("Emplacement '%s' ajouté", name),
 		"mount_point": s.net.MountPoint(name),
-	}, nil
+		"mounted":     false,
+	}
+
+	if mountErr := s.net.Mount(name); mountErr != nil {
+		// Le montage a échoué — l'emplacement est enregistré mais pas monté
+		result["mount_error"] = mountErr.Error()
+	} else {
+		result["mounted"] = true
+		// Lister les fichiers pour confirmer l'accès
+		if files, err := s.net.ListFiles(name, 20); err == nil {
+			result["files"] = files
+		}
+	}
+
+	return result, nil
 }
 
 func (s *Server) handleLocationRemove(args map[string]string) error {
@@ -476,12 +493,22 @@ func (s *Server) handleLocationRemove(args map[string]string) error {
 	return s.net.Remove(name)
 }
 
-func (s *Server) handleLocationMount(args map[string]string) error {
+func (s *Server) handleLocationMount(args map[string]string) (interface{}, error) {
 	name := args["name"]
 	if name == "" {
-		return fmt.Errorf("argument 'name' manquant")
+		return nil, fmt.Errorf("argument 'name' manquant")
 	}
-	return s.net.Mount(name)
+	if err := s.net.Mount(name); err != nil {
+		return nil, err
+	}
+	result := map[string]interface{}{
+		"mounted":     true,
+		"mount_point": s.net.MountPoint(name),
+	}
+	if files, err := s.net.ListFiles(name, 20); err == nil {
+		result["files"] = files
+	}
+	return result, nil
 }
 
 func (s *Server) handleLocationUnmount(args map[string]string) error {

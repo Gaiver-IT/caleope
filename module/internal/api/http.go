@@ -473,11 +473,12 @@ func (s *Server) routeLocation(w http.ResponseWriter, r *http.Request) {
 		}
 		s.httpOK(w, nil)
 	case "POST mount":
-		if err := s.handleLocationMount(map[string]string{"name": name}); err != nil {
+		result, err := s.handleLocationMount(map[string]string{"name": name})
+		if err != nil {
 			s.httpError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		s.httpOK(w, map[string]string{"status": "mounted"})
+		s.httpOK(w, result)
 	case "POST unmount":
 		if err := s.handleLocationUnmount(map[string]string{"name": name}); err != nil {
 			s.httpError(w, err.Error(), http.StatusInternalServerError)
