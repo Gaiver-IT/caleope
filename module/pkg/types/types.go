@@ -130,9 +130,10 @@ type RuntimeApp struct {
 	Version     string     `json:"version"`
 	Channel     string     `json:"channel"`
 	Repository  string     `json:"repository"`
-	Ports       []AppPort  `json:"ports"`   // avec les ports hôtes alloués
-	ComposeDir  string     `json:"compose_dir"`  // chemin vers apps-installed/<id>/
-	Error       string     `json:"error,omitempty"` // omitempty = absent du JSON si vide
+	Ports           []AppPort  `json:"ports"`                      // avec les ports hôtes alloués
+	ComposeDir      string     `json:"compose_dir"`                 // chemin vers apps-installed/<id>/
+	StorageLocation string     `json:"storage_location,omitempty"` // nom de la location NAS (vide = stockage local)
+	Error           string     `json:"error,omitempty"`
 }
 
 // ─────────────────────────────────────────────

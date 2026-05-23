@@ -190,6 +190,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		data, err = s.handleLocationMount(req.Args)
 	case "location-unmount":
 		err = s.handleLocationUnmount(req.Args)
+	case "location-storage":
+		data, err = s.handleLocationStorage(req.Args)
 	case "ping":
 		cfg, _ := s.rt.GetConfig()
 		channel := cfg.Channel
@@ -245,6 +247,12 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 			}
 			return "stable"
 		}(),
+	}
+
+	// Stockage NAS : résoudre le chemin de données avant l'installation
+	if storageLocation := args["storage"]; storageLocation != "" {
+		opts.StorageLocation = storageLocation
+		opts.StorageDataDir = s.net.AppDataDir(storageLocation, appID)
 	}
 
 	if err := s.installer.Install(opts); err != nil {
@@ -476,6 +484,10 @@ func (s *Server) handleLocationAdd(args map[string]string) (interface{}, error) 
 		result["mount_error"] = mountErr.Error()
 	} else {
 		result["mounted"] = true
+		// Créer la structure caleope/ sur le NAS
+		if err := s.net.EnsureCaleopeStructure(name); err == nil {
+			result["caleope_dir"] = s.net.CaleopeDir(name)
+		}
 		// Lister les fichiers pour confirmer l'accès
 		if files, err := s.net.ListFiles(name, 20); err == nil {
 			result["files"] = files
@@ -501,9 +513,12 @@ func (s *Server) handleLocationMount(args map[string]string) (interface{}, error
 	if err := s.net.Mount(name); err != nil {
 		return nil, err
 	}
+	// Créer la structure caleope/ si pas encore présente
+	_ = s.net.EnsureCaleopeStructure(name)
 	result := map[string]interface{}{
 		"mounted":     true,
 		"mount_point": s.net.MountPoint(name),
+		"caleope_dir": s.net.CaleopeDir(name),
 	}
 	if files, err := s.net.ListFiles(name, 20); err == nil {
 		result["files"] = files
@@ -517,6 +532,133 @@ func (s *Server) handleLocationUnmount(args map[string]string) error {
 		return fmt.Errorf("argument 'name' manquant")
 	}
 	return s.net.Unmount(name)
+}
+
+// handleLocationStorage migre les données d'une app vers un emplacement NAS
+// (ou les rapatrie en local si location == "local").
+// Flux : stop → rsync → symlink → start
+func (s *Server) handleLocationStorage(args map[string]string) (interface{}, error) {
+	appID := args["app"]
+	locationName := args["location"] // "local" pour rapatrier
+	if appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+
+	app, err := s.rt.GetApp(appID)
+	if err != nil {
+		return nil, fmt.Errorf("application '%s' non trouvée", appID)
+	}
+
+	localDataDir := filepath.Join(s.baseDir, "app-data", appID)
+
+	// ── Cas info : pas de location fournie → afficher le stockage actuel ──
+	if locationName == "" {
+		storage := "local"
+		dataDir := localDataDir
+		if app.StorageLocation != "" {
+			storage = app.StorageLocation
+			dataDir = s.net.AppDataDir(app.StorageLocation, appID)
+		}
+		return map[string]string{
+			"app":      appID,
+			"storage":  storage,
+			"data_dir": dataDir,
+		}, nil
+	}
+
+	// Déterminer source et destination
+	var srcDir, dstDir, newSymlinkTarget string
+	var newStorageLocation string
+
+	if locationName == "local" {
+		// Migration NAS → local
+		if app.StorageLocation == "" {
+			return nil, fmt.Errorf("'%s' est déjà en stockage local", appID)
+		}
+		srcDir = s.net.AppDataDir(app.StorageLocation, appID)
+		dstDir = localDataDir + ".tmp_migrate"
+		newStorageLocation = ""
+		newSymlinkTarget = ""
+	} else {
+		// Migration local → NAS (ou NAS → autre NAS)
+		if app.StorageLocation == locationName {
+			return nil, fmt.Errorf("'%s' utilise déjà la location '%s'", appID, locationName)
+		}
+		// Vérifier que le NAS est monté
+		nasDataDir := s.net.AppDataDir(locationName, appID)
+		if !strings.HasPrefix(nasDataDir, s.net.MountPoint(locationName)) {
+			return nil, fmt.Errorf("location '%s' non montée", locationName)
+		}
+		// Résoudre la vraie source (suit le symlink si nécessaire)
+		realSrc, _ := filepath.EvalSymlinks(localDataDir)
+		if realSrc == "" {
+			realSrc = localDataDir
+		}
+		srcDir = realSrc
+		dstDir = nasDataDir
+		newStorageLocation = locationName
+		newSymlinkTarget = nasDataDir
+		// Créer la structure caleope/ sur le NAS
+		_ = s.net.EnsureCaleopeStructure(locationName)
+	}
+
+	// ── Stop containers ──
+	fmt.Printf("  [1/4] Arrêt de '%s'...\n", appID)
+	_ = s.dc.Stop(app.ComposeDir)
+
+	restartOnError := func() {
+		fmt.Printf("  → Redémarrage de '%s' après erreur...\n", appID)
+		_ = s.dc.Start(app.ComposeDir)
+	}
+
+	// ── Rsync ──
+	fmt.Printf("  [2/4] Copie des données vers %s...\n", dstDir)
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		restartOnError()
+		return nil, fmt.Errorf("impossible de créer la destination: %w", err)
+	}
+	cmd := exec.Command("rsync", "-a", "--delete", srcDir+"/", dstDir+"/")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		restartOnError()
+		return nil, fmt.Errorf("rsync échoué: %w", err)
+	}
+
+	// ── Mettre à jour le symlink ──
+	fmt.Println("  [3/4] Mise à jour du lien symbolique...")
+	_ = os.Remove(localDataDir)
+	if newSymlinkTarget != "" {
+		// local → NAS : créer symlink
+		if err := os.Symlink(newSymlinkTarget, localDataDir); err != nil {
+			restartOnError()
+			return nil, fmt.Errorf("impossible de créer le symlink: %w", err)
+		}
+	} else {
+		// NAS → local : renommer le dossier temporaire
+		if err := os.Rename(dstDir, localDataDir); err != nil {
+			restartOnError()
+			return nil, fmt.Errorf("impossible de déplacer les données en local: %w", err)
+		}
+	}
+
+	// ── Mettre à jour le runtime ──
+	app.StorageLocation = newStorageLocation
+	_ = s.rt.SaveApp(app)
+
+	// ── Redémarrer ──
+	fmt.Printf("  [4/4] Redémarrage de '%s'...\n", appID)
+	_ = s.dc.Start(app.ComposeDir)
+
+	storageStr := "local"
+	if newStorageLocation != "" {
+		storageStr = newStorageLocation
+	}
+	return map[string]string{
+		"app":     appID,
+		"storage": storageStr,
+		"message": fmt.Sprintf("Données de '%s' migrées vers %s", appID, storageStr),
+	}, nil
 }
 
 // ─────────────────────────────────────────────

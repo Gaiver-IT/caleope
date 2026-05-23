@@ -106,7 +106,7 @@ func main() {
 
 func cmdInstall(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly]")
+		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>]")
 	}
 
 	apiArgs := map[string]string{
@@ -114,7 +114,6 @@ func cmdInstall(args []string) {
 	}
 
 	// Parser les flags optionnels
-	// Ex: caleope install jellyfin --domain media.home.local --channel latest
 	for i := 1; i < len(args)-1; i++ {
 		switch args[i] {
 		case "--domain":
@@ -125,10 +124,17 @@ func cmdInstall(args []string) {
 			i++
 		case "--force":
 			apiArgs["force"] = "true"
+		case "--storage":
+			apiArgs["storage"] = args[i+1]
+			i++
 		}
 	}
 
-	fmt.Printf("📦 Installation de '%s'...\n", args[0])
+	if storage, ok := apiArgs["storage"]; ok && storage != "" {
+		fmt.Printf("📦 Installation de '%s' (données sur NAS '%s')...\n", args[0], storage)
+	} else {
+		fmt.Printf("📦 Installation de '%s'...\n", args[0])
+	}
 	resp := callDaemon("install", apiArgs)
 
 	if !resp.Success {
@@ -483,8 +489,39 @@ func cmdLocation(args []string) {
 		}
 		fmt.Printf("✅ '%s' démonté\n", rest[0])
 
+	case "storage":
+		// caleope location storage <app>                → affiche le stockage actuel
+		// caleope location storage <app> <location>     → migre vers le NAS
+		// caleope location storage <app> local          → rapatrie en local
+		if len(rest) == 0 {
+			die("Usage: caleope location storage <app> [<location>|local]")
+		}
+		apiArgs := map[string]string{"app": rest[0]}
+		if len(rest) >= 2 {
+			apiArgs["location"] = rest[1]
+		}
+		resp := callDaemon("location-storage", apiArgs)
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		if m, ok := resp.Data.(map[string]interface{}); ok {
+			if msg, ok := m["message"].(string); ok {
+				// Migration effectuée
+				fmt.Printf("✅ %s\n", msg)
+			} else {
+				// Affichage info
+				storage := m["storage"]
+				dataDir := m["data_dir"]
+				if storage == "local" {
+					fmt.Printf("💾 '%s' : stockage local\n   Données : %s\n", rest[0], dataDir)
+				} else {
+					fmt.Printf("💾 '%s' : NAS '%s'\n   Données : %s\n", rest[0], storage, dataDir)
+				}
+			}
+		}
+
 	default:
-		die("Sous-commande inconnue: " + sub + "\n  Utilisez: add, remove, mount, unmount, list")
+		die("Sous-commande inconnue: " + sub + "\n  Utilisez: add, remove, mount, unmount, list, storage")
 	}
 }
 
@@ -863,6 +900,13 @@ func printLocationMountResult(m map[string]interface{}) {
 			fmt.Printf("   → Corrige le problème puis relance : caleope location mount <nom>\n")
 		}
 		return
+	}
+
+	// Afficher le dossier caleope/ créé sur le NAS
+	if caleopeDir, ok := m["caleope_dir"].(string); ok {
+		fmt.Printf("   📁 Dossier Caleope créé sur le NAS : %s\n", caleopeDir)
+		fmt.Printf("      Utilisez --storage <nom> lors de l'installation d'une app\n")
+		fmt.Printf("      pour y stocker ses données.\n")
 	}
 
 	// Montage réussi — afficher les fichiers

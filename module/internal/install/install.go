@@ -56,11 +56,13 @@ func NewInstaller(
 
 // InstallOptions contient les paramètres passés par l'utilisateur.
 type InstallOptions struct {
-	AppID   string
-	Domain  string            // domaine pour Traefik (ex: jellyfin.monserveur.com)
-	Channel string            // stable, latest, nightly
-	Params  map[string]string // paramètres additionnels de params.json
-	Force   bool              // forcer la réinstallation si déjà installé
+	AppID           string
+	Domain          string            // domaine pour Traefik (ex: jellyfin.monserveur.com)
+	Channel         string            // stable, latest, nightly
+	Params          map[string]string // paramètres additionnels de params.json
+	Force           bool              // forcer la réinstallation si déjà installé
+	StorageLocation string            // nom de la location NAS pour stocker app-data (vide = local)
+	StorageDataDir  string            // chemin absolu résolu (rempli par l'installeur)
 }
 
 // ─────────────────────────────────────────────
@@ -161,7 +163,7 @@ func (i *Installer) Install(opts InstallOptions) error {
 	// ── Étape 5 : Création dossiers ──
 	fmt.Println("  [5/12] Création des répertoires...")
 	composeDir = filepath.Join(i.baseDir, "apps-installed", opts.AppID)
-	if err := i.createDirs(manifest, composeDir); err != nil {
+	if err := i.createDirs(manifest, composeDir, opts); err != nil {
 		return err
 	}
 
@@ -200,6 +202,7 @@ func (i *Installer) Install(opts InstallOptions) error {
 	runtimeApp.Status = types.StatusRunning
 	runtimeApp.Ports = manifest.Ports
 	runtimeApp.ComposeDir = composeDir
+	runtimeApp.StorageLocation = opts.StorageLocation
 	if err := i.rt.SaveApp(runtimeApp); err != nil {
 		return err
 	}
@@ -294,7 +297,7 @@ func (i *Installer) allocatePorts(manifest *types.AppManifest) (int, error) {
 }
 
 // createDirs crée tous les dossiers nécessaires à l'application.
-func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string) error {
+func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string, opts InstallOptions) error {
 	dirs := []string{
 		composeDir,
 		filepath.Join(composeDir, "override"),
@@ -303,14 +306,43 @@ func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string) e
 	}
 
 	// Créer les dossiers de volumes (bind mounts)
+	// Si stockage NAS : app-data/<app> sera un symlink, pas un dossier réel
 	for _, vol := range manifest.Volumes {
-		dirs = append(dirs, filepath.Join(i.baseDir, vol.Source))
+		// Ignorer les volumes sous app-data/<app> si on utilise le NAS
+		// (ils seront créés sur le NAS via symlink)
+		volPath := filepath.Join(i.baseDir, vol.Source)
+		appDataPrefix := filepath.Join(i.baseDir, "app-data", manifest.ID)
+		if opts.StorageLocation != "" && strings.HasPrefix(volPath, appDataPrefix) {
+			continue // sera géré par le symlink NAS
+		}
+		dirs = append(dirs, volPath)
 	}
 
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("impossible de créer %s: %w", dir, err)
 		}
+	}
+
+	// ── Stockage NAS : créer dossier sur NAS + symlink local ──
+	if opts.StorageLocation != "" && opts.StorageDataDir != "" {
+		// Créer le dossier sur le NAS
+		if err := os.MkdirAll(opts.StorageDataDir, 0755); err != nil {
+			return fmt.Errorf("impossible de créer le dossier NAS: %w", err)
+		}
+		// Créer le dossier parent local (app-data/) si besoin
+		localParent := filepath.Join(i.baseDir, "app-data")
+		if err := os.MkdirAll(localParent, 0755); err != nil {
+			return err
+		}
+		// Créer le symlink : app-data/<app> → <nas>/caleope/app-data/<app>
+		localLink := filepath.Join(i.baseDir, "app-data", manifest.ID)
+		// Supprimer le symlink/dossier existant si présent
+		_ = os.Remove(localLink)
+		if err := os.Symlink(opts.StorageDataDir, localLink); err != nil {
+			return fmt.Errorf("impossible de créer le symlink NAS: %w", err)
+		}
+		fmt.Printf("         ✓ Données liées au NAS : %s → %s\n", localLink, opts.StorageDataDir)
 	}
 
 	return nil
@@ -325,11 +357,16 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 	}
 
 	// Variables d'environnement passées au script
+	appDataDir := filepath.Join(i.baseDir, "app-data", manifest.ID) // local par défaut
+	if opts.StorageDataDir != "" {
+		appDataDir = opts.StorageDataDir // NAS si défini
+	}
 	env := append(os.Environ(),
 		"CALEOPE_APP_ID="+manifest.ID,
 		"CALEOPE_APP_DIR="+composeDir,
 		"CALEOPE_BASE_DIR="+i.baseDir,
 		"CALEOPE_DOMAIN="+opts.Domain,
+		"CALEOPE_APP_DATA_DIR="+appDataDir,
 	)
 	for k, v := range opts.Params {
 		env = append(env, "CALEOPE_PARAM_"+strings.ToUpper(k)+"="+v)
@@ -402,9 +439,15 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 func (i *Installer) buildEnvFile(manifest *types.AppManifest, opts InstallOptions) string {
 	var sb strings.Builder
 
+	appDataDir := filepath.Join(i.baseDir, "app-data", manifest.ID)
+	if opts.StorageDataDir != "" {
+		appDataDir = opts.StorageDataDir
+	}
+
 	sb.WriteString("# Généré par Caleope - ne pas modifier manuellement\n")
 	sb.WriteString(fmt.Sprintf("CALEOPE_APP_ID=%s\n", manifest.ID))
 	sb.WriteString(fmt.Sprintf("CALEOPE_BASE_DIR=%s\n", i.baseDir))
+	sb.WriteString(fmt.Sprintf("CALEOPE_APP_DATA_DIR=%s\n", appDataDir))
 
 	if opts.Domain != "" {
 		sb.WriteString(fmt.Sprintf("CALEOPE_DOMAIN=%s\n", opts.Domain))

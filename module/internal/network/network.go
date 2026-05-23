@@ -58,6 +58,32 @@ func (m *Manager) MountPoint(name string) string {
 	return filepath.Join(m.baseDir, "mounts", name)
 }
 
+// CaleopeDir retourne le dossier caleope/ à la racine du NAS.
+func (m *Manager) CaleopeDir(name string) string {
+	return filepath.Join(m.MountPoint(name), "caleope")
+}
+
+// AppDataDir retourne le chemin de données d'une app sur le NAS.
+// Structure : <nas_mount>/caleope/app-data/<appID>/
+func (m *Manager) AppDataDir(name, appID string) string {
+	return filepath.Join(m.CaleopeDir(name), "app-data", appID)
+}
+
+// EnsureCaleopeStructure crée la structure caleope/ sur le NAS si elle n'existe pas.
+// Appelé automatiquement après un montage réussi.
+func (m *Manager) EnsureCaleopeStructure(name string) error {
+	dirs := []string{
+		filepath.Join(m.CaleopeDir(name), "app-data"),
+		filepath.Join(m.CaleopeDir(name), "backups"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			return fmt.Errorf("impossible de créer %s sur le NAS: %w", d, err)
+		}
+	}
+	return nil
+}
+
 // ─────────────────────────────────────────────
 // CRUD
 // ─────────────────────────────────────────────
