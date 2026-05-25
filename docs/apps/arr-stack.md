@@ -20,7 +20,7 @@ caleope install arr-stack --domain media.monserveur.fr \
   --param storage_path=/opt/gaiver-it/caleope/mounts/mon-nas/media
 ```
 
-Les identifiants et API keys s'affichent à la fin de l'installation.
+**C'est tout.** Les connexions entre services se configurent automatiquement au démarrage.
 
 ## Services inclus
 
@@ -28,7 +28,7 @@ Les identifiants et API keys s'affichent à la fin de l'installation.
 |---------|-----|------|
 | **Jellyseerr** | `/` | Interface de demande de contenu |
 | **Jellyfin Vue** | `/vue` | Lecteur Jellyfin avec interface épurée |
-| **Prowlarr** | `/prowlarr` | Gestionnaire d'indexeurs (remplace Jackett) |
+| **Prowlarr** | `/prowlarr` | Gestionnaire d'indexeurs |
 | **Radarr** | `/radarr` | Téléchargement automatique de films |
 | **Sonarr** | `/sonarr` | Téléchargement automatique de séries |
 | **Lidarr** | `/lidarr` | Téléchargement automatique de musique |
@@ -37,82 +37,80 @@ Les identifiants et API keys s'affichent à la fin de l'installation.
 | **qBittorrent** | `/qbt` | Client torrent |
 | **SABnzbd** | `/sabnzbd` | Client Usenet |
 
-## Structure des données
+## Ce qui est configuré automatiquement
 
-Tous les services partagent le même répertoire `/data` pour que les hardlinks fonctionnent (déplacement de fichiers instantané sans copie) :
+Un container **bootstrap** s'exécute une fois au démarrage et configure tout via les APIs :
+
+| Connexion | Résultat |
+|-----------|----------|
+| Prowlarr → Radarr, Sonarr, Lidarr, Readarr | Synchronisation complète des indexeurs |
+| Radarr, Sonarr, Lidarr, Readarr → qBittorrent | Client torrent configuré |
+| Radarr, Sonarr, Lidarr, Readarr → SABnzbd | Client Usenet configuré |
+| Dossiers racine | `/data/media/{movies,tv,music,books}` |
+| Auth | Désactivée (réseau local, derrière reverse proxy) |
+
+## Ce qu'il reste à faire (2 étapes)
+
+### 1. Prowlarr — ajouter tes sources
+`/prowlarr` → **Indexers** → **Add Indexer**
+
+Ajoute tes indexeurs torrent (ex: 1337x, YGGTorrent…) et/ou Usenet. Prowlarr les synchronise automatiquement vers Radarr, Sonarr, Lidarr et Readarr.
+
+### 2. Jellyseerr — connecter Jellyfin
+`/` → wizard de premier accès :
+- **Jellyfin URL** : l'adresse de ton serveur Jellyfin (ex: `https://media.monserveur.fr`)
+- Jellyseerr connecte ensuite Radarr et Sonarr automatiquement via les API keys déjà configurées
+
+## Jellyfin Vue — premier accès
+
+`/vue` → entrer l'URL de ton serveur Jellyfin → se connecter avec ton compte Jellyfin
+
+Jellyfin Vue est une interface de lecture épurée et moderne, alternative au client web officiel.
+
+## Jellyfin — ajouter la bibliothèque arr-stack
+
+Dans Jellyfin, ajoute une bibliothèque pointant vers le dossier `media` de l'arr-stack :
 
 ```
-data/
-├── downloads/
-│   ├── complete/
-│   │   ├── movies/      ← Radarr récupère ici après DL
-│   │   ├── tv/          ← Sonarr récupère ici
-│   │   ├── music/       ← Lidarr récupère ici
-│   │   └── books/       ← Readarr récupère ici
-│   └── incomplete/      ← fichiers en cours de téléchargement
-└── media/               ← bibliothèques finales (Jellyfin lit ici)
-    ├── movies/
-    ├── tv/
-    ├── music/
-    └── books/
+Films   → /opt/gaiver-it/caleope/app-data/arr-stack/data/media/movies
+Séries  → /opt/gaiver-it/caleope/app-data/arr-stack/data/media/tv
+Musique → /opt/gaiver-it/caleope/app-data/arr-stack/data/media/music
 ```
 
-## Ordre de configuration
+Si stockage NAS : le chemin est celui passé avec `--param storage_path=...`.
 
-### 1. Prowlarr — ajouter les indexeurs
-`/prowlarr` → Indexers → Add Indexer → choisir tes sources
-
-### 2. Prowlarr → connecter les *arr
-`/prowlarr` → Settings → Apps → Add Application  
-Renseigne les API keys affichées à l'installation pour chaque app.
-
-### 3. Radarr/Sonarr — configurer le client de téléchargement
-`/radarr` → Settings → Download Clients → qBittorrent :
-```
-Host     : qbittorrent
-Port     : 8080
-Category : movies   (ou tv pour Sonarr)
-```
-
-Pour Usenet via SABnzbd :
-```
-Host     : sabnzbd
-Port     : 8080
-```
-
-### 4. Radarr/Sonarr — configurer les chemins
-Settings → Media Management → Root Folders :
-- Radarr : `/data/media/movies`
-- Sonarr : `/data/media/tv`
-- Lidarr : `/data/media/music`
-
-### 5. Jellyseerr — connecter Jellyfin + Radarr/Sonarr
-Premier accès sur `/` → wizard :
-- Jellyfin URL : `http://jellyfin:8096` (si sur le même serveur)
-- Radarr/Sonarr : URL interne + API key
-
-### 6. Jellyfin — ajouter la bibliothèque arr-stack
-Dans Jellyfin → Bibliothèques → Ajouter :
-- Films : chemin vers `data/media/movies`
-- Séries : chemin vers `data/media/tv`
-
-### 7. Jellyfin Vue — premier accès
-`/vue` → entrer l'URL de ton serveur Jellyfin → se connecter
-
-## Jellyfin Vue vs Jellyseerr
+## Jellyseerr vs Jellyfin Vue
 
 | | Jellyseerr | Jellyfin Vue |
 |---|---|---|
 | **Usage** | Demander du nouveau contenu | Regarder le contenu existant |
 | **Auth** | Compte Jellyseerr propre | Compte Jellyfin |
 | **Interface** | Moderne, style streaming | Épurée, minimaliste |
-| **Sur mobile** | Site web | Site web (PWA) |
+
+## Structure des données
+
+Tous les services partagent `/data` pour que les hardlinks fonctionnent (déplacement de fichiers instantané) :
+
+```
+data/
+├── downloads/
+│   ├── complete/{movies,tv,music,books}   ← *arr récupère ici après DL
+│   └── incomplete/                        ← en cours de téléchargement
+└── media/
+    ├── movies/    ← Jellyfin lit ici
+    ├── tv/
+    ├── music/
+    └── books/
+```
 
 ## Commandes utiles
 
 ```bash
-caleope logs arr-stack       # Logs de tous les services
-caleope restart arr-stack    # Redémarrer la stack
-caleope backup arr-stack     # Sauvegarder les configs
-caleope stop arr-stack       # Arrêter proprement
+caleope logs arr-stack       # logs de tous les services
+caleope restart arr-stack    # redémarrer la stack
+caleope backup arr-stack     # sauvegarder les configs
+caleope stop arr-stack       # arrêter proprement
+
+# Voir les logs du bootstrap (connexions automatiques)
+docker logs arr-bootstrap
 ```
