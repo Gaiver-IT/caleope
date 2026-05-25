@@ -2,92 +2,62 @@
 title: Applications disponibles
 description: Catalogue des applications du store Caleope
 published: true
-date: 2026-05-23
+date: 2026-05-25
 ---
 
 # Applications disponibles
 
-Toutes les applications sont installables avec `caleope install <id>`.  
-Pour synchroniser le catalogue avant installation : `caleope update`
+Toutes les applications s'installent avec `caleope install <id>`.  
+Synchronise le catalogue avant la première installation : `caleope update`
 
 ---
 
 ## Média
 
-### Jellyfin
+### [Jellyfin](/apps/jellyfin)
 Serveur multimédia libre — films, séries, musique, photos.
-
 ```bash
 caleope install jellyfin --domain media.monserveur.fr
 ```
 
-| | |
-|---|---|
-| **ID** | `jellyfin` |
-| **Image** | `jellyfin/jellyfin:latest` |
-| **Port interne** | 8096 |
-| **Identifiants** | Créés lors du premier accès web |
+### [Arr Stack](/apps/arr-stack)
+Suite complète de 10 services : Prowlarr, Radarr, Sonarr, Lidarr, Readarr, Bazarr, qBittorrent, SABnzbd, Jellyseerr, Jellyfin Vue.
+```bash
+caleope install arr-stack --domain media.monserveur.fr
+# Sur NAS :
+caleope install arr-stack --domain media.monserveur.fr \
+  --param storage_path=/opt/gaiver-it/caleope/mounts/mon-nas/media
+```
 
 ---
 
 ## Cloud & Productivité
 
-### Nextcloud + OnlyOffice
-Suite collaborative complète — fichiers, agenda, contacts, édition de documents.
-
+### [Nextcloud + OnlyOffice](/apps/nextcloud)
+Suite collaborative — fichiers, agenda, contacts, édition de documents.
 ```bash
 caleope install nextcloud --domain cloud.monserveur.fr
 ```
-
-| | |
-|---|---|
-| **ID** | `nextcloud` |
-| **Images** | `nextcloud:latest` + `mariadb:11` + `onlyoffice/documentserver` |
-| **Port interne** | 80 |
-| **Identifiants** | Affichés à la fin de l'installation |
-
-> ⏳ Nextcloud initialise sa base de données au premier démarrage (3-5 minutes).
 
 ---
 
 ## Supervision
 
-### Prometheus + Grafana
-Stack de supervision complète — métriques système et par application, dashboards historiques.
-
+### [Prometheus + Grafana](/apps/prometheus-grafana)
+Métriques système et par application, dashboards historiques.
 ```bash
 caleope install prometheus-grafana --domain metrics.monserveur.fr
 ```
-
-| | |
-|---|---|
-| **ID** | `prometheus-grafana` |
-| **Images** | `grafana/grafana` + `prom/prometheus` |
-| **Port interne** | 3000 |
-| **Identifiants** | Affichés à la fin de l'installation |
-
-Le dashboard **Caleope Overview** est préconfiguré avec :
-- RAM et disque système (jauges)
-- CPU et RAM par application (courbes)
-- État de toutes les applications (tableau)
 
 ---
 
 ## Documentation
 
-### Wiki.js
-Wiki moderne avec éditeur web, synchronisation GitHub et lecture publique.
-
+### [Wiki.js](/apps/wikijs)
+Wiki moderne avec éditeur web et synchronisation GitHub.
 ```bash
 caleope install wikijs --domain docs.monserveur.fr
 ```
-
-| | |
-|---|---|
-| **ID** | `wikijs` |
-| **Images** | `requarks/wiki:2` + `postgres:15` |
-| **Port interne** | 3000 |
-| **Identifiants** | Créés lors du wizard de première configuration |
 
 ---
 
@@ -96,6 +66,6 @@ caleope install wikijs --domain docs.monserveur.fr
 Le store est open-source : [github.com/Gaiver-IT/caleope-store](https://github.com/Gaiver-IT/caleope-store)
 
 Chaque application est un dossier `apps/<id>/` contenant :
-- `app.json` — métadonnées et configuration
+- `app.json` — métadonnées, ports, volumes
 - `docker-compose.yml` — template Docker Compose (variables Go templates)
-- `setup.sh` — script de préparation (génération secrets, création dossiers)
+- `setup.sh` — préparation : génération de secrets, création de dossiers, config initiale
