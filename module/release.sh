@@ -294,7 +294,14 @@ make release VERSION="${VERSION}"
 echo -e "      ${GREEN}✔ Binaires compilés${NC}"
 
 # ── Vérifier la version dans le binaire ──
-BUILT_VERSION=$(./build/release/caleope-linux-amd64 version 2>/dev/null | awk '{print $2}' || echo "?")
+# Sur macOS avec un binaire linux/amd64, on ne peut pas l'exécuter directement.
+# On vérifie via la chaîne embarquée dans le binaire (strings).
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    BUILT_VERSION=$(strings ./build/release/caleope-linux-amd64 2>/dev/null \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || echo "?")
+else
+    BUILT_VERSION=$(./build/release/caleope-linux-amd64 version 2>/dev/null | awk '{print $2}' || echo "?")
+fi
 if [[ "${BUILT_VERSION}" != "${VERSION}" ]]; then
     echo -e "${RED}❌ Version dans le binaire (${BUILT_VERSION}) ≠ tag (${VERSION})${NC}"
     echo -e "   Suppression du tag local..."
