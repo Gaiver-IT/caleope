@@ -347,6 +347,27 @@ download_binaries_from_release() {
 }
 
 # =============================================================================
+# AUTOCOMPLÉTION BASH
+# =============================================================================
+
+install_bash_completion() {
+    log_section "Autocomplétion bash"
+
+    local completion_url="${GITHUB_RAW}/module/scripts/caleope-completion.bash"
+    local completion_dest="/etc/bash_completion.d/caleope"
+
+    log_step "Installation du script d'autocomplétion..."
+
+    if wget -q "${completion_url}" -O "${completion_dest}" 2>/dev/null; then
+        chmod 644 "${completion_dest}"
+        log_success "Autocomplétion installée → ${completion_dest}"
+        log_debug "Active dans les nouvelles sessions (ou : source ${completion_dest})"
+    else
+        log_warning "Impossible de télécharger le script d'autocomplétion — ignoré"
+    fi
+}
+
+# =============================================================================
 # STRUCTURE CALEOPE
 # =============================================================================
 
@@ -941,6 +962,7 @@ main() {
     create_structure
     setup_caleope_group
     install_caleope_binaries   # release GitHub → fallback compile
+    install_bash_completion    # tab completion pour caleope
     init_caleope_runtime
     save_config                # Sauvegarder domaine + mode proxy dans caleope.conf
     sync_store                 # git clone du store officiel

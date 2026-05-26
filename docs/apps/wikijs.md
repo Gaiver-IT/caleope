@@ -38,14 +38,16 @@ Cocher :
 
 | Champ | Valeur |
 |-------|--------|
-| Repository URL | `https://github.com/<user>/<repo>` |
+| Repository URL | `https://github.com/ton-user/ton-repo` |
 | Branch | `main` |
 | Username | ton username GitHub |
 | Password | Personal Access Token (scope: `repo`) |
-| Local folder path | `docs` |
+| Local folder path | dossier contenant tes fichiers Markdown (ex: `docs`) |
 | Sync direction | Pull from remote |
 
 → **Apply** puis **Sync Now**
+
+> **Personal Access Token** : génère-le sur `github.com → Settings → Developer settings → Tokens (classic)` avec le scope `repo`.
 
 ## Éditeur
 
