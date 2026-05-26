@@ -377,6 +377,7 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 	cmd := exec.CommandContext(ctx, "bash", setupScript)
 	cmd.Dir = composeDir
 	cmd.Env = env
+	cmd.Stdin = os.Stdin // permet les prompts interactifs dans setup.sh
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

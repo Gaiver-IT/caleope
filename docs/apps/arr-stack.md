@@ -20,7 +20,53 @@ caleope install arr-stack --domain media.monserveur.fr \
   --param storage_path=/opt/gaiver-it/caleope/mounts/mon-nas/media
 ```
 
-**C'est tout.** Les connexions entre services se configurent automatiquement au démarrage.
+L'installeur pose une seule question : tu veux un VPN ? Réponds, et c'est tout.  
+Les connexions entre services se configurent automatiquement au démarrage.
+
+## VPN (optionnel — recommandé pour les torrents)
+
+Un wizard interactif s'affiche pendant l'installation :
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  🔒 VPN pour qBittorrent                                        │
+│                                                                 │
+│  Recommandé pour isoler le trafic torrent derrière un VPN.     │
+│  Utilise Gluetun — compatible ProtonVPN, Mullvad, NordVPN…     │
+└─────────────────────────────────────────────────────────────────┘
+  Activer un VPN ? [o/N] :
+```
+
+Si tu réponds **o**, l'installeur demande :
+
+1. **Fournisseur** : ProtonVPN, Mullvad, NordVPN, PIA, Surfshark, ExpressVPN ou autre
+2. **Protocole** : WireGuard *(recommandé)* ou OpenVPN
+3. **Identifiants** selon le protocole :
+
+| Protocole | Ce qui est demandé |
+|-----------|-------------------|
+| WireGuard | Clé privée (`PrivateKey` du fichier config) |
+| WireGuard + Mullvad | Clé privée + adresse IP (`10.68.x.x/32`) |
+| OpenVPN | Nom d'utilisateur + mot de passe |
+
+4. **Pays du serveur** (optionnel, ex: `France`)
+
+### ProtonVPN — où trouver la clé WireGuard
+
+`account.proton.me` → **VPN** → **Télécharger** → **WireGuard**  
+→ Génère une config → copie le champ `PrivateKey` dans `[Interface]`
+
+### Ce qui se passe avec le VPN
+
+qBittorrent tourne dans le namespace réseau de **Gluetun** : tout son trafic torrent passe par le tunnel VPN. Les services *arr communiquent avec lui normalement via le réseau Docker interne (bypass VPN).
+
+```
+qBittorrent ──→ Gluetun ──→ VPN ──→ Internet (torrents)
+    ↑
+Radarr / Sonarr / … (réseau Docker interne, bypass VPN)
+```
+
+> Le VPN est configuré à l'installation. Pour le modifier, réinstalle la stack (`caleope install arr-stack --force`).
 
 ## Services inclus
 
