@@ -629,6 +629,13 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 	}
 
 	// ── 3. Redémarrer la stack ──
-	fmt.Printf("→ Redémarrage de la stack '%s'...\n", appID)
+	// On fait un Down avant le Up pour éviter les conteneurs orphelins.
+	// Cas typique : switch novpn→vpn (ou inverse) — les deux profils partagent
+	// container_name: qbittorrent, docker compose voit l'ancien comme orphelin
+	// et ne peut pas le supprimer proprement pendant le Up.
+	fmt.Printf("→ Arrêt de la stack '%s'...\n", appID)
+	_ = i.docker.Down(composeDir) // ignore l'erreur si déjà arrêtée
+
+	fmt.Printf("→ Démarrage de la stack '%s'...\n", appID)
 	return i.docker.Up(composeDir)
 }

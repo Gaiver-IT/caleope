@@ -144,9 +144,12 @@ func cmdInstall(args []string) {
 		die("❌ " + resp.Error)
 	}
 
+	// Mémoriser les notes post-install : on les affiche EN DERNIER,
+	// après les wizards interactifs, pour que l'utilisateur les voie à la fin.
+	postInstallNotes := ""
 	if m, ok := resp.Data.(map[string]interface{}); ok {
-		if notes, ok := m["notes"].(string); ok && notes != "" {
-			fmt.Println(notes)
+		if notes, ok := m["notes"].(string); ok {
+			postInstallNotes = notes
 		}
 	}
 
@@ -157,9 +160,8 @@ func cmdInstall(args []string) {
 		case "arr-stack":
 			fmt.Println()
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-			fmt.Println("  La stack est en cours de démarrage.")
 			fmt.Println("  Voulez-vous configurer le VPN maintenant ?")
-			fmt.Println("  (vous pouvez aussi le faire plus tard : caleope configure arr-stack)")
+			fmt.Println("  (ou plus tard : caleope configure arr-stack)")
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			r := bufio.NewReader(os.Stdin)
 			fmt.Print("  Configurer le VPN ? [o/N] : ")
@@ -169,6 +171,11 @@ func cmdInstall(args []string) {
 				cmdConfigureArrStack()
 			}
 		}
+	}
+
+	// Afficher les notes à la toute fin (après les wizards)
+	if postInstallNotes != "" {
+		fmt.Println(postInstallNotes)
 	}
 }
 
