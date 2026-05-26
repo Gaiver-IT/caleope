@@ -66,6 +66,7 @@ func (c *Client) Logs(composeDir string, tail int) (string, error) {
 		"--env-file", filepath.Join(composeDir, "app.env"),
 		"logs", "--tail", tailStr,
 	)
+	cmd.Dir = composeDir
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -81,6 +82,7 @@ func (c *Client) IsRunning(composeDir string) (bool, error) {
 		"--env-file", filepath.Join(composeDir, "app.env"),
 		"ps", "--services", "--filter", "status=running",
 	)
+	cmd.Dir = composeDir
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -104,6 +106,10 @@ func (c *Client) runCompose(composeDir string, args ...string) error {
 	// append(slice1, slice2...) = concat de deux slices (le ... dépack la slice)
 	fullArgs := append(baseArgs, args...)
 	cmd := exec.Command("docker", fullArgs...)
+
+	// CWD = composeDir pour que les chemins relatifs dans compose.yml (env_file)
+	// soient résolus correctement par Docker Compose v5+
+	cmd.Dir = composeDir
 
 	// On redirige stdout/stderr vers notre propre stdout pour voir la progression
 	cmd.Stdout = os.Stdout
