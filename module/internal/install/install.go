@@ -629,12 +629,38 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 	}
 
 	// ── 3. Redémarrer la stack ──
-	// On fait un Down avant le Up pour éviter les conteneurs orphelins.
-	// Cas typique : switch novpn→vpn (ou inverse) — les deux profils partagent
-	// container_name: qbittorrent, docker compose voit l'ancien comme orphelin
-	// et ne peut pas le supprimer proprement pendant le Up.
-	fmt.Printf("→ Arrêt de la stack '%s'...\n", appID)
-	_ = i.docker.Down(composeDir) // ignore l'erreur si déjà arrêtée
+	// Avant de redémarrer, on collecte l'union des profils ancien+nouveau
+	// et on force un down avec tous ces profils activés.
+	// Sans ça, un switch novpn↔vpn laisse l'ancien container qbittorrent en vie
+	// (même container_name) → docker compose up échoue sur le conflit de nom.
+	oldProfiles := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "COMPOSE_PROFILES=") {
+			oldProfiles = strings.TrimPrefix(line, "COMPOSE_PROFILES=")
+			break
+		}
+	}
+	profileSet := make(map[string]bool)
+	for _, p := range strings.Split(oldProfiles, ",") {
+		if p != "" {
+			profileSet[p] = true
+		}
+	}
+	if newP, ok := updates["COMPOSE_PROFILES"]; ok {
+		for _, p := range strings.Split(newP, ",") {
+			if p != "" {
+				profileSet[p] = true
+			}
+		}
+	}
+	var allProfilesList []string
+	for p := range profileSet {
+		allProfilesList = append(allProfilesList, p)
+	}
+	allProfilesStr := strings.Join(allProfilesList, ",")
+
+	fmt.Printf("→ Arrêt propre de la stack '%s' (profils: %s)...\n", appID, allProfilesStr)
+	i.docker.DownAllProfiles(composeDir, allProfilesStr)
 
 	fmt.Printf("→ Démarrage de la stack '%s'...\n", appID)
 	return i.docker.Up(composeDir)

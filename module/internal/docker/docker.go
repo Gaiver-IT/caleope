@@ -14,7 +14,9 @@
 package docker
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,30 +97,54 @@ func (c *Client) IsRunning(composeDir string) (bool, error) {
 
 // runCompose est le helper interne qui exécute docker compose.
 func (c *Client) runCompose(composeDir string, args ...string) error {
-	// On construit la commande complète :
-	// docker compose --file <dir>/compose.yml --env-file <dir>/app.env <args...>
+	return c.runComposeEnv(composeDir, nil, args...)
+}
+
+// runComposeEnv exécute docker compose avec des variables d'environnement supplémentaires.
+// extraEnv = variables qui surchargent l'environnement courant (ex: "COMPOSE_PROFILES=vpn,novpn").
+func (c *Client) runComposeEnv(composeDir string, extraEnv []string, args ...string) error {
 	baseArgs := []string{
 		"compose",
 		"--file", filepath.Join(composeDir, "compose.yml"),
 		"--env-file", filepath.Join(composeDir, "app.env"),
 	}
 
-	// append(slice1, slice2...) = concat de deux slices (le ... dépack la slice)
 	fullArgs := append(baseArgs, args...)
 	cmd := exec.Command("docker", fullArgs...)
-
-	// CWD = composeDir pour que les chemins relatifs dans compose.yml (env_file)
-	// soient résolus correctement par Docker Compose v5+
 	cmd.Dir = composeDir
 
-	// On redirige stdout/stderr vers notre propre stdout pour voir la progression
+	// stderr capturé ET renvoyé vers os.Stderr (daemon journal) :
+	// si la commande échoue, le message d'erreur est inclus dans l'erreur Go
+	// et remonte jusqu'au CLI → l'utilisateur voit ce qui s'est passé.
+	var stderrBuf bytes.Buffer
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+
+	if extraEnv != nil {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 
 	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderrBuf.String())
+		if detail != "" {
+			return fmt.Errorf("docker compose %s: %w\n%s", strings.Join(args, " "), err, detail)
+		}
 		return fmt.Errorf("docker compose %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+// DownAllProfiles arrête TOUS les containers d'un projet Docker Compose,
+// quelle que soit leur appartenance à un profil.
+// Passer allProfiles = union de tous les profils possibles (ex: "novpn,vpn,jellyfin").
+// Utilisé avant un changement de profil pour éviter les conteneurs orphelins.
+func (c *Client) DownAllProfiles(composeDir, allProfiles string) {
+	// On surcharge COMPOSE_PROFILES pour que docker compose voie TOUS les services
+	// et puisse arrêter et supprimer tous les containers du projet.
+	_ = c.runComposeEnv(composeDir,
+		[]string{"COMPOSE_PROFILES=" + allProfiles},
+		"down", "--remove-orphans",
+	)
 }
 
 // ─────────────────────────────────────────────
