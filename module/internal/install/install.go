@@ -663,5 +663,46 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 	i.docker.DownAllProfiles(composeDir, allProfilesStr)
 
 	fmt.Printf("→ Démarrage de la stack '%s'...\n", appID)
-	return i.docker.Up(composeDir)
+	if err := i.docker.Up(composeDir); err != nil {
+		return err
+	}
+
+	// ── 4. Mettre à jour post-install.txt (si présent) ──
+	// setup.sh génère ce fichier AVANT que le wizard VPN tourne,
+	// donc il affiche toujours "VPN : désactivé". On corrige la ligne ici.
+	postInstallPath := filepath.Join(configDir, "post-install.txt")
+	if data, readErr := os.ReadFile(postInstallPath); readErr == nil {
+		vpnProvider := updates["ARR_VPN_PROVIDER"]
+		vpnType := updates["ARR_VPN_TYPE"]
+		var vpnContent string
+		if vpnProvider != "" {
+			vpnContent = "║  🔒 VPN : " + vpnProvider + " / " + vpnType
+		} else {
+			vpnContent = "║  🔓 VPN : désactivé"
+		}
+		patched := false
+		patchedLines := strings.Split(string(data), "\n")
+		for idx, line := range patchedLines {
+			if strings.Contains(line, "VPN :") {
+				// Préserver la longueur totale en octets de la ligne originale.
+				// Format de la boîte : "║  ... <espaces> ║"
+				// On recalcule le padding pour que la ligne ait exactement
+				// la même longueur en octets qu'avant.
+				origLen := len(line)
+				trailChar := "║"
+				spaces := origLen - len(vpnContent) - len(trailChar)
+				if spaces < 1 {
+					spaces = 1
+				}
+				patchedLines[idx] = vpnContent + strings.Repeat(" ", spaces) + trailChar
+				patched = true
+				break
+			}
+		}
+		if patched {
+			_ = os.WriteFile(postInstallPath, []byte(strings.Join(patchedLines, "\n")), 0644)
+		}
+	}
+
+	return nil
 }
