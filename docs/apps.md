@@ -21,7 +21,7 @@ caleope install jellyfin --domain media.monserveur.fr
 ```
 
 ### [Arr Stack](/apps/arr-stack)
-Suite complète de 10 services : Prowlarr, Radarr, Sonarr, Lidarr, Readarr, Bazarr, qBittorrent, SABnzbd, Jellyseerr, Jellyfin Vue.
+Suite complète : Prowlarr, Radarr, Sonarr, Lidarr, Readarr, Bazarr, qBittorrent, SABnzbd, Jellyseerr, Jellyfin Vue — avec Jellyfin et VPN optionnels configurés par wizard à l'installation.
 ```bash
 caleope install arr-stack --domain media.monserveur.fr
 # Sur NAS :

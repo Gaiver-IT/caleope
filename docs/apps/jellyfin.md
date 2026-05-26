@@ -19,14 +19,11 @@ Jellyfin ne génère pas d'identifiants à l'installation — un wizard de premi
 
 ## Première configuration
 
-1. Ouvre `http://media.monserveur.fr` → wizard de démarrage
+1. Ouvre `https://media.monserveur.fr` → wizard de démarrage
 2. Crée ton compte administrateur
-3. Ajoute tes bibliothèques médias :
-   - **Films** → `/data/media/movies` (si utilisé avec arr-stack)
-   - **Séries** → `/data/media/tv`
-   - **Musique** → `/data/media/music`
+3. Ajoute tes bibliothèques médias (si Jellyfin standalone)
 
-> Si tu utilises l'arr-stack, les médias sont dans `app-data/arr-stack/data/media/`.
+> **Avec l'arr-stack** : pas besoin de configurer manuellement. Le bootstrap de l'arr-stack ajoute automatiquement les bibliothèques Films, Séries et Musique — que Jellyfin soit inclus dans la stack ou installé séparément.
 
 ## Intégrations
 
