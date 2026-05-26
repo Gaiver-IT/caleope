@@ -19,16 +19,17 @@ import "time"
 // Les tags `json:"..."` indiquent comment le champ s'appelle dans le JSON.
 // Ex: "id" dans le JSON → champ Id dans Go.
 type AppManifest struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Category     string            `json:"category"`
-	Channel      string            `json:"channel"`       // stable, latest, nightly
-	Repository   string            `json:"repository"`    // official, community, untrusted
-	Capabilities AppCapabilities   `json:"capabilities"`
-	Network      AppNetwork        `json:"network"`
-	Ports        []AppPort         `json:"ports"`
-	Volumes      []AppVolume       `json:"volumes"`
-	Backup       AppBackup         `json:"backup"`
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	Category      string          `json:"category"`
+	Channel       string          `json:"channel"`        // stable, latest, nightly
+	Repository    string          `json:"repository"`     // official, community, untrusted
+	Capabilities  AppCapabilities `json:"capabilities"`
+	Network       AppNetwork      `json:"network"`
+	Ports         []AppPort       `json:"ports"`
+	Volumes       []AppVolume     `json:"volumes"`
+	Backup        AppBackup       `json:"backup"`
+	UseBaseDomain bool            `json:"use_base_domain"` // true = domaine racine (pas appID.domain)
 }
 
 type AppCapabilities struct {

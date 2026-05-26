@@ -371,11 +371,22 @@ func (m *Manager) GetConfig() (*Config, error) {
 }
 
 // AppDomain construit le domaine complet d'une app.
-// Ex: "jellyfin" + "caleope-redberry.guernaham.bzh" → "jellyfin.caleope-redberry.guernaham.bzh"
+// Ex: "jellyfin" + "caleope.guernaham.bzh" → "jellyfin.caleope.guernaham.bzh"
 func (m *Manager) AppDomain(appID string) string {
 	cfg, err := m.GetConfig()
 	if err != nil || cfg.Domain == "" {
 		return ""
 	}
 	return appID + "." + cfg.Domain
+}
+
+// BaseDomain retourne le domaine racine de l'installation (sans préfixe d'app).
+// Utilisé par les apps multi-services comme arr-stack dont chaque service
+// occupe déjà son propre sous-domaine (radarr.domain, prowlarr.domain…).
+func (m *Manager) BaseDomain() string {
+	cfg, err := m.GetConfig()
+	if err != nil || cfg.Domain == "" {
+		return ""
+	}
+	return cfg.Domain
 }

@@ -226,6 +226,21 @@ func (s *Server) handleConnection(conn net.Conn) {
 // HANDLERS — un par commande
 // ─────────────────────────────────────────────
 
+// peekManifest lit rapidement le app.json d'une app sans déclencher l'installation.
+// Retourne nil si l'app est introuvable (pas d'erreur fatale).
+func (s *Server) peekManifest(appID string) *types.AppManifest {
+	repos, err := s.rt.GetRepos()
+	if err != nil {
+		return nil
+	}
+	appDir, _, err := s.st.Resolve(appID, repos)
+	if err != nil {
+		return nil
+	}
+	m, _ := s.st.ReadManifest(appDir)
+	return m
+}
+
 func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	appID, ok := args["app"]
 	if !ok || appID == "" {
@@ -234,10 +249,16 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 
 	// Résoudre le domaine :
 	// 1. Si l'utilisateur a fourni --domain → on l'utilise tel quel
-	// 2. Sinon → on construit <appID>.<domaine_base> depuis caleope.conf
+	// 2. Si le manifest indique use_base_domain → domaine racine (pas appID.domain)
+	//    ex: arr-stack → caleope.guernaham.bzh (et non arr-stack.caleope.guernaham.bzh)
+	// 3. Sinon → <appID>.<domaine_base> depuis caleope.conf
 	domain := args["domain"]
 	if domain == "" {
-		domain = s.rt.AppDomain(appID)
+		if m := s.peekManifest(appID); m != nil && m.UseBaseDomain {
+			domain = s.rt.BaseDomain()
+		} else {
+			domain = s.rt.AppDomain(appID)
+		}
 	}
 
 	opts := install.InstallOptions{
