@@ -149,6 +149,27 @@ func cmdInstall(args []string) {
 			fmt.Println(notes)
 		}
 	}
+
+	// Apps avec wizard post-install interactif
+	// (le daemon n'a pas de terminal → on lance le wizard ici, dans le CLI)
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		switch args[0] {
+		case "arr-stack":
+			fmt.Println()
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println("  La stack est en cours de démarrage.")
+			fmt.Println("  Voulez-vous configurer le VPN maintenant ?")
+			fmt.Println("  (vous pouvez aussi le faire plus tard : caleope configure arr-stack)")
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			r := bufio.NewReader(os.Stdin)
+			fmt.Print("  Configurer le VPN ? [o/N] : ")
+			line, _ := r.ReadString('\n')
+			line = strings.TrimSpace(strings.ToLower(line))
+			if line == "o" || line == "oui" || line == "y" || line == "yes" {
+				cmdConfigureArrStack()
+			}
+		}
+	}
 }
 
 // ─────────────────────────────────────────────
