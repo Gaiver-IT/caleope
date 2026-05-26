@@ -423,7 +423,14 @@ func (s *Server) handleConfigure(args map[string]string) (interface{}, error) {
 		return nil, err
 	}
 
-	return map[string]string{"message": fmt.Sprintf("'%s' reconfiguré et redémarré", appID)}, nil
+	// Retourner les notes post-install mises à jour (setup.sh les génère à l'install,
+	// Reconfigure les patche — on les inclut ici pour que le CLI puisse les afficher).
+	result := map[string]string{"message": fmt.Sprintf("'%s' reconfiguré et redémarré", appID)}
+	notesPath := filepath.Join(s.baseDir, "app-config", appID, "post-install.txt")
+	if notes, readErr := os.ReadFile(notesPath); readErr == nil {
+		result["notes"] = string(notes)
+	}
+	return result, nil
 }
 
 func (s *Server) handleBackup(args map[string]string) (interface{}, error) {
@@ -841,6 +848,16 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	_ = os.WriteFile(confPath, []byte(newConf), 0644)
 
 	fmt.Printf("✅ Caleope mis à jour vers %s\n", latest)
+
+	// Synchroniser les dépôts du store en même temps que le binaire,
+	// pour que les nouvelles définitions d'apps soient disponibles immédiatement.
+	fmt.Println("→ Synchronisation des dépôts...")
+	if err := s.handleUpdate(nil); err != nil {
+		fmt.Printf("⚠️  Sync store partiel : %v\n", err)
+	} else {
+		fmt.Println("✅ Dépôts synchronisés")
+	}
+
 	fmt.Println("→ Redémarrage du daemon dans 2 secondes...")
 
 	// Redémarrer le daemon via systemd (en arrière-plan)

@@ -168,7 +168,10 @@ func cmdInstall(args []string) {
 			line, _ := r.ReadString('\n')
 			line = strings.TrimSpace(strings.ToLower(line))
 			if line == "o" || line == "oui" || line == "y" || line == "yes" {
-				cmdConfigureArrStack()
+				// Le wizard retourne les notes mises à jour (post VPN patch)
+				if updated := cmdConfigureArrStack(); updated != "" {
+					postInstallNotes = updated
+				}
 			}
 		}
 	}
@@ -188,9 +191,12 @@ func cmdConfigure(args []string) {
 		die("Usage: caleope configure <app>\n  Ex:    caleope configure arr-stack")
 	}
 
+
 	switch args[0] {
 	case "arr-stack":
-		cmdConfigureArrStack()
+		if notes := cmdConfigureArrStack(); notes != "" {
+			fmt.Println(notes)
+		}
 	default:
 		die(fmt.Sprintf("❌ configure: pas de wizard disponible pour '%s'\n   Apps supportées: arr-stack", args[0]))
 	}
@@ -198,7 +204,8 @@ func cmdConfigure(args []string) {
 
 // cmdConfigureArrStack — wizard interactif pour reconfigurer le VPN de arr-stack.
 // S'exécute dans le processus CLI (terminal interactif), puis envoie les updates au daemon.
-func cmdConfigureArrStack() {
+// Retourne les notes post-install mises à jour (depuis la réponse daemon), ou "" si indisponibles.
+func cmdConfigureArrStack() string {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		die("❌ caleope configure requiert un terminal interactif.\n   Pour une config non-interactive, utilisez l'API REST.")
 	}
@@ -342,6 +349,14 @@ func cmdConfigureArrStack() {
 		die("❌ " + resp.Error)
 	}
 	fmt.Println("✅ arr-stack reconfiguré — stack redémarrée")
+
+	// Retourner les notes post-install mises à jour si le daemon les a incluses
+	if m, ok := resp.Data.(map[string]interface{}); ok {
+		if notes, ok := m["notes"].(string); ok && notes != "" {
+			return notes
+		}
+	}
+	return ""
 }
 
 func cmdRemove(args []string) {
