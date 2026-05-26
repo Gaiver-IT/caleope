@@ -312,13 +312,16 @@ func cmdConfigureArrStack() string {
 			switch provider {
 			case "protonvpn":
 				fmt.Println("  → account.proton.me → VPN → Télécharger → WireGuard")
-				fmt.Println("    Sélectionne le serveur (SecureCore inclus)")
-				fmt.Println("    Copie PrivateKey et Address depuis la section [Interface]")
+				fmt.Println("    Sélectionne le serveur, copie PrivateKey + Address depuis [Interface]")
+				fmt.Println("    PublicKey et Endpoint sont inutiles — Gluetun les récupère automatiquement")
+				fmt.Println("    Address : copie la ligne complète (IPv4 ou IPv4+IPv6 séparés par une virgule)")
 			case "mullvad":
 				fmt.Println("  → mullvad.net/account/wireguard-config")
 			}
 			fmt.Println()
 			wgKey = ask("Clé privée WireGuard (PrivateKey)", "")
+			// Accepter IPv4 seul ou IPv4+IPv6 séparés par une virgule
+			// ex: "10.2.0.2/32" ou "10.2.0.2/32, 2a07:b944::2:2/128"
 			wgAddr = ask("Adresse WireGuard (Address, ex: 10.2.0.2/32)", "")
 		}
 
