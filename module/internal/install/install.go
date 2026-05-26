@@ -567,3 +567,68 @@ func (i *Installer) Remove(appID string, keepData bool) error {
 	fmt.Printf("\n✅ %s supprimé\n", appID)
 	return nil
 }
+
+// ─────────────────────────────────────────────
+// RECONFIGURE — mise à jour des secrets + redémarrage
+// ─────────────────────────────────────────────
+
+// Reconfigure met à jour des variables dans secrets.env d'une app installée,
+// reconstruit app.env et redémarre la stack Docker Compose.
+// updates = map de clés→nouvelles valeurs à écrire dans secrets.env.
+func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
+	configDir := filepath.Join(i.baseDir, "app-config", appID)
+	secretsPath := filepath.Join(configDir, "secrets.env")
+	composeDir := filepath.Join(i.baseDir, "apps-installed", appID)
+
+	// ── 1. Mettre à jour secrets.env ──
+	raw, err := os.ReadFile(secretsPath)
+	if err != nil {
+		return fmt.Errorf("secrets.env introuvable pour '%s': %w", appID, err)
+	}
+
+	lines := strings.Split(string(raw), "\n")
+	touched := make(map[string]bool)
+	for idx, line := range lines {
+		eqPos := strings.IndexByte(line, '=')
+		if eqPos <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eqPos])
+		if newVal, ok := updates[key]; ok {
+			lines[idx] = key + "=" + newVal
+			touched[key] = true
+		}
+	}
+	// Ajouter les nouvelles clés absentes
+	for k, v := range updates {
+		if !touched[k] {
+			lines = append(lines, k+"="+v)
+		}
+	}
+	newSecrets := strings.Join(lines, "\n")
+	if err := os.WriteFile(secretsPath, []byte(newSecrets), 0600); err != nil {
+		return fmt.Errorf("écriture secrets.env: %w", err)
+	}
+
+	// ── 2. Reconstruire app.env ──
+	// Garder le bloc CALEOPE_* généré à l'installation + remplacer le reste par le nouveau secrets.env
+	envPath := filepath.Join(composeDir, "app.env")
+	envRaw, err := os.ReadFile(envPath)
+	if err != nil {
+		return fmt.Errorf("app.env introuvable: %w", err)
+	}
+	var header strings.Builder
+	for _, line := range strings.Split(string(envRaw), "\n") {
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "CALEOPE_") {
+			header.WriteString(line + "\n")
+		}
+	}
+	envContent := header.String() + "\n" + newSecrets
+	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
+		return fmt.Errorf("écriture app.env: %w", err)
+	}
+
+	// ── 3. Redémarrer la stack ──
+	fmt.Printf("→ Redémarrage de la stack '%s'...\n", appID)
+	return i.docker.Up(composeDir)
+}

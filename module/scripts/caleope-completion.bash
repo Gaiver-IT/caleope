@@ -29,7 +29,7 @@ _caleope_complete() {
         prev="${COMP_WORDS[COMP_CWORD-1]}"
     }
 
-    local commands="install remove list logs restart stop start backup restore update upgrade search status ping"
+    local commands="install configure remove list info logs restart stop start backup restore backups update upgrade search events location top ping token version help"
 
     # Flags globaux
     local global_flags="--debug --help"
@@ -95,7 +95,7 @@ _caleope_complete() {
             fi
             ;;
 
-        remove|logs|restart|stop|start|backup)
+        configure|remove|logs|restart|stop|start|backup|info|backups)
             if [[ "${cur}" == --* ]]; then
                 case "${cmd}" in
                     remove) COMPREPLY=($(compgen -W "${remove_flags} ${global_flags}" -- "${cur}")) ;;
@@ -130,9 +130,17 @@ _caleope_complete() {
             COMPREPLY=()
             ;;
 
-        update|upgrade|list|status|ping)
+        update|upgrade|list|ping|token|version|events|top)
             if [[ "${cur}" == --* ]]; then
                 COMPREPLY=($(compgen -W "${global_flags}" -- "${cur}"))
+            fi
+            ;;
+
+        location)
+            local location_cmds="add remove mount unmount list storage"
+            local loc_word="${COMP_WORDS[2]:-}"
+            if [[ -z "${loc_word}" || "${cur}" == "${loc_word}" ]]; then
+                COMPREPLY=($(compgen -W "${location_cmds}" -- "${cur}"))
             fi
             ;;
 

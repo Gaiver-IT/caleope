@@ -192,6 +192,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleLocationUnmount(req.Args)
 	case "location-storage":
 		data, err = s.handleLocationStorage(req.Args)
+	case "configure":
+		data, err = s.handleConfigure(req.Args)
 	case "ping":
 		cfg, _ := s.rt.GetConfig()
 		channel := cfg.Channel
@@ -374,6 +376,33 @@ func (s *Server) handleRestart(args map[string]string) error {
 		return err
 	}
 	return s.handleStart(args)
+}
+
+// handleConfigure met à jour les secrets d'une app et redémarre la stack.
+// args contient "app" + les paires clé=valeur à modifier dans secrets.env.
+func (s *Server) handleConfigure(args map[string]string) (interface{}, error) {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+
+	// Retirer "app" de la map : le reste = updates à appliquer
+	updates := make(map[string]string, len(args)-1)
+	for k, v := range args {
+		if k != "app" {
+			updates[k] = v
+		}
+	}
+
+	if len(updates) == 0 {
+		return nil, fmt.Errorf("aucune mise à jour fournie")
+	}
+
+	if err := s.installer.Reconfigure(appID, updates); err != nil {
+		return nil, err
+	}
+
+	return map[string]string{"message": fmt.Sprintf("'%s' reconfiguré et redémarré", appID)}, nil
 }
 
 func (s *Server) handleBackup(args map[string]string) (interface{}, error) {

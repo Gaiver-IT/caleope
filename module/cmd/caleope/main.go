@@ -21,6 +21,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -75,6 +76,8 @@ func main() {
 		cmdStopStart("start", args)
 	case "restart":
 		cmdStopStart("restart", args)
+	case "configure":
+		cmdConfigure(args)
 	case "backup":
 		cmdBackup(args)
 	case "restore":
@@ -146,6 +149,171 @@ func cmdInstall(args []string) {
 			fmt.Println(notes)
 		}
 	}
+}
+
+// ─────────────────────────────────────────────
+// CONFIGURE — wizard interactif par app
+// ─────────────────────────────────────────────
+
+func cmdConfigure(args []string) {
+	if len(args) == 0 {
+		die("Usage: caleope configure <app>\n  Ex:    caleope configure arr-stack")
+	}
+
+	switch args[0] {
+	case "arr-stack":
+		cmdConfigureArrStack()
+	default:
+		die(fmt.Sprintf("❌ configure: pas de wizard disponible pour '%s'\n   Apps supportées: arr-stack", args[0]))
+	}
+}
+
+// cmdConfigureArrStack — wizard interactif pour reconfigurer le VPN de arr-stack.
+// S'exécute dans le processus CLI (terminal interactif), puis envoie les updates au daemon.
+func cmdConfigureArrStack() {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		die("❌ caleope configure requiert un terminal interactif.\n   Pour une config non-interactive, utilisez l'API REST.")
+	}
+
+	r := bufio.NewReader(os.Stdin)
+	ask := func(prompt, defaultVal string) string {
+		if defaultVal != "" {
+			fmt.Printf("  %s [%s] : ", prompt, defaultVal)
+		} else {
+			fmt.Printf("  %s : ", prompt)
+		}
+		line, _ := r.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return defaultVal
+		}
+		return line
+	}
+	askPassword := func(prompt string) string {
+		fmt.Printf("  %s : ", prompt)
+		pwd, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return ""
+		}
+		return string(pwd)
+	}
+
+	fmt.Println()
+	fmt.Println("┌─────────────────────────────────────────────────────────────────┐")
+	fmt.Println("│  🔒 Arr Stack — Reconfiguration VPN                             │")
+	fmt.Println("│                                                                 │")
+	fmt.Println("│  Reconfigure le VPN pour qBittorrent (Gluetun).                │")
+	fmt.Println("│  La stack sera redémarrée automatiquement.                      │")
+	fmt.Println("└─────────────────────────────────────────────────────────────────┘")
+	fmt.Println()
+
+	updates := map[string]string{"app": "arr-stack"}
+
+	// ── Activer/désactiver le VPN ──
+	vpnAnswer := ask("Activer un VPN ? [o/N]", "N")
+	vpnEnabled := vpnAnswer == "o" || vpnAnswer == "oui" || vpnAnswer == "y" || vpnAnswer == "yes"
+
+	if !vpnEnabled {
+		updates["COMPOSE_PROFILES"] = "novpn,jellyfin"
+		updates["ARR_QBT_HOST"] = "qbittorrent"
+		updates["ARR_VPN_PROVIDER"] = ""
+		updates["ARR_VPN_TYPE"] = ""
+		updates["ARR_VPN_WG_PRIVATE_KEY"] = ""
+		updates["ARR_VPN_WG_ADDRESSES"] = ""
+		updates["ARR_VPN_OPENVPN_USER"] = ""
+		updates["ARR_VPN_OPENVPN_PASSWORD"] = ""
+		updates["ARR_VPN_SERVER_COUNTRIES"] = ""
+		fmt.Println("  ✓ VPN désactivé")
+	} else {
+		fmt.Println()
+		fmt.Println("  Fournisseur VPN :")
+		fmt.Println("    1) ProtonVPN  (recommandé)")
+		fmt.Println("    2) Mullvad")
+		fmt.Println("    3) NordVPN")
+		fmt.Println("    4) Private Internet Access (PIA)")
+		fmt.Println("    5) Surfshark")
+		fmt.Println("    6) ExpressVPN")
+		fmt.Println("    7) Autre (compatible Gluetun)")
+
+		providerChoice := ask("Choix [1-7]", "1")
+		var provider string
+		switch providerChoice {
+		case "1":
+			provider = "protonvpn"
+		case "2":
+			provider = "mullvad"
+		case "3":
+			provider = "nordvpn"
+		case "4":
+			provider = "private internet access"
+		case "5":
+			provider = "surfshark"
+		case "6":
+			provider = "expressvpn"
+		case "7":
+			provider = ask("Nom du fournisseur Gluetun (ex: ivpn)", "")
+		default:
+			provider = "protonvpn"
+		}
+
+		fmt.Println()
+		fmt.Println("  Protocole :")
+		fmt.Println("    1) WireGuard  (recommandé — plus rapide)")
+		fmt.Println("    2) OpenVPN    (plus compatible)")
+		protoChoice := ask("Choix [1/2]", "1")
+
+		var vpnType, wgKey, wgAddr, ovpnUser, ovpnPass string
+		if protoChoice == "2" {
+			vpnType = "openvpn"
+			fmt.Println()
+			fmt.Println("  ── Identifiants OpenVPN ──────────────────────────────────────")
+			ovpnUser = ask("Nom d'utilisateur", "")
+			ovpnPass = askPassword("Mot de passe")
+		} else {
+			vpnType = "wireguard"
+			fmt.Println()
+			fmt.Println("  ── Clé WireGuard ─────────────────────────────────────────────")
+			switch provider {
+			case "protonvpn":
+				fmt.Println("  → account.proton.me → VPN → Télécharger → WireGuard")
+				fmt.Println("    Sélectionne le serveur (SecureCore inclus)")
+				fmt.Println("    Copie PrivateKey et Address depuis la section [Interface]")
+			case "mullvad":
+				fmt.Println("  → mullvad.net/account/wireguard-config")
+			}
+			fmt.Println()
+			wgKey = ask("Clé privée WireGuard (PrivateKey)", "")
+			wgAddr = ask("Adresse WireGuard (Address, ex: 10.2.0.2/32)", "")
+		}
+
+		fmt.Println()
+		fmt.Println("  Pays de sortie VPN — nom complet en anglais (ex: Germany, France)")
+		if provider == "protonvpn" {
+			fmt.Println("  → SecureCore IS→DE : entrer 'Germany'  (pays de sortie uniquement)")
+		}
+		country := ask("Pays du serveur VPN (Entrée pour ignorer)", "")
+
+		updates["COMPOSE_PROFILES"] = "vpn,jellyfin"
+		updates["ARR_QBT_HOST"] = "arr-gluetun"
+		updates["ARR_VPN_PROVIDER"] = provider
+		updates["ARR_VPN_TYPE"] = vpnType
+		updates["ARR_VPN_WG_PRIVATE_KEY"] = wgKey
+		updates["ARR_VPN_WG_ADDRESSES"] = wgAddr
+		updates["ARR_VPN_OPENVPN_USER"] = ovpnUser
+		updates["ARR_VPN_OPENVPN_PASSWORD"] = ovpnPass
+		updates["ARR_VPN_SERVER_COUNTRIES"] = country
+
+		fmt.Printf("  ✓ VPN configuré : %s / %s\n", provider, vpnType)
+	}
+
+	fmt.Println()
+	fmt.Println("→ Application de la configuration et redémarrage de la stack...")
+	resp := callDaemon("configure", updates)
+	if !resp.Success {
+		die("❌ " + resp.Error)
+	}
+	fmt.Println("✅ arr-stack reconfiguré — stack redémarrée")
 }
 
 func cmdRemove(args []string) {
@@ -980,6 +1148,9 @@ Commandes:
     --domain <dom>  Domaine (optionnel — auto: <app>.<domaine_base>)
     --channel       Canal: stable (défaut), latest, nightly
     --force         Forcer la réinstallation
+
+  configure <app>   Reconfigurer une application (wizard interactif)
+                    Exemples : caleope configure arr-stack (VPN)
 
   top               Supervision live (refresh 2s, Ctrl+C pour quitter)
     --advanced      Mode avancé : disk, port
