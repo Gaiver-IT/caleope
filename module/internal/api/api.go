@@ -430,10 +430,23 @@ func (s *Server) handleStart(args map[string]string) error {
 }
 
 func (s *Server) handleRestart(args map[string]string) error {
-	if err := s.handleStop(args); err != nil {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return fmt.Errorf("argument 'app' manquant")
+	}
+	app, err := s.rt.GetApp(appID)
+	if err != nil {
 		return err
 	}
-	return s.handleStart(args)
+	// docker compose up -d relit les env_file et recrée les containers si nécessaire.
+	// Contrairement à stop+start qui garde les variables d'env figées en mémoire,
+	// up -d applique les changements de secrets.env sans avoir à réinstaller l'app.
+	if err := s.dc.Up(app.ComposeDir); err != nil {
+		return err
+	}
+	app.Status = types.StatusRunning
+	_ = s.emitter.AppStarted(appID)
+	return s.rt.SaveApp(app)
 }
 
 // handleConfigure met à jour les secrets d'une app et redémarre la stack.
