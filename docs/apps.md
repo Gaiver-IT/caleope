@@ -51,6 +51,17 @@ caleope install prometheus-grafana --domain metrics.monserveur.fr
 
 ---
 
+## Communication
+
+### [Fluxer-Discord Bridge](/apps/fluxer-discord-bridge)
+Bot passerelle de messages bidirectionnelle entre Discord et Fluxer.
+```bash
+caleope install fluxer-discord-bridge
+# → demande interactivement les tokens Discord et Fluxer
+```
+
+---
+
 ## Documentation
 
 ### [Wiki.js](/apps/wikijs)
