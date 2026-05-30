@@ -21,10 +21,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -119,6 +121,24 @@ func cmdInstall(args []string) {
 		}
 	}
 
+	// Récupérer les params interactifs définis dans params.json de l'app.
+	// Si l'app n'en a pas, fetchStoreParams retourne nil et on passe directement à l'install.
+	paramDefs := fetchStoreParams(args[0])
+	if len(paramDefs) > 0 {
+		fmt.Printf("\n⚙️  Configuration de '%s'\n", args[0])
+		fmt.Printf("   (les champs marqués * sont obligatoires)\n\n")
+		for _, p := range paramDefs {
+			val := promptParam(p)
+			// Boucle jusqu'à saisie valide pour les champs requis
+			for p.Required && val == "" {
+				fmt.Printf("  ⚠  Ce champ est requis.\n")
+				val = promptParam(p)
+			}
+			apiArgs["param_"+p.ID] = val
+		}
+		fmt.Println()
+	}
+
 	fmt.Printf("📦 Installation de '%s'...\n", args[0])
 	resp := callDaemon("install", apiArgs)
 
@@ -131,6 +151,74 @@ func cmdInstall(args []string) {
 			fmt.Println(notes)
 		}
 	}
+}
+
+// fetchStoreParams interroge le daemon pour obtenir les params interactifs d'une app.
+// Retourne nil si l'app n'a pas de params.json ou en cas d'erreur.
+func fetchStoreParams(appID string) []types.ParamDef {
+	resp := callDaemon("store-params", map[string]string{"app": appID})
+	if !resp.Success || resp.Data == nil {
+		return nil
+	}
+	// resp.Data est interface{} après décodage JSON — re-sérialiser pour typer correctement
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		return nil
+	}
+	var params []types.ParamDef
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return nil
+	}
+	return params
+}
+
+// promptParam affiche un prompt interactif pour un param et retourne la valeur saisie.
+// - Type "secret" : masque la saisie (stty -echo)
+// - Valeur vide + default non vide → retourne le default
+func promptParam(p types.ParamDef) string {
+	// Ouvrir /dev/tty pour garantir l'interactivité même si stdin est redirigé
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		tty = os.Stdin // fallback
+	} else {
+		defer tty.Close()
+	}
+
+	// Description en gris (optionnelle)
+	if p.Description != "" {
+		fmt.Fprintf(tty, "  \033[2m%s\033[0m\n", p.Description)
+	}
+
+	// Ligne de prompt : label + indication required/default
+	switch {
+	case p.Default != "":
+		fmt.Fprintf(tty, "  %s [%s] : ", p.Label, p.Default)
+	case p.Required:
+		fmt.Fprintf(tty, "  %s * : ", p.Label)
+	default:
+		fmt.Fprintf(tty, "  %s : ", p.Label)
+	}
+
+	// Masquer l'écho pour les secrets
+	if p.Type == "secret" {
+		exec.Command("stty", "-F", "/dev/tty", "-echo").Run() //nolint
+	}
+
+	reader := bufio.NewReader(tty)
+	val, _ := reader.ReadString('\n')
+	val = strings.TrimRight(val, "\r\n")
+
+	// Restaurer l'écho et sauter une ligne (le curseur est resté sur la même ligne)
+	if p.Type == "secret" {
+		exec.Command("stty", "-F", "/dev/tty", "echo").Run() //nolint
+		fmt.Fprintln(tty)
+	}
+
+	// Utiliser le default si l'utilisateur a laissé vide
+	if val == "" && p.Default != "" {
+		return p.Default
+	}
+	return val
 }
 
 func cmdRemove(args []string) {

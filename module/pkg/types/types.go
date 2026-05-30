@@ -61,6 +61,22 @@ type AppBackup struct {
 }
 
 // ─────────────────────────────────────────────
+// PARAMS — paramètres demandés à l'utilisateur lors de l'install
+// Définis dans params.json à la racine de l'app dans le store
+// ─────────────────────────────────────────────
+
+// ParamDef décrit un paramètre interactif demandé lors de l'installation.
+// Le champ ID (en majuscules) devient la variable CALEOPE_PARAM_<ID> dans setup.sh.
+type ParamDef struct {
+	ID          string `json:"id"`          // nom de la variable (→ CALEOPE_PARAM_<ID>)
+	Label       string `json:"label"`       // texte affiché à l'utilisateur
+	Description string `json:"description"` // aide contextuelle (affiché en gris sous le label)
+	Type        string `json:"type"`        // "string", "secret" (masqué), "path"
+	Required    bool   `json:"required"`    // true = obligatoire, boucle jusqu'à saisie valide
+	Default     string `json:"default"`     // valeur par défaut si l'utilisateur laisse vide
+}
+
+// ─────────────────────────────────────────────
 // BACKUP — manifest d'une sauvegarde
 // Stocké dans backups/<app>/<timestamp>/manifest.json
 // ─────────────────────────────────────────────

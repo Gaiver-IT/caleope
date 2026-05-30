@@ -94,6 +94,24 @@ func (s *Store) ReadManifest(appDir string) (*types.AppManifest, error) {
 	return &manifest, nil
 }
 
+// ReadParams lit et parse le params.json d'une application.
+// Retourne nil sans erreur si le fichier n'existe pas (l'app n'a pas de params).
+func (s *Store) ReadParams(appDir string) ([]types.ParamDef, error) {
+	paramsPath := filepath.Join(appDir, "params.json")
+	data, err := os.ReadFile(paramsPath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("params.json illisible: %w", err)
+	}
+	var params []types.ParamDef
+	if err := json.Unmarshal(data, &params); err != nil {
+		return nil, fmt.Errorf("params.json invalide: %w", err)
+	}
+	return params, nil
+}
+
 // ─────────────────────────────────────────────
 // SYNCHRONISATION GIT
 // ─────────────────────────────────────────────

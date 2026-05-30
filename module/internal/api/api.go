@@ -150,6 +150,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 	switch req.Command {
 	case "install":
 		data, err = s.handleInstall(req.Args)
+	case "store-params":
+		data, err = s.handleStoreParams(req.Args)
 	case "remove":
 		err = s.handleRemove(req.Args)
 	case "list":
@@ -261,6 +263,14 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 		}
 	}
 
+	// Extraire les paramètres interactifs transmis par le CLI sous la forme param_KEY=VALUE
+	params := map[string]string{}
+	for k, v := range args {
+		if strings.HasPrefix(k, "param_") {
+			params[strings.TrimPrefix(k, "param_")] = v
+		}
+	}
+
 	opts := install.InstallOptions{
 		AppID:  appID,
 		Domain: domain,
@@ -270,6 +280,8 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 			}
 			return "stable"
 		}(),
+		Params: params,
+		Force:  args["force"] == "true",
 	}
 
 	// Stockage NAS : résoudre le chemin de données avant l'installation
@@ -290,6 +302,31 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	}
 
 	return nil, nil
+}
+
+// handleStoreParams retourne la liste des params interactifs d'une app (params.json).
+// Retourne un tableau vide si l'app n'a pas de params.json.
+func (s *Server) handleStoreParams(args map[string]string) (interface{}, error) {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	repos, err := s.rt.GetRepos()
+	if err != nil {
+		return nil, err
+	}
+	appDir, _, err := s.st.Resolve(appID, repos)
+	if err != nil {
+		return nil, err
+	}
+	params, err := s.st.ReadParams(appDir)
+	if err != nil {
+		return nil, err
+	}
+	if params == nil {
+		return []interface{}{}, nil // tableau vide plutôt que null
+	}
+	return params, nil
 }
 
 func (s *Server) handleRemove(args map[string]string) error {
