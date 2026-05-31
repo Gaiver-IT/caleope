@@ -115,6 +115,19 @@ func (i *Installer) Install(opts InstallOptions) error {
 		if _, err := i.rt.GetApp(opts.AppID); err == nil {
 			return fmt.Errorf("'%s' est déjà installée (utilisez --force pour réinstaller)", opts.AppID)
 		}
+	} else {
+		// Réinstallation forcée : arrêter et supprimer les containers existants
+		// avant de recommencer, pour éviter les conflits de noms de containers.
+		fmt.Println("  [*] Arrêt de la stack existante (--force)...")
+		existingComposeDir := filepath.Join(i.baseDir, "apps-installed", opts.AppID)
+		if _, statErr := os.Stat(existingComposeDir); statErr == nil {
+			// compose.yml présent → down propre via Docker Compose
+			i.docker.DownAllProfiles(existingComposeDir, "vpn,novpn,jellyfin")
+		}
+		// Fallback : supprimer de force tous les containers du projet par label
+		// (couvre le cas où compose.yml est absent après un rollback précédent)
+		i.docker.ForceRemoveProjectContainers(opts.AppID)
+		fmt.Println("  ✓ Stack arrêtée")
 	}
 
 	// Marquer l'app comme "en cours d'installation" dans le runtime
@@ -150,13 +163,10 @@ func (i *Installer) Install(opts InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	if len(manifest.Ports) > 0 {
-		fmt.Printf("         ✓ Port %d → container:%d\n", hostPort, manifest.Ports[0].Container)
-	}
-	// Mettre à jour les ports dans le manifest pour le compose
-	for j := range manifest.Ports {
-		if manifest.Ports[j].Dynamic {
-			manifest.Ports[j].Host = hostPort
+	// Afficher chaque port alloué (allocatePorts met déjà à jour manifest.Ports[j].Host)
+	for _, port := range manifest.Ports {
+		if port.Dynamic && port.Host > 0 {
+			fmt.Printf("         ✓ Port %d → container:%d (%s)\n", port.Host, port.Container, port.Name)
 		}
 	}
 
@@ -195,6 +205,27 @@ func (i *Installer) Install(opts InstallOptions) error {
 	fmt.Println("  [10/12] Vérification du démarrage...")
 	if err := i.waitForStart(ctx, composeDir); err != nil {
 		return err
+	}
+
+	// ── Étape 10.5 : Bootstrap post-démarrage ──
+	// Si setup.sh a écrit un fichier .bootstrap_service dans app-config/<app>/,
+	// on exécute ce service one-shot (docker compose run --rm) avant d'afficher
+	// les notes post-install. Cela garantit que les connexions inter-services
+	// (Prowlarr→Radarr, Jellyfin wizard, etc.) sont prêtes quand l'utilisateur
+	// voit ses identifiants.
+	configDir := filepath.Join(i.baseDir, "app-config", opts.AppID)
+	bsServicePath := filepath.Join(configDir, ".bootstrap_service")
+	if bsData, bsErr := os.ReadFile(bsServicePath); bsErr == nil {
+		bsService := strings.TrimSpace(string(bsData))
+		if bsService != "" {
+			fmt.Printf("  [*] Bootstrap inter-services (%s)...\n", bsService)
+			if runErr := i.docker.RunOneOff(composeDir, bsService); runErr != nil {
+				// Non-fatal : l'utilisateur peut relancer via caleope configure
+				fmt.Printf("  ⚠ Bootstrap incomplet: %v\n", runErr)
+			} else {
+				fmt.Println("  ✓ Bootstrap terminé — connexions inter-services configurées")
+			}
+		}
 	}
 
 	// ── Étape 11 : Enregistrement runtime ──
@@ -280,14 +311,19 @@ func (i *Installer) checkSecurity(manifest *types.AppManifest) error {
 }
 
 // allocatePorts alloue les ports dynamiques nécessaires à l'application.
+// Chaque port dynamique reçoit une valeur indépendante (stockée sous "appID-portName"
+// dans ports.json) et le champ Host de manifest.Ports[j] est mis à jour directement.
+// Retourne le premier port alloué (pour affichage/rollback).
 func (i *Installer) allocatePorts(manifest *types.AppManifest) (int, error) {
 	var firstPort int
-	for _, port := range manifest.Ports {
-		if port.Dynamic {
-			allocated, err := i.rt.AllocatePort(manifest.ID+"-"+port.Name, 8000, 9999)
+	for j := range manifest.Ports {
+		if manifest.Ports[j].Dynamic {
+			key := manifest.ID + "-" + manifest.Ports[j].Name
+			allocated, err := i.rt.AllocatePort(key, 8000, 9999)
 			if err != nil {
-				return 0, err
+				return firstPort, err
 			}
+			manifest.Ports[j].Host = allocated // chaque port a sa propre valeur
 			if firstPort == 0 {
 				firstPort = allocated
 			}
@@ -368,6 +404,14 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 		"CALEOPE_DOMAIN="+opts.Domain,
 		"CALEOPE_APP_DATA_DIR="+appDataDir,
 	)
+	// Exposer les ports alloués (statiques et dynamiques) sous CALEOPE_PORT_<NOM>=<valeur>
+	// afin que setup.sh puisse les écrire dans secrets.env (ex: CALEOPE_PORT_ICECAST=8743).
+	for _, port := range manifest.Ports {
+		if port.Host > 0 {
+			env = append(env, fmt.Sprintf("CALEOPE_PORT_%s=%d",
+				strings.ToUpper(port.Name), port.Host))
+		}
+	}
 	for k, v := range opts.Params {
 		env = append(env, "CALEOPE_PARAM_"+strings.ToUpper(k)+"="+v)
 	}
@@ -512,7 +556,7 @@ func (i *Installer) rollback(appID, composeDir string, hostPort int) {
 	}
 
 	fmt.Println("  → Libération du port...")
-	_ = i.rt.ReleasePort(appID)
+	_ = i.rt.ReleaseAllPorts(appID)
 
 	fmt.Println("  → Nettoyage du runtime...")
 	_ = i.rt.RemoveApp(appID)
@@ -560,7 +604,7 @@ func (i *Installer) Remove(appID string, keepData bool) error {
 
 	// Libérer les ressources
 	fmt.Println("  [4/4] Libération des ressources...")
-	_ = i.rt.ReleasePort(appID)
+	_ = i.rt.ReleaseAllPorts(appID)
 	_ = i.rt.RemoveApp(appID)
 	_ = i.emitter.AppRemoved(appID)
 
@@ -628,6 +672,29 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 		return fmt.Errorf("écriture app.env: %w", err)
 	}
 
+	// ── 2.5. Patcher bootstrap.sh si ARR_QBT_HOST change ──
+	// Quand le VPN est activé/désactivé, l'hôte qBittorrent change
+	// (qbittorrent ↔ arr-gluetun). bootstrap.sh est ré-exécuté au redémarrage
+	// → on met à jour bootstrap.sh avec le nouvel hôte avant restart.
+	if newHost, ok := updates["ARR_QBT_HOST"]; ok && newHost != "" {
+		bootstrapPath := filepath.Join(configDir, "bootstrap.sh")
+		if bsData, err := os.ReadFile(bootstrapPath); err == nil {
+			bsStr := string(bsData)
+			for _, oldHost := range []string{"qbittorrent", "arr-gluetun"} {
+				if oldHost != newHost {
+					bsStr = strings.ReplaceAll(bsStr,
+						`"value":"`+oldHost+`"`,
+						`"value":"`+newHost+`"`)
+					bsStr = strings.ReplaceAll(bsStr,
+						`:-`+oldHost+`}`,
+						`:-`+newHost+`}`)
+				}
+			}
+			_ = os.WriteFile(bootstrapPath, []byte(bsStr), 0755)
+			fmt.Printf("→ bootstrap.sh mis à jour (ARR_QBT_HOST=%s)\n", newHost)
+		}
+	}
+
 	// ── 3. Redémarrer la stack ──
 	// Avant de redémarrer, on collecte l'union des profils ancien+nouveau
 	// et on force un down avec tous ces profils activés.
@@ -661,6 +728,8 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 
 	fmt.Printf("→ Arrêt propre de la stack '%s' (profils: %s)...\n", appID, allProfilesStr)
 	i.docker.DownAllProfiles(composeDir, allProfilesStr)
+	// Fallback : supprimer les containers orphelins par label (container_name conflit)
+	i.docker.ForceRemoveProjectContainers(appID)
 
 	fmt.Printf("→ Démarrage de la stack '%s'...\n", appID)
 	if err := i.docker.Up(composeDir); err != nil {

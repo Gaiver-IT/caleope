@@ -264,6 +264,27 @@ func (m *Manager) ReleasePort(appID string) error {
 	return m.writePorts(ports)
 }
 
+// ReleaseAllPorts libère tous les ports dont la clé est exactement appID
+// ou commence par appID+ "-" (ex: "azuracast-web", "azuracast-sftp", "azuracast-icecast").
+// À utiliser lors du rollback pour les apps avec plusieurs ports dynamiques.
+func (m *Manager) ReleaseAllPorts(appID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ports, err := m.readPorts()
+	if err != nil {
+		return err
+	}
+
+	prefix := appID + "-"
+	for key := range ports {
+		if key == appID || strings.HasPrefix(key, prefix) {
+			delete(ports, key)
+		}
+	}
+	return m.writePorts(ports)
+}
+
 func (m *Manager) readPorts() (map[string]int, error) {
 	data, err := os.ReadFile(m.portsFile())
 	if err != nil {
