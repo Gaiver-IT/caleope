@@ -29,6 +29,12 @@ caleope install arr-stack --domain media.monserveur.fr \
   --param storage_path=/opt/gaiver-it/caleope/mounts/mon-nas/media
 ```
 
+### [AzuraCast](/apps/azuracast)
+Serveur de radio en ligne — streaming Icecast, upload SFTP, interface admin web. Compte admin et première station créés automatiquement.
+```bash
+caleope install azuracast --domain azuracast.monserveur.fr
+```
+
 ---
 
 ## Cloud & Productivité
