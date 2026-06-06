@@ -15,6 +15,7 @@ package install
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,7 @@ type Installer struct {
 	docker  *docker.Client
 	emitter *events.Emitter
 	baseDir string
+	out     io.Writer
 }
 
 func NewInstaller(
@@ -51,7 +53,16 @@ func NewInstaller(
 		docker:  dc,
 		emitter: em,
 		baseDir: baseDir,
+		out:     os.Stdout,
 	}
+}
+
+// WithWriter retourne une copie de l'installeur avec un writer personnalisé.
+// Utilisé pour les installations asynchrones (capture des logs dans une session).
+func (i *Installer) WithWriter(w io.Writer) *Installer {
+	clone := *i
+	clone.out = w
+	return &clone
 }
 
 // InstallOptions contient les paramètres passés par l'utilisateur.
@@ -63,6 +74,7 @@ type InstallOptions struct {
 	Force           bool              // forcer la réinstallation si déjà installé
 	StorageLocation string            // nom de la location NAS pour stocker app-data (vide = local)
 	StorageDataDir  string            // chemin absolu résolu (rempli par l'installeur)
+	Async           bool              // true = pas de stdin interactif, output vers i.out
 }
 
 // ─────────────────────────────────────────────
@@ -421,9 +433,13 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 	cmd := exec.CommandContext(ctx, "bash", setupScript)
 	cmd.Dir = composeDir
 	cmd.Env = env
-	cmd.Stdin = os.Stdin // permet les prompts interactifs dans setup.sh
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if opts.Async {
+		cmd.Stdin = nil // pas de stdin interactif en mode async
+	} else {
+		cmd.Stdin = os.Stdin // permet les prompts interactifs dans setup.sh
+	}
+	cmd.Stdout = i.out
+	cmd.Stderr = i.out
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("setup.sh échoué: %w", err)

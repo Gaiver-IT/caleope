@@ -67,13 +67,27 @@ type AppBackup struct {
 
 // ParamDef décrit un paramètre interactif demandé lors de l'installation.
 // Le champ ID (en majuscules) devient la variable CALEOPE_PARAM_<ID> dans setup.sh.
+// Types supportés : "string", "secret" (masqué), "path", "bool", "select".
 type ParamDef struct {
-	ID          string `json:"id"`          // nom de la variable (→ CALEOPE_PARAM_<ID>)
-	Label       string `json:"label"`       // texte affiché à l'utilisateur
-	Description string `json:"description"` // aide contextuelle (affiché en gris sous le label)
-	Type        string `json:"type"`        // "string", "secret" (masqué), "path"
-	Required    bool   `json:"required"`    // true = obligatoire, boucle jusqu'à saisie valide
-	Default     string `json:"default"`     // valeur par défaut si l'utilisateur laisse vide
+	ID          string   `json:"id"`                    // nom de la variable (→ CALEOPE_PARAM_<ID>)
+	Label       string   `json:"label"`                 // texte affiché à l'utilisateur
+	Description string   `json:"description"`           // aide contextuelle (affiché en gris sous le label)
+	Type        string   `json:"type"`                  // "string", "secret", "path", "bool", "select"
+	Options     []string `json:"options,omitempty"`     // pour type "select" : liste des choix possibles
+	Required    bool     `json:"required"`              // true = obligatoire, boucle jusqu'à saisie valide
+	Default     string   `json:"default"`               // valeur par défaut si l'utilisateur laisse vide
+	When        string   `json:"when,omitempty"`        // condition d'affichage (ex: "VPN_ENABLED=true")
+}
+
+// InstallSessionStatus est retourné par la commande "install-status".
+type InstallSessionStatus struct {
+	SessionID string    `json:"session_id"`
+	AppID     string    `json:"app_id"`
+	Status    string    `json:"status"`          // "running", "done", "error"
+	Lines     []string  `json:"lines"`           // logs accumulés
+	Error     string    `json:"error,omitempty"`
+	Notes     string    `json:"notes,omitempty"` // post-install.txt si done
+	StartAt   time.Time `json:"started_at"`
 }
 
 // ─────────────────────────────────────────────

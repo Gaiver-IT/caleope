@@ -20,11 +20,13 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gaiver-it/caleope/internal/backup"
@@ -42,6 +44,28 @@ import (
 // SOCKET_PATH est le chemin du fichier socket UNIX.
 const SOCKET_PATH = "/run/caleoped.sock"
 
+// installSession capture les logs d'une installation asynchrone.
+type installSession struct {
+	mu      sync.Mutex
+	lines   []string
+	done    bool
+	err     error
+	notes   string
+	appID   string
+	startAt time.Time
+}
+
+// Write implémente io.Writer — chaque écriture ajoute des lignes à la session.
+func (s *installSession) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	text := strings.TrimRight(string(p), "\n")
+	for _, line := range strings.Split(text, "\n") {
+		s.lines = append(s.lines, line)
+	}
+	return len(p), nil
+}
+
 // Server est le serveur API du daemon.
 type Server struct {
 	socketPath string
@@ -55,6 +79,8 @@ type Server struct {
 	net        *network.Manager
 	baseDir    string
 	token      string
+	sessmu     sync.RWMutex
+	sessions   map[string]*installSession
 }
 
 func NewServer(
@@ -81,6 +107,7 @@ func NewServer(
 		net:        net,
 		baseDir:    baseDir,
 		token:      loadOrCreateToken(baseDir),
+		sessions:   make(map[string]*installSession),
 	}
 }
 
@@ -194,6 +221,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleLocationUnmount(req.Args)
 	case "location-storage":
 		data, err = s.handleLocationStorage(req.Args)
+	case "install-status":
+		data, err = s.handleInstallStatus(req.Args)
 	case "configure":
 		data, err = s.handleConfigure(req.Args)
 	case "ping":
@@ -274,6 +303,7 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	opts := install.InstallOptions{
 		AppID:  appID,
 		Domain: domain,
+		Force:  args["force"] == "true",
 		Channel: func() string {
 			if c := args["channel"]; c != "" {
 				return c
@@ -281,13 +311,49 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 			return "stable"
 		}(),
 		Params: params,
-		Force:  args["force"] == "true",
+		Async:  args["async"] == "true",
 	}
 
 	// Stockage NAS : résoudre le chemin de données avant l'installation
 	if storageLocation := args["storage"]; storageLocation != "" {
 		opts.StorageLocation = storageLocation
 		opts.StorageDataDir = s.net.AppDataDir(storageLocation, appID)
+	}
+
+	// Mode asynchrone : lancer l'installation en arrière-plan et retourner immédiatement
+	if opts.Async {
+		sessionID := fmt.Sprintf("%s-%d", appID, time.Now().UnixMilli())
+		session := &installSession{
+			appID:   appID,
+			startAt: time.Now(),
+		}
+		s.sessmu.Lock()
+		s.sessions[sessionID] = session
+		s.sessmu.Unlock()
+
+		multiWriter := io.MultiWriter(os.Stdout, session)
+		installer := s.installer.WithWriter(multiWriter)
+
+		go func() {
+			installErr := installer.Install(opts)
+			session.mu.Lock()
+			defer session.mu.Unlock()
+			session.done = true
+			session.err = installErr
+			// Lire post-install.txt si l'installation a réussi
+			if installErr == nil {
+				notesPath := filepath.Join(s.baseDir, "app-config", appID, "post-install.txt")
+				if notes, readErr := os.ReadFile(notesPath); readErr == nil {
+					session.notes = string(notes)
+				}
+			}
+		}()
+
+		return map[string]string{
+			"session_id": sessionID,
+			"status":     "started",
+			"app":        appID,
+		}, nil
 	}
 
 	if err := s.installer.Install(opts); err != nil {
@@ -302,6 +368,40 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	}
 
 	return nil, nil
+}
+
+func (s *Server) handleInstallStatus(args map[string]string) (interface{}, error) {
+	sessionID := args["session"]
+	if sessionID == "" {
+		return nil, fmt.Errorf("argument 'session' manquant")
+	}
+	s.sessmu.RLock()
+	session, ok := s.sessions[sessionID]
+	s.sessmu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("session '%s' introuvable", sessionID)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	status := "running"
+	errMsg := ""
+	if session.done {
+		if session.err != nil {
+			status = "error"
+			errMsg = session.err.Error()
+		} else {
+			status = "done"
+		}
+	}
+	return types.InstallSessionStatus{
+		SessionID: sessionID,
+		AppID:     session.appID,
+		Status:    status,
+		Lines:     append([]string{}, session.lines...),
+		Error:     errMsg,
+		Notes:     session.notes,
+		StartAt:   session.startAt,
+	}, nil
 }
 
 // handleStoreParams retourne la liste des params interactifs d'une app (params.json).
