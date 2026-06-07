@@ -2,7 +2,7 @@
 title: Guide utilisateur
 description: Référence complète des commandes Caleope
 published: true
-date: 2026-05-23
+date: 2026-06-07
 ---
 
 # Guide utilisateur
@@ -29,11 +29,22 @@ date: 2026-05-23
 caleope install jellyfin
 # Domaine personnalisé :
 caleope install jellyfin --domain media.mon-domaine.fr
-# Données sur NAS :
-caleope install jellyfin --storage mon-nas
+# Données sur NAS (chemin absolu vers le point de montage) :
+caleope install arr-stack --storage /mnt/nas/media
+# Paramètre spécifique à une app :
+caleope install arr-stack --param language=en
+caleope install arr-stack --param vpn_enabled=true --param vpn_provider=protonvpn
 ```
 
-> Si l'application génère des identifiants (Nextcloud, Grafana…), ils sont affichés à la fin de l'installation et sauvegardés dans `/opt/gaiver-it/caleope/app-config/<app>/secrets.env`.
+> Si l'application génère des identifiants (Nextcloud, Grafana, Jellyfin…), ils sont affichés à la fin de l'installation et sauvegardés dans `/opt/gaiver-it/caleope/app-config/<app>/secrets.env`.
+
+### Reconfigurer
+
+Certaines applications supportent la reconfiguration interactive après installation :
+
+```bash
+caleope configure arr-stack    # reconfigurer le VPN (wizard interactif)
+```
 
 ### Lister
 
