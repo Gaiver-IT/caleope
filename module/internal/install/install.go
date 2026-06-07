@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -644,6 +645,37 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 	raw, err := os.ReadFile(secretsPath)
 	if err != nil {
 		return fmt.Errorf("secrets.env introuvable pour '%s': %w", appID, err)
+	}
+
+	// Merger COMPOSE_PROFILES : préserver les profils non-VPN (ex: "jellyfin")
+	// de l'ancien secrets.env, remplacer uniquement le profil VPN (novpn/vpn).
+	// Évite que reconfigure VPN n'active ou ne désactive le profil "jellyfin".
+	if newVPN, ok := updates["COMPOSE_PROFILES"]; ok {
+		vpnOnly := map[string]bool{"vpn": true, "novpn": true}
+		oldProfileStr := ""
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "COMPOSE_PROFILES=") {
+				oldProfileStr = strings.TrimPrefix(line, "COMPOSE_PROFILES=")
+				break
+			}
+		}
+		merged := make(map[string]bool)
+		for _, p := range strings.Split(oldProfileStr, ",") {
+			if p != "" && !vpnOnly[p] {
+				merged[p] = true
+			}
+		}
+		for _, p := range strings.Split(newVPN, ",") {
+			if p != "" {
+				merged[p] = true
+			}
+		}
+		var mergedList []string
+		for p := range merged {
+			mergedList = append(mergedList, p)
+		}
+		sort.Strings(mergedList)
+		updates["COMPOSE_PROFILES"] = strings.Join(mergedList, ",")
 	}
 
 	lines := strings.Split(string(raw), "\n")

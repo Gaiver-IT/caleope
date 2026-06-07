@@ -117,19 +117,25 @@ func cmdInstall(args []string) {
 	}
 
 	// Parser les flags optionnels
-	for i := 1; i < len(args)-1; i++ {
+	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--domain":
-			apiArgs["domain"] = args[i+1]
-			i++
+			if i+1 < len(args) {
+				apiArgs["domain"] = args[i+1]
+				i++
+			}
 		case "--channel":
-			apiArgs["channel"] = args[i+1]
-			i++
+			if i+1 < len(args) {
+				apiArgs["channel"] = args[i+1]
+				i++
+			}
 		case "--force":
 			apiArgs["force"] = "true"
 		case "--storage":
-			apiArgs["storage"] = args[i+1]
-			i++
+			if i+1 < len(args) {
+				apiArgs["storage"] = args[i+1]
+				i++
+			}
 		}
 	}
 
@@ -138,7 +144,74 @@ func cmdInstall(args []string) {
 	} else {
 		fmt.Printf("📦 Installation de '%s'...\n", args[0])
 	}
+
+	// Spinner pendant l'installation — peut durer plusieurs minutes
+	// (téléchargement images + démarrage containers + bootstrap inter-services).
+	// Activé uniquement si stdout est un terminal (pas en pipe/SSH sans TTY).
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	spinDone := make(chan struct{})
+	go func() {
+		if !isTTY {
+			// Pas de terminal : afficher juste des lignes de progression sans \r
+			stages := []string{
+				"Préparation...",
+				"Téléchargement des images...",
+				"Démarrage des containers...",
+				"Initialisation des services...",
+				"Configuration inter-services...",
+			}
+			for si, stage := range stages {
+				select {
+				case <-spinDone:
+					return
+				case <-time.After(time.Duration(si*20) * time.Second):
+					// ne jamais imprimer après done
+					select {
+					case <-spinDone:
+						return
+					default:
+						fmt.Printf("  → %s\n", stage)
+					}
+				}
+			}
+			<-spinDone
+			return
+		}
+		// Mode terminal : spinner animé avec écrasement de ligne
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		stages := []string{
+			"Préparation",
+			"Téléchargement des images",
+			"Démarrage des containers",
+			"Initialisation des services",
+			"Configuration inter-services",
+		}
+		fi, si := 0, 0
+		stageTick := time.NewTicker(20 * time.Second)
+		spinTick := time.NewTicker(100 * time.Millisecond)
+		defer stageTick.Stop()
+		defer spinTick.Stop()
+		for {
+			select {
+			case <-spinDone:
+				fmt.Print("\r\033[K") // effacer la ligne
+				return
+			case <-stageTick.C:
+				if si < len(stages)-1 {
+					si++
+				}
+			case <-spinTick.C:
+				fmt.Printf("\r  %s %s...", frames[fi%len(frames)], stages[si])
+				fi++
+			}
+		}
+	}()
+
 	resp := callDaemon("install", apiArgs)
+	close(spinDone)
+	if isTTY {
+		time.Sleep(60 * time.Millisecond) // laisser le goroutine effacer la ligne
+	}
 
 	if !resp.Success {
 		die("❌ " + resp.Error)
@@ -250,7 +323,7 @@ func cmdConfigureArrStack() string {
 	vpnEnabled := vpnAnswer == "o" || vpnAnswer == "oui" || vpnAnswer == "y" || vpnAnswer == "yes"
 
 	if !vpnEnabled {
-		updates["COMPOSE_PROFILES"] = "novpn,jellyfin"
+		updates["COMPOSE_PROFILES"] = "novpn"
 		updates["ARR_QBT_HOST"] = "qbittorrent"
 		updates["ARR_VPN_PROVIDER"] = ""
 		updates["ARR_VPN_TYPE"] = ""
@@ -332,7 +405,7 @@ func cmdConfigureArrStack() string {
 		}
 		country := ask("Pays du serveur VPN (Entrée pour ignorer)", "")
 
-		updates["COMPOSE_PROFILES"] = "vpn,jellyfin"
+		updates["COMPOSE_PROFILES"] = "vpn"
 		updates["ARR_QBT_HOST"] = "arr-gluetun"
 		updates["ARR_VPN_PROVIDER"] = provider
 		updates["ARR_VPN_TYPE"] = vpnType
