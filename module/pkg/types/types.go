@@ -52,8 +52,9 @@ type AppPort struct {
 }
 
 type AppVolume struct {
-	Source string `json:"source"` // chemin relatif sur l'hôte (ex: app-data/jellyfin)
-	Target string `json:"target"` // chemin dans le container (ex: /config)
+	Source string `json:"source"`          // chemin relatif sur l'hôte (ex: app-data/jellyfin)
+	Target string `json:"target"`          // chemin dans le container (ex: /config)
+	NAS    bool   `json:"nas,omitempty"`   // true = ce volume va sur NAS si --storage est spécifié
 }
 
 type AppBackup struct {

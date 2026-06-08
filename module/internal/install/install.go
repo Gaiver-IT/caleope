@@ -355,16 +355,13 @@ func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string, o
 	}
 
 	// Créer les dossiers de volumes (bind mounts)
-	// Si stockage NAS : app-data/<app> sera un symlink, pas un dossier réel
+	// Les volumes marqués "nas: true" dans app.json auront un symlink vers le NAS ;
+	// les autres sont créés localement normalement.
 	for _, vol := range manifest.Volumes {
-		// Ignorer les volumes sous app-data/<app> si on utilise le NAS
-		// (ils seront créés sur le NAS via symlink)
-		volPath := filepath.Join(i.baseDir, vol.Source)
-		appDataPrefix := filepath.Join(i.baseDir, "app-data", manifest.ID)
-		if opts.StorageLocation != "" && strings.HasPrefix(volPath, appDataPrefix) {
-			continue // sera géré par le symlink NAS
+		if opts.StorageLocation != "" && vol.NAS {
+			continue // sera géré par le symlink NAS ci-dessous
 		}
-		dirs = append(dirs, volPath)
+		dirs = append(dirs, filepath.Join(i.baseDir, vol.Source))
 	}
 
 	for _, dir := range dirs {
@@ -373,25 +370,36 @@ func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string, o
 		}
 	}
 
-	// ── Stockage NAS : créer dossier sur NAS + symlink local ──
+	// ── Stockage NAS : symlink par volume (seulement les volumes NAS=true) ──
+	// Avantage vs symlink app-level : les dossiers config (SQLite) restent locaux,
+	// seul le dossier data (médias, téléchargements) va sur le NAS.
 	if opts.StorageLocation != "" && opts.StorageDataDir != "" {
-		// Créer le dossier sur le NAS
-		if err := os.MkdirAll(opts.StorageDataDir, 0755); err != nil {
-			return fmt.Errorf("impossible de créer le dossier NAS: %w", err)
-		}
-		// Créer le dossier parent local (app-data/) si besoin
-		localParent := filepath.Join(i.baseDir, "app-data")
-		if err := os.MkdirAll(localParent, 0755); err != nil {
+		// S'assurer que le dossier local parent app-data/<app>/ existe (pour accueillir les symlinks)
+		localAppDir := filepath.Join(i.baseDir, "app-data", manifest.ID)
+		if err := os.MkdirAll(localAppDir, 0755); err != nil {
 			return err
 		}
-		// Créer le symlink : app-data/<app> → <nas>/caleope/app-data/<app>
-		localLink := filepath.Join(i.baseDir, "app-data", manifest.ID)
-		// Supprimer le symlink/dossier existant si présent
-		_ = os.Remove(localLink)
-		if err := os.Symlink(opts.StorageDataDir, localLink); err != nil {
-			return fmt.Errorf("impossible de créer le symlink NAS: %w", err)
+		appDataPrefix := filepath.Join("app-data", manifest.ID) + string(filepath.Separator)
+		for _, vol := range manifest.Volumes {
+			if !vol.NAS {
+				continue
+			}
+			// Calculer le chemin relatif du volume dans app-data/<app>/
+			// ex: "app-data/arr-stack/data" → relPath="data"
+			relPath := strings.TrimPrefix(vol.Source, appDataPrefix)
+			nasTarget := filepath.Join(opts.StorageDataDir, relPath)
+			localLink := filepath.Join(i.baseDir, vol.Source)
+
+			if err := os.MkdirAll(nasTarget, 0755); err != nil {
+				return fmt.Errorf("impossible de créer le dossier NAS %s: %w", nasTarget, err)
+			}
+			// Supprimer le symlink/dossier existant si présent
+			_ = os.Remove(localLink)
+			if err := os.Symlink(nasTarget, localLink); err != nil {
+				return fmt.Errorf("impossible de créer le symlink NAS pour %s: %w", vol.Source, err)
+			}
+			fmt.Printf("         ✓ %s → NAS\n", vol.Source)
 		}
-		fmt.Printf("         ✓ Données liées au NAS : %s → %s\n", localLink, opts.StorageDataDir)
 	}
 
 	return nil
@@ -453,8 +461,17 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.AppManifest, opts InstallOptions) error {
 	// ── Générer app.env ──
 	envContent := i.buildEnvFile(manifest, opts)
-	if err := os.WriteFile(filepath.Join(composeDir, "app.env"), []byte(envContent), 0600); err != nil {
+	appEnvPath := filepath.Join(composeDir, "app.env")
+	if err := os.WriteFile(appEnvPath, []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("impossible d'écrire app.env: %w", err)
+	}
+	// Créer .env → app.env : docker compose lit .env pour la substitution YAML (${VAR}).
+	// Sans ce symlink, les variables comme ${ARR_VPN_TYPE} arrivent vides dans le compose.yml.
+	dotEnvPath := filepath.Join(composeDir, ".env")
+	_ = os.Remove(dotEnvPath) // supprimer l'éventuel ancien .env
+	if err := os.Symlink(appEnvPath, dotEnvPath); err != nil {
+		// Fallback : copie si symlink impossible (ex: filesystem ne supporte pas les symlinks)
+		_ = os.WriteFile(dotEnvPath, []byte(envContent), 0600)
 	}
 
 	// ── Copier et traiter le compose template ──

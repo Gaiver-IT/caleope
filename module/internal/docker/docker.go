@@ -37,10 +37,11 @@ func NewClient() *Client {
 // Up lance une stack Docker Compose (docker compose up -d).
 // composeDir = dossier contenant compose.yml et app.env
 func (c *Client) Up(composeDir string) error {
-	// COMPOSE_PROFILES doit être dans l'environnement du processus pour que Docker
-	// Compose v2.23+ l'honore. Passé via --env-file, il n'est utilisé que pour la
-	// substitution de variables YAML — pas pour la sélection de profils.
-	extraEnv := composeProfilesEnv(filepath.Join(composeDir, "app.env"))
+	// Toutes les variables de app.env doivent être dans l'environnement du processus :
+	// - COMPOSE_PROFILES : pour la sélection des profils (Docker Compose v2.23+)
+	// - Autres vars (ARR_VPN_TYPE, etc.) : pour la substitution YAML (${VAR})
+	// Docker Compose lit d'abord le process env, puis .env (symlink → app.env), puis env_file.
+	extraEnv := allAppEnvVars(filepath.Join(composeDir, "app.env"))
 	return c.runComposeEnv(composeDir, extraEnv, "up", "--detach", "--remove-orphans")
 }
 
@@ -103,7 +104,7 @@ func (c *Client) IsRunning(composeDir string) (bool, error) {
 // one-shot post-démarrage (ex: bootstrap de connexions inter-services).
 // Les COMPOSE_PROFILES sont lus depuis app.env pour activer les bons profils.
 func (c *Client) RunOneOff(composeDir, service string) error {
-	extraEnv := composeProfilesEnv(filepath.Join(composeDir, "app.env"))
+	extraEnv := allAppEnvVars(filepath.Join(composeDir, "app.env"))
 	return c.runComposeEnv(composeDir, extraEnv, "run", "--rm", service)
 }
 
@@ -146,11 +147,32 @@ func (c *Client) runComposeEnv(composeDir string, extraEnv []string, args ...str
 	return nil
 }
 
-// composeProfilesEnv lit COMPOSE_PROFILES depuis app.env et retourne une slice
-// d'environnement à passer au processus docker compose.
-// Docker Compose v2.23+ n'honore COMPOSE_PROFILES que depuis l'environnement du
-// processus — pas depuis --env-file (qui ne sert qu'à la substitution YAML).
-// Retourne nil si la variable n'est pas trouvée ou est vide.
+// allAppEnvVars lit toutes les variables de app.env et les retourne comme slice
+// d'environnement pour le processus docker compose.
+// Cela permet à docker compose d'utiliser ces variables pour :
+// - La sélection de profils (COMPOSE_PROFILES)
+// - La substitution YAML (${ARR_VPN_TYPE}, ${ARR_VPN_WG_PRIVATE_KEY}, etc.)
+// Retourne nil si le fichier est introuvable ou vide.
+func allAppEnvVars(appEnvPath string) []string {
+	data, err := os.ReadFile(appEnvPath)
+	if err != nil {
+		return nil
+	}
+	var vars []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "=") {
+			vars = append(vars, line)
+		}
+	}
+	return vars
+}
+
+// composeProfilesEnv est conservé pour compatibilité interne (utilisé dans DownAllProfiles).
+// Préférer allAppEnvVars pour les nouveaux usages.
 func composeProfilesEnv(appEnvPath string) []string {
 	data, err := os.ReadFile(appEnvPath)
 	if err != nil {
