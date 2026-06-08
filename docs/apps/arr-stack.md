@@ -18,7 +18,8 @@ caleope install arr-stack
 # Avec domaine personnalisé
 caleope install arr-stack --domain media.monserveur.fr
 
-# Stockage des médias sur NAS
+# Stockage des médias sur NAS (nom d'emplacement Caleope ou chemin absolu)
+caleope install arr-stack --storage mon-nas
 caleope install arr-stack --storage /mnt/nas/media
 
 # Langue différente (en, de, es, it, pt, nl, pl, ja)
@@ -163,8 +164,9 @@ data/
     └── books/
 ```
 
-Les **configs** restent sur le disque local (`app-data/arr-stack/config/`).
-Si `--storage` est utilisé, seuls les médias et téléchargements vont sur le NAS.
+Les **configs** restent toujours sur le disque local (`app-data/arr-stack/config/`).
+Avec `--storage`, seuls les médias et téléchargements vont sur le NAS —
+`app-data/arr-stack/data/` devient un symlink vers le NAS.
 
 ## Reconfiguration VPN
 
