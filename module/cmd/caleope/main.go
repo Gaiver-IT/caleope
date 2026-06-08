@@ -109,7 +109,7 @@ func main() {
 
 func cmdInstall(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>]")
+		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>] [--param key=value ...]")
 	}
 
 	apiArgs := map[string]string{
@@ -134,6 +134,24 @@ func cmdInstall(args []string) {
 		case "--storage":
 			if i+1 < len(args) {
 				apiArgs["storage"] = args[i+1]
+				i++
+			}
+		case "--language":
+			// Raccourci pratique pour --param language=<code>
+			if i+1 < len(args) {
+				apiArgs["param_language"] = args[i+1]
+				i++
+			}
+		case "--param":
+			// --param key=value  →  transmis au daemon comme param_<key>=<value>
+			// setup.sh les reçoit comme CALEOPE_PARAM_<KEY>=<value>
+			if i+1 < len(args) {
+				kv := args[i+1]
+				if idx := strings.Index(kv, "="); idx > 0 {
+					key := kv[:idx]
+					val := kv[idx+1:]
+					apiArgs["param_"+key] = val
+				}
 				i++
 			}
 		}
