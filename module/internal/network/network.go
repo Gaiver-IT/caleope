@@ -1,6 +1,6 @@
 // internal/network/network.go
 //
-// 🌐 EMPLACEMENTS RÉSEAU — SMB/CIFS et SFTP
+// 🌐 EMPLACEMENTS RÉSEAU — SMB/CIFS, NFS et SFTP
 //
 // Permet de monter des partages réseau et de les rendre disponibles
 // aux apps Caleope (bibliothèques médias, cibles de backup, etc.).
@@ -11,6 +11,7 @@
 //
 // Prérequis système :
 //   - SMB/CIFS : apt install cifs-utils
+//   - NFS      : apt install nfs-common
 //   - SFTP     : apt install sshfs
 
 package network
@@ -216,6 +217,8 @@ func (m *Manager) Mount(name string) error {
 	switch loc.Type {
 	case types.LocationSMB, types.LocationCIFS:
 		mountErr = m.mountSMB(loc, password)
+	case types.LocationNFS:
+		mountErr = m.mountNFS(loc)
 	case types.LocationSFTP:
 		mountErr = m.mountSFTP(loc, password)
 	default:
@@ -276,10 +279,16 @@ func (m *Manager) mountSMB(loc types.NetworkLocation, password string) error {
 	unc := fmt.Sprintf("//%s/%s", loc.Host, strings.TrimPrefix(loc.Share, "/"))
 
 	// Options de montage
+	// - file_mode/dir_mode=0777 : tous les conteneurs Docker peuvent lire/écrire
+	// - nounix : désactive les extensions Unix (incompatibles avec certains NAS)
+	// - nomapposix : désactive le mapping SID→POSIX qui cause des ACL Windows
+	//   héritées bloquant la création de sous-répertoires imbriqués
 	options := []string{
 		"iocharset=utf8",
-		"file_mode=0755",
-		"dir_mode=0755",
+		"file_mode=0777",
+		"dir_mode=0777",
+		"nounix",
+		"nomapposix",
 	}
 	if loc.Username != "" {
 		options = append(options, "username="+loc.Username)
@@ -297,6 +306,42 @@ func (m *Manager) mountSMB(loc types.NetworkLocation, password string) error {
 		"-o", strings.Join(options, ","))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("montage SMB échoué: %s", strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+// ─────────────────────────────────────────────
+// MONTAGE NFS
+// ─────────────────────────────────────────────
+
+func (m *Manager) mountNFS(loc types.NetworkLocation) error {
+	// Vérifier que nfs-common est installé
+	if _, err := exec.LookPath("mount.nfs"); err != nil {
+		return fmt.Errorf("nfs-common non installé — installe-le avec : apt install nfs-common")
+	}
+
+	// Construire le chemin NFS : host:/export/path
+	// loc.Share doit déjà contenir le chemin d'export (ex: /export/nas)
+	export := fmt.Sprintf("%s:%s", loc.Host, "/"+strings.TrimPrefix(loc.Share, "/"))
+
+	// Options de montage NFS
+	// - vers=3 : NFSv3 (compatible avec la majorité des NAS)
+	// - soft   : timeout au lieu de bloquer indéfiniment si le NAS est injoignable
+	// - rw     : lecture/écriture
+	options := []string{
+		"vers=3",
+		"rw",
+		"soft",
+	}
+	if loc.Options != "" {
+		options = append(options, loc.Options)
+	}
+
+	cmd := exec.Command("mount", "-t", "nfs", export, loc.MountPoint,
+		"-o", strings.Join(options, ","))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("montage NFS échoué: %s", strings.TrimSpace(string(out)))
 	}
 
 	return nil

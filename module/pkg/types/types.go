@@ -194,6 +194,7 @@ const (
 	LocationSMB  NetworkLocationType = "smb"
 	LocationCIFS NetworkLocationType = "cifs" // alias smb
 	LocationSFTP NetworkLocationType = "sftp"
+	LocationNFS  NetworkLocationType = "nfs"
 )
 
 // NetworkLocation représente un emplacement réseau monté ou montable.
