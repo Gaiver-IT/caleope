@@ -8,6 +8,8 @@
 // Méta stockée dans : runtime/locations/<name>.json
 // Credentials dans  : runtime/locations/<name>.secret  (chmod 600, root)
 // Point de montage  : /opt/gaiver-it/caleope/mounts/<name>/
+// fstab             : ligne ajoutée au montage, retirée à la suppression
+//                     marquée par "# caleope:<name>" pour identification
 //
 // Prérequis système :
 //   - SMB/CIFS : apt install cifs-utils
@@ -17,6 +19,7 @@
 package network
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -150,9 +153,15 @@ func (m *Manager) Remove(name string) error {
 		}
 	}
 
-	// Supprimer les fichiers
+	// Retirer l'entrée de /etc/fstab
+	if err := m.removeFstabEntry(name); err != nil {
+		fmt.Fprintf(os.Stderr, "avertissement: impossible de nettoyer /etc/fstab: %v\n", err)
+	}
+
+	// Supprimer les fichiers (métadonnées, secret, credentials CIFS)
 	_ = os.Remove(m.locationFile(name))
 	_ = os.Remove(m.secretFile(name))
+	_ = os.Remove(m.credentialsFile(name))
 
 	// Supprimer le point de montage s'il est vide
 	_ = os.Remove(m.MountPoint(name))
@@ -229,6 +238,20 @@ func (m *Manager) Mount(name string) error {
 		return mountErr
 	}
 
+	// Pour SMB : écrire le fichier credentials (utilisé par la ligne fstab)
+	if (loc.Type == types.LocationSMB || loc.Type == types.LocationCIFS) && password != "" {
+		if err := m.writeCIFSCredentials(loc, password); err != nil {
+			// Non bloquant : le montage a réussi, on log juste l'avertissement
+			fmt.Fprintf(os.Stderr, "avertissement: impossible d'écrire le fichier credentials CIFS: %v\n", err)
+		}
+	}
+
+	// Ajouter (ou mettre à jour) l'entrée dans /etc/fstab
+	if err := m.addFstabEntry(loc); err != nil {
+		// Non bloquant : le montage a réussi, on log juste l'avertissement
+		fmt.Fprintf(os.Stderr, "avertissement: impossible de mettre à jour /etc/fstab: %v\n", err)
+	}
+
 	// Mettre à jour l'état
 	loc.Mounted = true
 	return m.saveLocation(loc)
@@ -263,6 +286,124 @@ func (m *Manager) unmountLocked(loc types.NetworkLocation) error {
 
 	loc.Mounted = false
 	return m.saveLocation(loc)
+}
+
+// ─────────────────────────────────────────────
+// GESTION /etc/fstab
+// ─────────────────────────────────────────────
+
+const fstabPath = "/etc/fstab"
+
+// fstabMarker retourne le marqueur de fin de ligne identifiant l'entrée Caleope.
+func fstabMarker(name string) string {
+	return fmt.Sprintf("# caleope:%s", name)
+}
+
+// fstabLine construit la ligne fstab pour un emplacement.
+// Pour SMB : utilise un fichier credentials séparé (pas le mdp en clair).
+// Pour NFS : pas de credentials, auth par IP côté serveur.
+func (m *Manager) fstabLine(loc types.NetworkLocation) string {
+	marker := fstabMarker(loc.Name)
+	switch loc.Type {
+	case types.LocationSMB, types.LocationCIFS:
+		unc := fmt.Sprintf("//%s/%s", loc.Host, strings.TrimPrefix(loc.Share, "/"))
+		opts := "iocharset=utf8,file_mode=0777,dir_mode=0777,nounix,nomapposix,_netdev"
+		// Fichier credentials : username=xxx\npassword=xxx (chmod 600)
+		opts += fmt.Sprintf(",credentials=%s", m.credentialsFile(loc.Name))
+		if loc.Options != "" {
+			opts += "," + loc.Options
+		}
+		return fmt.Sprintf("%s\t%s\tcifs\t%s\t0 0\t%s", unc, loc.MountPoint, opts, marker)
+	case types.LocationNFS:
+		export := fmt.Sprintf("%s:%s", loc.Host, "/"+strings.TrimPrefix(loc.Share, "/"))
+		opts := "vers=3,rw,soft,_netdev"
+		if loc.Options != "" {
+			opts += "," + loc.Options
+		}
+		return fmt.Sprintf("%s\t%s\tnfs\t%s\t0 0\t%s", export, loc.MountPoint, opts, marker)
+	default:
+		// SFTP via sshfs : pas de support fstab standard
+		return ""
+	}
+}
+
+// credentialsFile retourne le chemin du fichier credentials CIFS (format mount.cifs).
+func (m *Manager) credentialsFile(name string) string {
+	return filepath.Join(m.locationsDir(), name+".credentials")
+}
+
+// writeCIFSCredentials crée/met à jour le fichier credentials CIFS (chmod 600).
+func (m *Manager) writeCIFSCredentials(loc types.NetworkLocation, password string) error {
+	var sb strings.Builder
+	if loc.Username != "" {
+		sb.WriteString("username=" + loc.Username + "\n")
+	}
+	if password != "" {
+		sb.WriteString("password=" + password + "\n")
+	}
+	return os.WriteFile(m.credentialsFile(loc.Name), []byte(sb.String()), 0600)
+}
+
+// addFstabEntry ajoute (ou met à jour) l'entrée fstab de l'emplacement.
+// Idempotent : si le marqueur existe déjà, la ligne est remplacée.
+func (m *Manager) addFstabEntry(loc types.NetworkLocation) error {
+	line := m.fstabLine(loc)
+	if line == "" {
+		return nil // type sans support fstab (SFTP)
+	}
+	marker := fstabMarker(loc.Name)
+
+	data, err := os.ReadFile(fstabPath)
+	if err != nil {
+		return fmt.Errorf("lecture fstab: %w", err)
+	}
+
+	var lines []string
+	found := false
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		l := scanner.Text()
+		if strings.Contains(l, marker) {
+			lines = append(lines, line) // remplace
+			found = true
+		} else {
+			lines = append(lines, l)
+		}
+	}
+	if !found {
+		lines = append(lines, line)
+	}
+
+	content := strings.Join(lines, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return os.WriteFile(fstabPath, []byte(content), 0644)
+}
+
+// removeFstabEntry retire l'entrée fstab de l'emplacement (identifiée par le marqueur).
+func (m *Manager) removeFstabEntry(name string) error {
+	marker := fstabMarker(name)
+
+	data, err := os.ReadFile(fstabPath)
+	if err != nil {
+		return fmt.Errorf("lecture fstab: %w", err)
+	}
+
+	var lines []string
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		l := scanner.Text()
+		if !strings.Contains(l, marker) {
+			lines = append(lines, l)
+		}
+	}
+
+	content := strings.Join(lines, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return os.WriteFile(fstabPath, []byte(content), 0644)
 }
 
 // ─────────────────────────────────────────────
