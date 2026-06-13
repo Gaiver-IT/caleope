@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -154,6 +155,44 @@ func cmdInstall(args []string) {
 				}
 				i++
 			}
+		}
+	}
+
+	// Collecter les params interactifs depuis params.json de l'app,
+	// sauf si l'utilisateur en a déjà fourni via --param (mode non-interactif).
+	hasManualParams := false
+	for k := range apiArgs {
+		if strings.HasPrefix(k, "param_") {
+			hasManualParams = true
+			break
+		}
+	}
+	if !hasManualParams {
+		paramDefs := fetchStoreParams(args[0])
+		if len(paramDefs) > 0 {
+			fmt.Printf("\n⚙️  Configuration de '%s'\n", args[0])
+			fmt.Printf("   (les champs marqués * sont obligatoires, Entrée = valeur par défaut)\n\n")
+			collectedParams := map[string]string{}
+			for _, p := range paramDefs {
+				// Respect de la condition when: "PARAM_ID=valeur"
+				if p.When != "" {
+					parts := strings.SplitN(p.When, "=", 2)
+					if len(parts) == 2 {
+						depVal := collectedParams[parts[0]]
+						if depVal != parts[1] {
+							continue
+						}
+					}
+				}
+				val := promptParam(p)
+				for p.Required && val == "" {
+					fmt.Printf("  ⚠  Ce champ est obligatoire.\n")
+					val = promptParam(p)
+				}
+				collectedParams[p.ID] = val
+				apiArgs["param_"+p.ID] = val
+			}
+			fmt.Println()
 		}
 	}
 
@@ -1239,6 +1278,65 @@ func readPassword() (string, error) {
 		return line, nil
 	}
 	return string(pwd), nil
+}
+
+// fetchStoreParams interroge le daemon pour obtenir les params interactifs d'une app.
+// Retourne nil si l'app n'a pas de params.json ou en cas d'erreur.
+func fetchStoreParams(appID string) []types.ParamDef {
+	resp := callDaemon("store-params", map[string]string{"app": appID})
+	if !resp.Success || resp.Data == nil {
+		return nil
+	}
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		return nil
+	}
+	var params []types.ParamDef
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return nil
+	}
+	return params
+}
+
+// promptParam affiche un prompt interactif pour un param et retourne la valeur saisie.
+func promptParam(p types.ParamDef) string {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		tty = os.Stdin
+	} else {
+		defer tty.Close()
+	}
+
+	if p.Description != "" {
+		fmt.Fprintf(tty, "  \033[2m%s\033[0m\n", p.Description)
+	}
+
+	switch {
+	case p.Default != "":
+		fmt.Fprintf(tty, "  %s [%s] : ", p.Label, p.Default)
+	case p.Required:
+		fmt.Fprintf(tty, "  %s * : ", p.Label)
+	default:
+		fmt.Fprintf(tty, "  %s : ", p.Label)
+	}
+
+	if p.Type == "secret" {
+		exec.Command("stty", "-F", "/dev/tty", "-echo").Run() //nolint
+	}
+
+	reader := bufio.NewReader(tty)
+	val, _ := reader.ReadString('\n')
+	val = strings.TrimRight(val, "\r\n")
+
+	if p.Type == "secret" {
+		exec.Command("stty", "-F", "/dev/tty", "echo").Run() //nolint
+		fmt.Fprintln(tty)
+	}
+
+	if val == "" && p.Default != "" {
+		return p.Default
+	}
+	return val
 }
 
 // callDaemon envoie une requête au daemon et retourne la réponse.
