@@ -348,6 +348,12 @@ type Config struct {
 	Email     string // email Let's Encrypt
 	Version   string
 	Channel   string // "stable" ou "alpha"
+	// SMTP global — transmis automatiquement aux apps qui supportent l'email
+	SMTPHost string
+	SMTPPort string
+	SMTPUser string
+	SMTPPass string
+	SMTPFrom string
 }
 
 // GetConfig lit et parse caleope.conf.
@@ -386,6 +392,16 @@ func (m *Manager) GetConfig() (*Config, error) {
 			cfg.Version = val
 		case "CALEOPE_CHANNEL":
 			cfg.Channel = val
+		case "CALEOPE_SMTP_HOST":
+			cfg.SMTPHost = val
+		case "CALEOPE_SMTP_PORT":
+			cfg.SMTPPort = val
+		case "CALEOPE_SMTP_USER":
+			cfg.SMTPUser = val
+		case "CALEOPE_SMTP_PASS":
+			cfg.SMTPPass = val
+		case "CALEOPE_SMTP_FROM":
+			cfg.SMTPFrom = val
 		}
 	}
 	return cfg, nil

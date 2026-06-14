@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
@@ -36,6 +37,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
@@ -241,6 +243,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	case "token":
 		data = map[string]string{"token": s.token}
+	case "secrets-show":
+		data, err = s.handleSecretsShow(req.Args)
+	case "audit-list":
+		data, err = s.handleAuditList(req.Args)
 	default:
 		err = fmt.Errorf("commande inconnue: %s", req.Command)
 	}
@@ -1022,4 +1028,67 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		"to":      latest,
 		"message": fmt.Sprintf("Mis à jour %s → %s, redémarrage en cours...", current, latest),
 	}, nil
+}
+
+// ─────────────────────────────────────────────
+// SECRETS
+// ─────────────────────────────────────────────
+
+// handleSecretsShow déchiffre et retourne les secrets d'une app.
+// args["app"] = identifiant de l'app
+// args["password"] = mot de passe pour déchiffrer (transmis en clair sur le socket local)
+func (s *Server) handleSecretsShow(args map[string]string) (interface{}, error) {
+	appID := args["app"]
+	if appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	password := args["password"]
+	if password == "" {
+		return nil, fmt.Errorf("argument 'password' manquant")
+	}
+
+	configDir := filepath.Join(s.baseDir, "app-config", appID)
+	if _, err := os.Stat(configDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("application '%s' introuvable ou non installée", appID)
+	}
+
+	var content string
+	if secrets.IsSetup(s.baseDir) {
+		dek, err := secrets.UnlockDEK(s.baseDir, password)
+		if err != nil {
+			audit.Log(audit.ActionSecrets, appID, "ERREUR: "+err.Error())
+			return nil, err
+		}
+		var showErr error
+		content, showErr = secrets.ShowSecrets(configDir, dek)
+		if showErr != nil {
+			return nil, showErr
+		}
+	} else {
+		// Chiffrement non configuré → lire secrets.env directement (root-only 0600)
+		raw, err := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+		if err != nil {
+			return nil, fmt.Errorf("aucun secret trouvé pour '%s'", appID)
+		}
+		content = string(raw)
+	}
+
+	audit.Log(audit.ActionSecrets, appID, "OK")
+	return map[string]string{"app": appID, "secrets": content}, nil
+}
+
+// ─────────────────────────────────────────────
+// AUDIT
+// ─────────────────────────────────────────────
+
+func (s *Server) handleAuditList(args map[string]string) (interface{}, error) {
+	n := 100
+	if v := args["limit"]; v != "" {
+		fmt.Sscanf(v, "%d", &n)
+	}
+	lines, err := audit.Read(n)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"lines": lines}, nil
 }

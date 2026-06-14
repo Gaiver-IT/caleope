@@ -32,6 +32,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 )
 
@@ -64,6 +65,22 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("✓ Runtime initialisé")
+
+	// ── Initialisation chiffrement secrets (1er démarrage après install) ──
+	// install.sh écrit le mot de passe dans core/daemon/secrets-init-password
+	// Le daemon lit ce fichier, génère master.enc, puis supprime le fichier.
+	initPassPath := fmt.Sprintf("%s/core/daemon/secrets-init-password", *baseDir)
+	if passBytes, err := os.ReadFile(initPassPath); err == nil {
+		password := string(passBytes)
+		if password != "" {
+			if _, setupErr := secrets.Setup(*baseDir, password); setupErr != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Chiffrement secrets: %v\n", setupErr)
+			} else {
+				fmt.Println("✓ Chiffrement des secrets initialisé (master.enc créé)")
+			}
+		}
+		_ = os.Remove(initPassPath) // supprimer immédiatement après lecture
+	}
 
 	st := store.NewStore(*baseDir)
 	dc := docker.NewClient()
