@@ -22,10 +22,12 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
 	"github.com/gaiver-it/caleope/internal/runtime"
 	"github.com/gaiver-it/caleope/internal/store"
+	"github.com/gaiver-it/caleope/internal/ufw"
 	"github.com/gaiver-it/caleope/pkg/types"
 )
 
@@ -140,7 +142,8 @@ func (i *Installer) Install(opts InstallOptions) error {
 
 	// ── Étape 3 : Vérification sécurité ──
 	fmt.Println("  [3/12] Vérification des permissions...")
-	if err := i.checkSecurity(manifest); err != nil {
+	if err := i.checkSecurity(manifest, repo.Trust); err != nil {
+		audit.Log(audit.ActionInstall, opts.AppID, "DENIED:security_check")
 		return err
 	}
 
@@ -207,9 +210,18 @@ func (i *Installer) Install(opts InstallOptions) error {
 		return err
 	}
 
-	// ── Étape 12 : Événement ──
+	// Ouvrir les ports UFW marqués firewall:true
+	if ufwPorts := manifestToUFWPorts(manifest); len(ufwPorts) > 0 {
+		fmt.Println("         → Ouverture des ports UFW...")
+		for _, e := range ufw.OpenPorts(ufwPorts) {
+			fmt.Printf("         ⚠ %v\n", e)
+		}
+	}
+
+	// ── Étape 12 : Événement + audit ──
 	fmt.Println("  [12/12] Émission de l'événement...")
 	_ = i.emitter.AppInstalled(opts.AppID)
+	audit.Log(audit.ActionInstall, opts.AppID, "OK")
 
 	success = true
 	fmt.Printf("\n✅ %s installé avec succès !\n", manifest.Name)
@@ -252,7 +264,8 @@ func (i *Installer) checkTrust(trust types.TrustLevel, appID string) error {
 }
 
 // checkSecurity vérifie les permissions dangereuses du manifest.
-func (i *Installer) checkSecurity(manifest *types.AppManifest) error {
+// Les apps officielles sont auto-acceptées ; community/untrusted demandent confirmation.
+func (i *Installer) checkSecurity(manifest *types.AppManifest, trust types.TrustLevel) error {
 	caps := manifest.Capabilities
 
 	warnings := []string{}
@@ -263,19 +276,28 @@ func (i *Installer) checkSecurity(manifest *types.AppManifest) error {
 		warnings = append(warnings, "accès au socket Docker (contrôle total de Docker)")
 	}
 
-	if len(warnings) > 0 {
-		fmt.Printf("⚠️  Cette application demande des permissions élevées :\n")
-		for _, w := range warnings {
-			fmt.Printf("   - %s\n", w)
-		}
-		fmt.Print("   Continuer ? [o/N] ")
-		var resp string
-		fmt.Scanln(&resp)
-		if strings.ToLower(resp) != "o" {
-			return fmt.Errorf("installation annulée")
-		}
+	if len(warnings) == 0 {
+		return nil
 	}
 
+	// Apps officielles : auto-acceptées (validées par l'équipe Caleope)
+	if trust == types.TrustOfficial {
+		for _, w := range warnings {
+			fmt.Printf("         ℹ  %s (auto-accepté — dépôt officiel)\n", w)
+		}
+		return nil
+	}
+
+	fmt.Printf("⚠️  Cette application demande des permissions élevées :\n")
+	for _, w := range warnings {
+		fmt.Printf("   - %s\n", w)
+	}
+	fmt.Print("   Continuer ? [o/N] ")
+	var resp string
+	fmt.Scanln(&resp)
+	if strings.ToLower(resp) != "o" {
+		return fmt.Errorf("installation annulée")
+	}
 	return nil
 }
 
@@ -370,6 +392,16 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 	)
 	for k, v := range opts.Params {
 		env = append(env, "CALEOPE_PARAM_"+strings.ToUpper(k)+"="+v)
+	}
+	// Injecter la config SMTP globale si configurée
+	if cfg, err := i.rt.GetConfig(); err == nil && cfg.SMTPHost != "" {
+		env = append(env,
+			"CALEOPE_SMTP_HOST="+cfg.SMTPHost,
+			"CALEOPE_SMTP_PORT="+cfg.SMTPPort,
+			"CALEOPE_SMTP_USER="+cfg.SMTPUser,
+			"CALEOPE_SMTP_PASS="+cfg.SMTPPass,
+			"CALEOPE_SMTP_FROM="+cfg.SMTPFrom,
+		)
 	}
 
 	// exec.CommandContext = comme exec.Command mais avec support d'annulation
@@ -560,9 +592,17 @@ func (i *Installer) Remove(appID string, keepData bool) error {
 
 	// Libérer les ressources
 	fmt.Println("  [4/4] Libération des ressources...")
+	// Fermer les ports UFW des ports marqués firewall:true
+	if ufwPorts := runtimeToUFWPorts(app.Ports); len(ufwPorts) > 0 {
+		fmt.Println("         → Fermeture des ports UFW...")
+		for _, e := range ufw.ClosePorts(ufwPorts) {
+			fmt.Printf("         ⚠ %v\n", e)
+		}
+	}
 	_ = i.rt.ReleasePort(appID)
 	_ = i.rt.RemoveApp(appID)
 	_ = i.emitter.AppRemoved(appID)
+	audit.Log(audit.ActionRemove, appID, "OK")
 
 	fmt.Printf("\n✅ %s supprimé\n", appID)
 	return nil
@@ -705,4 +745,40 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 	}
 
 	return nil
+}
+
+// ─────────────────────────────────────────────
+// UFW HELPERS
+// ─────────────────────────────────────────────
+
+// manifestToUFWPorts convertit les ports du manifest en PortSpec pour ufw.
+func manifestToUFWPorts(manifest *types.AppManifest) []ufw.PortSpec {
+	var specs []ufw.PortSpec
+	for _, p := range manifest.Ports {
+		if p.Firewall && p.Host > 0 {
+			specs = append(specs, ufw.PortSpec{
+				Name:     p.Name,
+				Host:     p.Host,
+				Protocol: p.Protocol,
+				Firewall: true,
+			})
+		}
+	}
+	return specs
+}
+
+// runtimeToUFWPorts convertit les ports runtime (app installée) en PortSpec pour ufw.
+func runtimeToUFWPorts(ports []types.AppPort) []ufw.PortSpec {
+	var specs []ufw.PortSpec
+	for _, p := range ports {
+		if p.Firewall && p.Host > 0 {
+			specs = append(specs, ufw.PortSpec{
+				Name:     p.Name,
+				Host:     p.Host,
+				Protocol: p.Protocol,
+				Firewall: true,
+			})
+		}
+	}
+	return specs
 }

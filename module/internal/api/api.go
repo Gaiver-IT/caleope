@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
@@ -34,6 +35,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
@@ -212,6 +214,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	case "token":
 		data = map[string]string{"token": s.token}
+	case "secrets-show":
+		data, err = s.handleSecretsShow(req.Args)
+	case "audit-list":
+		data, err = s.handleAuditList(req.Args)
 	default:
 		err = fmt.Errorf("commande inconnue: %s", req.Command)
 	}
@@ -922,4 +928,64 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		"to":      latest,
 		"message": fmt.Sprintf("Mis à jour %s → %s, redémarrage en cours...", current, latest),
 	}, nil
+}
+
+// ─────────────────────────────────────────────
+// SECRETS — affichage sécurisé avec mot de passe
+// ─────────────────────────────────────────────
+
+// handleSecretsShow déchiffre et retourne les secrets d'une app.
+// Le mot de passe est demandé à chaque appel (pas de cache de session).
+func (s *Server) handleSecretsShow(args map[string]string) (interface{}, error) {
+	appID := args["app"]
+	if appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	password := args["password"]
+	if password == "" {
+		return nil, fmt.Errorf("argument 'password' manquant")
+	}
+
+	if !secrets.IsSetup(s.baseDir) {
+		// Pas de chiffrement configuré : lire secrets.env directement
+		configDir := filepath.Join(s.baseDir, "app-config", appID)
+		plain, err := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+		if err != nil {
+			return nil, fmt.Errorf("secrets.env introuvable pour '%s'", appID)
+		}
+		audit.Log(audit.ActionSecretsShow, appID, "OK:no-encryption")
+		return map[string]string{"secrets": string(plain), "encrypted": "false"}, nil
+	}
+
+	dek, err := secrets.UnlockDEK(s.baseDir, password)
+	if err != nil {
+		audit.Log(audit.ActionSecretsShow, appID, "DENIED:wrong-password")
+		return nil, fmt.Errorf("mot de passe incorrect")
+	}
+
+	configDir := filepath.Join(s.baseDir, "app-config", appID)
+	plaintext, err := secrets.ShowSecrets(configDir, dek)
+	if err != nil {
+		return nil, fmt.Errorf("déchiffrement secrets '%s': %w", appID, err)
+	}
+
+	audit.Log(audit.ActionSecretsShow, appID, "OK")
+	return map[string]string{"secrets": plaintext, "encrypted": "true"}, nil
+}
+
+// ─────────────────────────────────────────────
+// AUDIT — lecture du journal
+// ─────────────────────────────────────────────
+
+// handleAuditList retourne les dernières lignes du journal d'audit.
+func (s *Server) handleAuditList(args map[string]string) (interface{}, error) {
+	n := 50 // défaut : 50 dernières lignes
+	if nStr, ok := args["n"]; ok && nStr != "" {
+		fmt.Sscanf(nStr, "%d", &n)
+	}
+	lines, err := audit.Read(n)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"lines": lines, "count": len(lines)}, nil
 }

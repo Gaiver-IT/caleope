@@ -22,9 +22,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/gaiver-it/caleope/internal/api"
+	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
@@ -32,6 +35,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 )
 
@@ -64,6 +68,24 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("✓ Runtime initialisé")
+
+	// ── Initialisation du chiffrement des secrets (premier démarrage) ──
+	// install.sh écrit le mot de passe dans core/daemon/secrets-init-password (mode 600).
+	// Le daemon lit ce fichier, initialise le chiffrement, puis le supprime immédiatement.
+	initPasswordFile := filepath.Join(*baseDir, "core", "daemon", "secrets-init-password")
+	if data, err := os.ReadFile(initPasswordFile); err == nil {
+		password := strings.TrimSpace(string(data))
+		_ = os.Remove(initPasswordFile) // supprimer immédiatement
+		if !secrets.IsSetup(*baseDir) && password != "" {
+			if _, err := secrets.Setup(*baseDir, password); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Initialisation chiffrement secrets: %v\n", err)
+			} else {
+				fmt.Println("✓ Chiffrement des secrets initialisé")
+				audit.Log(audit.ActionStartup, "daemon", "secrets-initialized")
+			}
+		}
+	}
+	audit.Log(audit.ActionStartup, "daemon", "started")
 
 	st := store.NewStore(*baseDir)
 	dc := docker.NewClient()

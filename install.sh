@@ -57,6 +57,14 @@ CALEOPE_DOMAIN=""
 CALEOPE_EMAIL=""
 CALEOPE_PROXY_MODE=""   # "npm" = NPM en amont, "traefik" = Traefik gère les certs
 CALEOPE_CHANNEL=""      # "stable" = releases officielles, "alpha" = pré-releases
+# SMTP externe (optionnel — pour les notifications des apps)
+CALEOPE_SMTP_HOST=""
+CALEOPE_SMTP_PORT="587"
+CALEOPE_SMTP_USER=""
+CALEOPE_SMTP_PASS=""
+CALEOPE_SMTP_FROM=""
+# Mot de passe chiffrement secrets (utilisé une seule fois au démarrage du daemon)
+CALEOPE_SECRETS_PASSWORD=""
 
 # Couleurs
 RED='\033[0;31m'
@@ -149,6 +157,44 @@ ask_config() {
             read -rp "  → Email : " CALEOPE_EMAIL </dev/tty
         done
     fi
+
+    # ── SMTP externe (optionnel) ──
+    echo ""
+    echo -e "${BLUE}  Relai SMTP (optionnel)${NC}"
+    echo -e "  ${GRAY}Permet aux apps d'envoyer des emails (notifications, réinitialisation mdp...).${NC}"
+    echo -e "  ${GRAY}Compatible Orange, Gmail (app password), Proton…${NC}"
+    read -rp "  → Configurer le SMTP maintenant ? [o/N] : " smtp_choice </dev/tty
+    if [[ "${smtp_choice,,}" == "o" ]]; then
+        read -rp "    Serveur SMTP (ex: smtp.gmail.com) : " CALEOPE_SMTP_HOST </dev/tty
+        read -rp "    Port (ex: 587) : " CALEOPE_SMTP_PORT </dev/tty
+        CALEOPE_SMTP_PORT="${CALEOPE_SMTP_PORT:-587}"
+        read -rp "    Utilisateur SMTP (email) : " CALEOPE_SMTP_USER </dev/tty
+        read -rsp "    Mot de passe SMTP : " CALEOPE_SMTP_PASS </dev/tty; echo ""
+        read -rp "    Adresse expéditeur (ex: noreply@mondomaine.com) : " CALEOPE_SMTP_FROM </dev/tty
+        CALEOPE_SMTP_FROM="${CALEOPE_SMTP_FROM:-noreply@${CALEOPE_DOMAIN}}"
+    fi
+
+    # ── Mot de passe chiffrement des secrets ──
+    echo ""
+    echo -e "${BLUE}  Chiffrement des secrets${NC}"
+    echo -e "  ${GRAY}Choisir un mot de passe pour protéger les secrets des apps (mots de passe BDD,${NC}"
+    echo -e "  ${GRAY}tokens API...). Requis pour 'caleope secrets show <app>'.${NC}"
+    echo -e "  ${YELLOW}  ⚠ Notez ce mot de passe — il ne peut pas être récupéré si perdu.${NC}"
+    local secrets_pass secrets_pass2
+    while true; do
+        read -rsp "    Mot de passe : " secrets_pass </dev/tty; echo ""
+        if [[ -z "${secrets_pass}" ]]; then
+            echo -e "  ${RED}Le mot de passe ne peut pas être vide${NC}"
+            continue
+        fi
+        read -rsp "    Confirmer : " secrets_pass2 </dev/tty; echo ""
+        if [[ "${secrets_pass}" == "${secrets_pass2}" ]]; then
+            CALEOPE_SECRETS_PASSWORD="${secrets_pass}"
+            break
+        fi
+        echo -e "  ${RED}Les mots de passe ne correspondent pas${NC}"
+    done
+    unset secrets_pass secrets_pass2
 
     # ── Résumé ──
     echo ""
@@ -780,14 +826,87 @@ CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}
 CALEOPE_EMAIL=${CALEOPE_EMAIL}
 CALEOPE_CHANNEL=${CALEOPE_CHANNEL}
 CALEOPE_VERSION=0.1.0
+
+# SMTP externe (relai pour les notifications des apps)
+CALEOPE_SMTP_HOST=${CALEOPE_SMTP_HOST}
+CALEOPE_SMTP_PORT=${CALEOPE_SMTP_PORT}
+CALEOPE_SMTP_USER=${CALEOPE_SMTP_USER}
+CALEOPE_SMTP_PASS=${CALEOPE_SMTP_PASS}
+CALEOPE_SMTP_FROM=${CALEOPE_SMTP_FROM}
 EOF
 
-    chmod 644 "${CALEOPE_ROOT}/caleope.conf"
-    chown "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}/caleope.conf"
+    chmod 640 "${CALEOPE_ROOT}/caleope.conf"
+    chown "${CALEOPE_USER}:${CALEOPE_GROUP}" "${CALEOPE_ROOT}/caleope.conf"
 
     log_success "Config sauvegardée dans ${CALEOPE_ROOT}/caleope.conf"
     log_debug "  CALEOPE_DOMAIN=${CALEOPE_DOMAIN}"
     log_debug "  CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}"
+}
+
+# =============================================================================
+# SÉCURITÉ SYSTÈME (UFW, fail2ban, unattended-upgrades)
+# =============================================================================
+
+setup_security() {
+    log_section "Sécurité système"
+
+    # ── UFW ──
+    log_step "Configuration du pare-feu UFW..."
+    run_cmd apt-get install -y ufw
+    ufw --force reset >/dev/null 2>&1 || true
+    ufw default deny incoming >/dev/null 2>&1
+    ufw default allow outgoing >/dev/null 2>&1
+    ufw allow 22/tcp comment "SSH" >/dev/null 2>&1
+    ufw allow 80/tcp comment "HTTP" >/dev/null 2>&1
+    ufw allow 443/tcp comment "HTTPS" >/dev/null 2>&1
+    echo "y" | ufw enable >/dev/null 2>&1 || true
+    log_success "UFW actif (22/80/443 ouverts)"
+
+    # ── fail2ban ──
+    log_step "Installation de fail2ban..."
+    run_cmd apt-get install -y fail2ban
+    run_cmd systemctl enable fail2ban
+    run_cmd systemctl start fail2ban
+    log_success "fail2ban actif"
+
+    # ── unattended-upgrades ──
+    log_step "Mises à jour automatiques de sécurité..."
+    run_cmd apt-get install -y unattended-upgrades
+    echo 'Unattended-Upgrade::Automatic-Reboot "false";' \
+        > /etc/apt/apt.conf.d/51caleope-no-reboot 2>/dev/null || true
+    run_cmd systemctl enable unattended-upgrades
+    run_cmd systemctl start unattended-upgrades
+    log_success "unattended-upgrades actif"
+
+    # ── Répertoire journal audit ──
+    mkdir -p /var/log/caleope
+    chmod 750 /var/log/caleope
+    chown "${CALEOPE_USER}:${CALEOPE_GROUP}" /var/log/caleope 2>/dev/null || true
+    log_success "Répertoire /var/log/caleope créé"
+}
+
+# =============================================================================
+# INIT CHIFFREMENT SECRETS
+# =============================================================================
+
+init_secrets_encryption() {
+    log_section "Initialisation du chiffrement des secrets"
+
+    if [[ -z "${CALEOPE_SECRETS_PASSWORD}" ]]; then
+        log_warning "Pas de mot de passe fourni — chiffrement ignoré"
+        return 0
+    fi
+
+    local init_file="${CALEOPE_ROOT}/core/daemon/secrets-init-password"
+    mkdir -p "$(dirname "${init_file}")"
+    echo -n "${CALEOPE_SECRETS_PASSWORD}" > "${init_file}"
+    chmod 600 "${init_file}"
+    chown "${CALEOPE_USER}:${CALEOPE_USER}" "${init_file}" 2>/dev/null || true
+    # Effacer le mot de passe de la mémoire
+    CALEOPE_SECRETS_PASSWORD=""
+
+    log_success "Mot de passe transmis au daemon (sera supprimé au premier démarrage)"
+    log_warning "Conservez ce mot de passe en lieu sûr — il ne peut pas être récupéré !"
 }
 
 # =============================================================================
@@ -958,13 +1077,15 @@ main() {
     configure_sudo             # En premier — nécessaire pour la suite
     install_prerequisites
     install_docker
+    setup_security             # UFW + fail2ban + unattended-upgrades
     create_docker_networks
     create_structure
     setup_caleope_group
     install_caleope_binaries   # release GitHub → fallback compile
     install_bash_completion    # tab completion pour caleope
     init_caleope_runtime
-    save_config                # Sauvegarder domaine + mode proxy dans caleope.conf
+    save_config                # Sauvegarder domaine + mode proxy + SMTP dans caleope.conf
+    init_secrets_encryption    # Transmettre mot de passe chiffrement au daemon
     sync_store                 # git clone du store officiel
     install_caleoped_service
     deploy_traefik

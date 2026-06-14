@@ -29,7 +29,9 @@ type AppManifest struct {
 	Ports         []AppPort       `json:"ports"`
 	Volumes       []AppVolume     `json:"volumes"`
 	Backup        AppBackup       `json:"backup"`
-	UseBaseDomain bool            `json:"use_base_domain"` // true = domaine racine (pas appID.domain)
+	UseBaseDomain bool            `json:"use_base_domain"`            // true = domaine racine (pas appID.domain)
+	SecureHeaders bool            `json:"secure_headers,omitempty"`   // Traefik secure headers opt-in
+	AuthMiddleware bool           `json:"auth_middleware,omitempty"`  // Authentik forward auth opt-in
 }
 
 type AppCapabilities struct {
@@ -46,9 +48,11 @@ type AppNetwork struct {
 
 type AppPort struct {
 	Name      string `json:"name"`
-	Container int    `json:"container"` // port dans le container
-	Host      int    `json:"host"`      // port alloué dynamiquement sur l'hôte
-	Dynamic   bool   `json:"dynamic"`   // true = Caleope choisit le port hôte
+	Container int    `json:"container"`           // port dans le container
+	Host      int    `json:"host"`                // port alloué dynamiquement sur l'hôte
+	Dynamic   bool   `json:"dynamic"`             // true = Caleope choisit le port hôte
+	Protocol  string `json:"protocol,omitempty"` // "tcp", "udp", "any" — pour UFW
+	Firewall  bool   `json:"firewall,omitempty"` // true = ouvrir dans UFW
 }
 
 type AppVolume struct {
