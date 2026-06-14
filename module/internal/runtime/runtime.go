@@ -249,7 +249,8 @@ func (m *Manager) AllocatePort(appID string, min, max int) (int, error) {
 	return 0, fmt.Errorf("aucun port disponible entre %d et %d", min, max)
 }
 
-// ReleasePort libère le port d'une app dans ports.json.
+// ReleasePort libère tous les ports d'une app dans ports.json.
+// Les clés sont au format "<appID>-<portName>".
 func (m *Manager) ReleasePort(appID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -259,8 +260,12 @@ func (m *Manager) ReleasePort(appID string) error {
 		return err
 	}
 
-	// delete = supprimer une clé d'une map Go
-	delete(ports, appID)
+	prefix := appID + "-"
+	for key := range ports {
+		if key == appID || strings.HasPrefix(key, prefix) {
+			delete(ports, key)
+		}
+	}
 	return m.writePorts(ports)
 }
 
