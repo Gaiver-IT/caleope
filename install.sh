@@ -52,19 +52,19 @@ PORT_COCKPIT=8020
 DOCKER_NET_PUBLIC="caleope-public"
 DOCKER_NET_INTERNAL="caleope-internal"
 
-# Config interactive (remplie par ask_config)
-CALEOPE_DOMAIN=""
-CALEOPE_EMAIL=""
-CALEOPE_PROXY_MODE=""   # "npm" = NPM en amont, "traefik" = Traefik gère les certs
-CALEOPE_CHANNEL=""      # "stable" = releases officielles, "alpha" = pré-releases
+# Config interactive (remplie par ask_config, ou pré-définie via variables d'environnement)
+CALEOPE_DOMAIN="${CALEOPE_DOMAIN:-}"
+CALEOPE_EMAIL="${CALEOPE_EMAIL:-}"
+CALEOPE_PROXY_MODE="${CALEOPE_PROXY_MODE:-}"   # "npm" = NPM en amont, "traefik" = Traefik gère les certs
+CALEOPE_CHANNEL="${CALEOPE_CHANNEL:-}"          # "stable" = releases officielles, "alpha" = pré-releases
 # SMTP externe (optionnel — pour les notifications des apps)
-CALEOPE_SMTP_HOST=""
-CALEOPE_SMTP_PORT="587"
-CALEOPE_SMTP_USER=""
-CALEOPE_SMTP_PASS=""
-CALEOPE_SMTP_FROM=""
+CALEOPE_SMTP_HOST="${CALEOPE_SMTP_HOST:-}"
+CALEOPE_SMTP_PORT="${CALEOPE_SMTP_PORT:-587}"
+CALEOPE_SMTP_USER="${CALEOPE_SMTP_USER:-}"
+CALEOPE_SMTP_PASS="${CALEOPE_SMTP_PASS:-}"
+CALEOPE_SMTP_FROM="${CALEOPE_SMTP_FROM:-}"
 # Mot de passe chiffrement secrets (utilisé une seule fois au démarrage du daemon)
-CALEOPE_SECRETS_PASSWORD=""
+CALEOPE_SECRETS_PASSWORD="${CALEOPE_SECRETS_PASSWORD:-}"
 
 # Couleurs
 RED='\033[0;31m'
