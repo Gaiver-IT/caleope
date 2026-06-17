@@ -108,6 +108,18 @@ run_cmd() {
 ask_config() {
     log_section "Configuration de Caleope"
 
+    # Mode non-interactif : si les variables essentielles sont déjà définies en
+    # variables d'environnement, on les utilise directement sans prompts.
+    # Usage : CALEOPE_DOMAIN=... CALEOPE_PROXY_MODE=traefik CALEOPE_CHANNEL=alpha bash install.sh
+    if [[ -n "${CALEOPE_DOMAIN:-}" && -n "${CALEOPE_PROXY_MODE:-}" && -n "${CALEOPE_CHANNEL:-}" ]]; then
+        log_step "Mode non-interactif détecté (variables d'environnement)"
+        echo -e "  Domaine    : ${YELLOW}${CALEOPE_DOMAIN}${NC}"
+        echo -e "  Proxy mode : ${YELLOW}${CALEOPE_PROXY_MODE}${NC}"
+        echo -e "  Canal      : ${YELLOW}${CALEOPE_CHANNEL}${NC}"
+        [[ -n "${CALEOPE_EMAIL:-}" ]] && echo -e "  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"
+        return
+    fi
+
     echo ""
     echo -e "${CYAN}  Quelques questions pour configurer ton installation.${NC}"
     echo ""
