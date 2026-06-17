@@ -514,14 +514,18 @@ func writeGPUOverride(composeDir, serviceID string) error {
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 `, serviceID)
 	case "intel":
+		// Lire les GIDs de video et render sur l'hôte pour les injecter comme nombres
+		// (les noms de groupes peuvent ne pas exister dans le container)
+		videoGID := groupGID("video", "44")
+		renderGID := groupGID("render", "109")
 		content = fmt.Sprintf(`services:
   %s:
     devices:
       - /dev/dri:/dev/dri
     group_add:
-      - video
-      - render
-`, serviceID)
+      - "%s"
+      - "%s"
+`, serviceID, videoGID, renderGID)
 	}
 
 	overridePath := filepath.Join(composeDir, "compose.override.yml")
@@ -530,6 +534,20 @@ func writeGPUOverride(composeDir, serviceID string) error {
 	}
 	fmt.Printf("  ✓ GPU override (%s) → %s\n", gpuType, overridePath)
 	return nil
+}
+
+// groupGID retourne le GID numérique d'un groupe système, ou fallback si absent.
+func groupGID(name, fallback string) string {
+	out, err := exec.Command("getent", "group", name).Output()
+	if err != nil {
+		return fallback
+	}
+	// format: name:x:GID:members
+	parts := strings.SplitN(strings.TrimSpace(string(out)), ":", 4)
+	if len(parts) >= 3 && parts[2] != "" {
+		return parts[2]
+	}
+	return fallback
 }
 
 // detectGPUType détecte le type de GPU disponible sur le système.
