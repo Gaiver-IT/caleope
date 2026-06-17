@@ -978,7 +978,7 @@ func cmdStopStart(action string, args []string) {
 
 func cmdBackup(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope backup <app> [--restic --repo <url>]")
+		die("Usage: caleope backup <app> [--restic --repo <url> [--password <pass>]]")
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
@@ -991,6 +991,17 @@ func cmdBackup(args []string) {
 				apiArgs["repo"] = args[i+1]
 				i++
 			}
+		case "--password":
+			if i+1 < len(args) {
+				apiArgs["restic_password"] = args[i+1]
+				i++
+			}
+		}
+	}
+	// Lire depuis RESTIC_PASSWORD si non fourni via --password
+	if apiArgs["restic"] == "true" && apiArgs["restic_password"] == "" {
+		if p := os.Getenv("RESTIC_PASSWORD"); p != "" {
+			apiArgs["restic_password"] = p
 		}
 	}
 

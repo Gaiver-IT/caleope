@@ -502,7 +502,7 @@ func (s *Server) handleBackup(args map[string]string) (interface{}, error) {
 		if repo == "" {
 			return nil, fmt.Errorf("--repo requis avec --restic (ex: sftp:user@host:/path)")
 		}
-		repoURL, err := s.bkp.ResticBackup(appID, repo)
+		repoURL, err := s.bkp.ResticBackup(appID, repo, args["restic_password"])
 		if err != nil {
 			return nil, err
 		}
