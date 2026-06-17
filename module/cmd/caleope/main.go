@@ -109,7 +109,7 @@ func main() {
 
 func cmdInstall(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>] [--param KEY=VALUE]")
+		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>] [--param KEY=VALUE] [--gpu]")
 	}
 
 	apiArgs := map[string]string{
@@ -138,6 +138,8 @@ func cmdInstall(args []string) {
 				}
 				i++
 			}
+		case "--gpu":
+			apiArgs["gpu"] = "true"
 		}
 	}
 
@@ -970,11 +972,24 @@ func cmdStopStart(action string, args []string) {
 
 func cmdBackup(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope backup <app>")
+		die("Usage: caleope backup <app> [--restic --repo <url>]")
+	}
+
+	apiArgs := map[string]string{"app": args[0]}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--restic":
+			apiArgs["restic"] = "true"
+		case "--repo":
+			if i+1 < len(args) {
+				apiArgs["repo"] = args[i+1]
+				i++
+			}
+		}
 	}
 
 	fmt.Printf("💾 Sauvegarde de '%s'...\n", args[0])
-	resp := callDaemon("backup", map[string]string{"app": args[0]})
+	resp := callDaemon("backup", apiArgs)
 	if !resp.Success {
 		die("❌ " + resp.Error)
 	}

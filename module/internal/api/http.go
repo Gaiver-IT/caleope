@@ -36,6 +36,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gaiver-it/caleope/pkg/version"
 )
@@ -139,7 +141,7 @@ func (s *Server) StartHTTP(port int) error {
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("✓ API REST sur %s\n", addr)
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, s.rateLimit(mux))
 }
 
 // routeApp dispatche toutes les routes /api/v1/apps/{id}[/action].
@@ -189,6 +191,49 @@ func (s *Server) routeApp(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 // MIDDLEWARES
 // ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────
+// RATE LIMITING — 60 req/min par IP
+// ─────────────────────────────────────────────
+
+const (
+	rateLimitMax    = 60
+	rateLimitWindow = time.Minute
+)
+
+type ipBucket struct {
+	mu       sync.Mutex
+	tokens   int
+	lastFill time.Time
+}
+
+var rateBuckets sync.Map // IP → *ipBucket
+
+func (s *Server) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+
+		val, _ := rateBuckets.LoadOrStore(ip, &ipBucket{tokens: rateLimitMax, lastFill: time.Now()})
+		bucket := val.(*ipBucket)
+
+		bucket.mu.Lock()
+		now := time.Now()
+		if now.Sub(bucket.lastFill) >= rateLimitWindow {
+			bucket.tokens = rateLimitMax
+			bucket.lastFill = now
+		}
+		if bucket.tokens <= 0 {
+			bucket.mu.Unlock()
+			w.Header().Set("Retry-After", "60")
+			s.httpError(w, "trop de requêtes — réessayer dans 60s", http.StatusTooManyRequests)
+			return
+		}
+		bucket.tokens--
+		bucket.mu.Unlock()
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

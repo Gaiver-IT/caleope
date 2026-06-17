@@ -65,6 +65,7 @@ type InstallOptions struct {
 	Force           bool              // forcer la réinstallation si déjà installé
 	StorageLocation string            // nom de la location NAS pour stocker app-data (vide = local)
 	StorageDataDir  string            // chemin absolu résolu (rempli par l'installeur)
+	GPU             bool              // activer le passthrough GPU (NVIDIA/Intel) si l'app le supporte
 }
 
 // ─────────────────────────────────────────────
@@ -465,7 +466,74 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 	}
 	defer outFile.Close()
 
-	return tmpl.Execute(outFile, data)
+	if err := tmpl.Execute(outFile, data); err != nil {
+		return err
+	}
+
+	// GPU override : si demandé ET supporté par l'app, écrire compose.override.yml
+	if opts.GPU && manifest.Capabilities.GPU {
+		if err := writeGPUOverride(composeDir, manifest.ID); err != nil {
+			fmt.Printf("  ⚠ GPU override: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// writeGPUOverride génère un compose.override.yml pour le passthrough GPU.
+// Supporte NVIDIA (via nvidia-smi) et Intel/AMD (via /dev/dri).
+func writeGPUOverride(composeDir, serviceID string) error {
+	gpuType := detectGPUType()
+	if gpuType == "" {
+		return fmt.Errorf("aucun GPU détecté (nvidia-smi absent, /dev/dri absent)")
+	}
+
+	var content string
+	switch gpuType {
+	case "nvidia":
+		content = fmt.Sprintf(`services:
+  %s:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+`, serviceID)
+	case "intel":
+		content = fmt.Sprintf(`services:
+  %s:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+`, serviceID)
+	}
+
+	overridePath := filepath.Join(composeDir, "compose.override.yml")
+	if err := os.WriteFile(overridePath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("écriture compose.override.yml: %w", err)
+	}
+	fmt.Printf("  ✓ GPU override (%s) → %s\n", gpuType, overridePath)
+	return nil
+}
+
+// detectGPUType détecte le type de GPU disponible sur le système.
+func detectGPUType() string {
+	if path, err := exec.LookPath("nvidia-smi"); err == nil {
+		if err := exec.Command(path).Run(); err == nil {
+			return "nvidia"
+		}
+	}
+	if _, err := os.Stat("/dev/dri"); err == nil {
+		return "intel"
+	}
+	return ""
 }
 
 // buildEnvFile construit le contenu du fichier .env.

@@ -107,6 +107,69 @@ func (m *Manager) Backup(appID string) (string, error) {
 }
 
 // ─────────────────────────────────────────────
+// RESTIC BACKUP
+// ─────────────────────────────────────────────
+
+// ResticBackup sauvegarde une application via Restic vers un dépôt distant ou local.
+// Le dépôt doit être accessible et les variables RESTIC_PASSWORD / RESTIC_PASSWORD_FILE
+// définies dans l'environnement. Retourne l'URL du dépôt.
+func (m *Manager) ResticBackup(appID, repo string) (string, error) {
+	if repo == "" {
+		return "", fmt.Errorf("repo Restic requis (ex: sftp:user@host:/path ou /chemin/local)")
+	}
+
+	app, err := m.rt.GetApp(appID)
+	if err != nil {
+		return "", fmt.Errorf("application '%s' non trouvée: %w", appID, err)
+	}
+
+	fmt.Println("  [1/3] Arrêt des containers...")
+	if err := m.docker.Stop(app.ComposeDir); err != nil {
+		return "", fmt.Errorf("arrêt containers: %w", err)
+	}
+	defer func() {
+		fmt.Println("  → Redémarrage des containers...")
+		_ = m.docker.Start(app.ComposeDir)
+	}()
+
+	// Initialiser le dépôt si nécessaire (idempotent si déjà initialisé)
+	fmt.Printf("  [2/3] Initialisation du dépôt Restic (%s)...\n", repo)
+	initCmd := exec.Command("restic", "-r", repo, "init")
+	initCmd.Stdout = os.Stdout
+	initCmd.Stderr = os.Stderr
+	_ = initCmd.Run() // ignore exit code 1 si le dépôt existe déjà
+
+	dataDir := filepath.Join(m.baseDir, "app-data", appID)
+	configDir := filepath.Join(m.baseDir, "app-config", appID)
+
+	fmt.Println("  [3/3] Sauvegarde via Restic...")
+	resticArgs := []string{
+		"-r", repo,
+		"backup",
+		"--tag", "caleope",
+		"--tag", appID,
+	}
+	if _, err := os.Stat(dataDir); err == nil {
+		resticArgs = append(resticArgs, dataDir)
+	}
+	if _, err := os.Stat(configDir); err == nil {
+		resticArgs = append(resticArgs, configDir)
+	}
+	if len(resticArgs) == 6 { // seulement les flags, pas de chemin
+		return "", fmt.Errorf("aucun répertoire app-data ou app-config trouvé pour '%s'", appID)
+	}
+
+	cmd := exec.Command("restic", resticArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("restic backup: %w", err)
+	}
+
+	return repo, nil
+}
+
+// ─────────────────────────────────────────────
 // RESTORE
 // ─────────────────────────────────────────────
 

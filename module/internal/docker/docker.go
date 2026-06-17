@@ -102,11 +102,18 @@ func (c *Client) runCompose(composeDir string, args ...string) error {
 
 // runComposeEnv exécute docker compose avec des variables d'environnement supplémentaires.
 // extraEnv = variables qui surchargent l'environnement courant (ex: "COMPOSE_PROFILES=vpn,novpn").
+// Si compose.override.yml existe dans composeDir (GPU overlay, etc.), il est inclus automatiquement.
 func (c *Client) runComposeEnv(composeDir string, extraEnv []string, args ...string) error {
 	baseArgs := []string{
 		"compose",
 		"--file", filepath.Join(composeDir, "compose.yml"),
 		"--env-file", filepath.Join(composeDir, "app.env"),
+	}
+
+	// GPU / overlay : inclure compose.override.yml si présent
+	overridePath := filepath.Join(composeDir, "compose.override.yml")
+	if _, err := os.Stat(overridePath); err == nil {
+		baseArgs = append(baseArgs, "--file", overridePath)
 	}
 
 	fullArgs := append(baseArgs, args...)

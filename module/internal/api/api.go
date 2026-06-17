@@ -288,6 +288,7 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 		}(),
 		Params: params,
 		Force:  args["force"] == "true",
+		GPU:    args["gpu"] == "true",
 	}
 
 	// Stockage NAS : résoudre le chemin de données avant l'installation
@@ -493,6 +494,22 @@ func (s *Server) handleBackup(args map[string]string) (interface{}, error) {
 	appID, ok := args["app"]
 	if !ok || appID == "" {
 		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+
+	// Backend Restic si demandé
+	if args["restic"] == "true" {
+		repo := args["repo"]
+		if repo == "" {
+			return nil, fmt.Errorf("--repo requis avec --restic (ex: sftp:user@host:/path)")
+		}
+		repoURL, err := s.bkp.ResticBackup(appID, repo)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"repo":    repoURL,
+			"message": fmt.Sprintf("Backup Restic de '%s' → %s", appID, repoURL),
+		}, nil
 	}
 
 	backupDir, err := s.bkp.Backup(appID)

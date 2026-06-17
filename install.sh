@@ -137,12 +137,14 @@ ask_config() {
     echo -e "${BLUE}  Mode reverse proxy${NC}"
     echo -e "  ${GRAY}1) NPM/Caddy/autre en amont  — Traefik reçoit du HTTP, pas de gestion des certs${NC}"
     echo -e "  ${GRAY}2) Traefik natif             — Traefik gère HTTPS et Let's Encrypt directement${NC}"
-    while [[ "${CALEOPE_PROXY_MODE}" != "npm" && "${CALEOPE_PROXY_MODE}" != "traefik" ]]; do
-        read -rp "  → Choix [1/2] : " proxy_choice </dev/tty
+    echo -e "  ${GRAY}3) Standalone                — HTTP seul, sans certificat (LAN/offline/air-gap)${NC}"
+    while [[ "${CALEOPE_PROXY_MODE}" != "npm" && "${CALEOPE_PROXY_MODE}" != "traefik" && "${CALEOPE_PROXY_MODE}" != "standalone" ]]; do
+        read -rp "  → Choix [1/2/3] : " proxy_choice </dev/tty
         case "${proxy_choice}" in
             1) CALEOPE_PROXY_MODE="npm" ;;
             2) CALEOPE_PROXY_MODE="traefik" ;;
-            *) echo -e "  ${RED}Choix invalide, entre 1 ou 2${NC}" ;;
+            3) CALEOPE_PROXY_MODE="standalone" ;;
+            *) echo -e "  ${RED}Choix invalide, entre 1, 2 ou 3${NC}" ;;
         esac
     done
 
@@ -546,7 +548,7 @@ deploy_traefik() {
     touch "${CALEOPE_ROOT}/data/traefik/certs/acme.json"
     chmod 600 "${CALEOPE_ROOT}/data/traefik/certs/acme.json"
 
-    # traefik.yml — deux modes selon config
+    # traefik.yml — trois modes selon config
     if [[ "${CALEOPE_PROXY_MODE}" == "npm" ]]; then
         # Mode NPM : Traefik reçoit HTTP depuis NPM, pas de gestion des certs
         cat > "${CALEOPE_ROOT}/data/traefik/traefik.yml" << EOF
@@ -563,6 +565,30 @@ entryPoints:
     address: ":${PORT_TRAEFIK_HTTP}"
   websecure:
     address: ":${PORT_TRAEFIK_HTTPS}"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: ${DOCKER_NET_PUBLIC}
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+EOF
+    elif [[ "${CALEOPE_PROXY_MODE}" == "standalone" ]]; then
+        # Mode standalone : HTTP seul, sans Let's Encrypt — pour LAN/offline/air-gap
+        cat > "${CALEOPE_ROOT}/data/traefik/traefik.yml" << EOF
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":${PORT_TRAEFIK_HTTP}"
 
 providers:
   docker:
@@ -614,6 +640,23 @@ certificatesResolvers:
         entryPoint: web
 EOF
     fi
+
+    # secure-headers.yml — middleware de sécurité HTTP commun à tous les modes
+    cat > "${CALEOPE_ROOT}/data/traefik/dynamic/secure-headers.yml" << 'EOF'
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        customResponseHeaders:
+          X-Powered-By: ""
+          Server: ""
+EOF
 
     # compose.yml Traefik (commun aux deux modes)
     cat > "${CALEOPE_ROOT}/core/traefik/compose.yml" << EOF
