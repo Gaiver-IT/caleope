@@ -177,28 +177,33 @@ func (i *Installer) Install(opts InstallOptions) error {
 		return err
 	}
 
-	// ── Étape 7 : Génération compose final ──
-	fmt.Println("  [7/12] Génération du compose...")
-	if err := i.generateCompose(appDir, composeDir, manifest, opts); err != nil {
-		return err
-	}
+	// ── Étapes 7-10 : Docker (skippées pour les apps no_container) ──
+	if manifest.NoContainer {
+		fmt.Println("  [7-10/12] Skipping Docker (outil système sans container)...")
+	} else {
+		// ── Étape 7 : Génération compose final ──
+		fmt.Println("  [7/12] Génération du compose...")
+		if err := i.generateCompose(appDir, composeDir, manifest, opts); err != nil {
+			return err
+		}
 
-	// ── Étape 8 : Réseaux Docker ──
-	fmt.Println("  [8/12] Vérification des réseaux Docker...")
-	if err := i.docker.EnsureNetworks(); err != nil {
-		return err
-	}
+		// ── Étape 8 : Réseaux Docker ──
+		fmt.Println("  [8/12] Vérification des réseaux Docker...")
+		if err := i.docker.EnsureNetworks(); err != nil {
+			return err
+		}
 
-	// ── Étape 9 : docker compose up ──
-	fmt.Println("  [9/12] Démarrage des containers...")
-	if err := i.docker.Up(composeDir); err != nil {
-		return err
-	}
+		// ── Étape 9 : docker compose up ──
+		fmt.Println("  [9/12] Démarrage des containers...")
+		if err := i.docker.Up(composeDir); err != nil {
+			return err
+		}
 
-	// ── Étape 10 : Attente démarrage ──
-	fmt.Println("  [10/12] Vérification du démarrage...")
-	if err := i.waitForStart(ctx, composeDir); err != nil {
-		return err
+		// ── Étape 10 : Attente démarrage ──
+		fmt.Println("  [10/12] Vérification du démarrage...")
+		if err := i.waitForStart(ctx, composeDir); err != nil {
+			return err
+		}
 	}
 
 	// ── Étape 11 : Enregistrement runtime ──
@@ -226,11 +231,15 @@ func (i *Installer) Install(opts InstallOptions) error {
 
 	success = true
 	fmt.Printf("\n✅ %s installé avec succès !\n", manifest.Name)
-	if len(manifest.Ports) > 0 {
-		fmt.Printf("   🌐 Accessible sur le port %d\n", hostPort)
-	}
-	if opts.Domain != "" {
-		fmt.Printf("   🔗 Domaine : https://%s\n", opts.Domain)
+	if manifest.NoContainer {
+		fmt.Printf("   🔧 Outil système installé (pas de container)\n")
+	} else {
+		if len(manifest.Ports) > 0 {
+			fmt.Printf("   🌐 Accessible sur le port %d\n", hostPort)
+		}
+		if opts.Domain != "" {
+			fmt.Printf("   🔗 Domaine : https://%s\n", opts.Domain)
+		}
 	}
 
 	return nil

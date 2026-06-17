@@ -32,6 +32,7 @@ type AppManifest struct {
 	UseBaseDomain bool            `json:"use_base_domain"`            // true = domaine racine (pas appID.domain)
 	SecureHeaders bool            `json:"secure_headers,omitempty"`   // Traefik secure headers opt-in
 	AuthMiddleware bool           `json:"auth_middleware,omitempty"`  // Authentik forward auth opt-in
+	NoContainer   bool            `json:"no_container,omitempty"`     // true = outil système, pas de container Docker
 }
 
 type AppCapabilities struct {
