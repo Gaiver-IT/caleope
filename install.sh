@@ -959,13 +959,17 @@ sync_store() {
 
     git config --global --add safe.directory "${store_dir}"
 
+    # La branche du store suit le canal : alpha → origin/alpha, stable → origin/main
+    local store_branch="main"
+    [[ "${CALEOPE_CHANNEL:-stable}" == "alpha" ]] && store_branch="alpha"
+
     if [[ -d "${store_dir}/.git" ]]; then
-        log_step "Mise à jour du store..."
+        log_step "Mise à jour du store (branche ${store_branch})..."
         git -C "${store_dir}" fetch origin
-        git -C "${store_dir}" reset --hard origin/main
+        git -C "${store_dir}" reset --hard "origin/${store_branch}"
     else
-        log_step "Téléchargement du store depuis GitHub..."
-        git clone --depth=1 "${store_url}" "${store_dir}"
+        log_step "Téléchargement du store depuis GitHub (branche ${store_branch})..."
+        git clone --depth=1 --branch "${store_branch}" "${store_url}" "${store_dir}"
     fi
 
     chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${store_dir}"
