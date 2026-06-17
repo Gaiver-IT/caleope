@@ -717,18 +717,37 @@ EOF
         IP=$(hostname -I | awk '{print $1}')
         log_success "Portainer actif"
 
-        echo ""
-        echo -e "${RED}╔══════════════════════════════════════════════════════╗${NC}"
-        echo -e "${RED}║  ⚠️  ACTION REQUISE DANS LES 5 PROCHAINES MINUTES  ║${NC}"
-        echo -e "${RED}║                                                      ║${NC}"
-        echo -e "${RED}║  Connecte-toi sur Portainer et crée ton compte admin ║${NC}"
-        echo -e "${RED}║  avant que le timer de sécurité expire               ║${NC}"
-        echo -e "${RED}║                                                      ║${NC}"
-        echo -e "${RED}║  → https://${IP}:${PORT_PORTAINER}                       ║${NC}"
-        echo -e "${RED}╚══════════════════════════════════════════════════════╝${NC}"
-        echo ""
-        echo -e "${YELLOW}Appuie sur [Entrée] une fois ton compte Portainer créé...${NC}"
-        read -r </dev/tty
+        # Mode non-interactif : création automatique du compte admin Portainer via API
+        if [[ -n "${CALEOPE_DOMAIN:-}" && -n "${CALEOPE_PROXY_MODE:-}" ]]; then
+            local portainer_pass="${PORTAINER_ADMIN_PASSWORD:-CaleoportAdmin!$(openssl rand -hex 4)}"
+            local portainer_resp
+            portainer_resp=$(curl -sk -X POST "https://${IP}:${PORT_PORTAINER}/api/users/admin/init" \
+                -H "Content-Type: application/json" \
+                -d "{\"Username\":\"admin\",\"Password\":\"${portainer_pass}\"}" 2>/dev/null || echo "{}")
+            if echo "${portainer_resp}" | grep -q '"Id"'; then
+                log_success "Compte admin Portainer créé automatiquement"
+                # Sauvegarder le mot de passe dans les secrets
+                mkdir -p "${CALEOPE_ROOT}/app-config/portainer"
+                echo "PORTAINER_ADMIN_PASSWORD=${portainer_pass}" > "${CALEOPE_ROOT}/app-config/portainer/secrets.env"
+                chmod 600 "${CALEOPE_ROOT}/app-config/portainer/secrets.env"
+                log_step "Portainer → https://${IP}:${PORT_PORTAINER}  |  admin / ${portainer_pass}"
+            else
+                log_warning "Portainer admin auto-création échouée (timer expiré ?) — créer manuellement sur https://${IP}:${PORT_PORTAINER}"
+            fi
+        else
+            echo ""
+            echo -e "${RED}╔══════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║  ⚠️  ACTION REQUISE DANS LES 5 PROCHAINES MINUTES  ║${NC}"
+            echo -e "${RED}║                                                      ║${NC}"
+            echo -e "${RED}║  Connecte-toi sur Portainer et crée ton compte admin ║${NC}"
+            echo -e "${RED}║  avant que le timer de sécurité expire               ║${NC}"
+            echo -e "${RED}║                                                      ║${NC}"
+            echo -e "${RED}║  → https://${IP}:${PORT_PORTAINER}                       ║${NC}"
+            echo -e "${RED}╚══════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "${YELLOW}Appuie sur [Entrée] une fois ton compte Portainer créé...${NC}"
+            read -r </dev/tty
+        fi
     else
         log_warning "Portainer ne semble pas démarré — vérifier : docker logs portainer"
     fi
