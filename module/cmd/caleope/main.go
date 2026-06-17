@@ -117,19 +117,25 @@ func cmdInstall(args []string) {
 	}
 
 	// Parser les flags optionnels
-	for i := 1; i < len(args)-1; i++ {
+	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--domain":
-			apiArgs["domain"] = args[i+1]
-			i++
+			if i+1 < len(args) {
+				apiArgs["domain"] = args[i+1]
+				i++
+			}
 		case "--channel":
-			apiArgs["channel"] = args[i+1]
-			i++
+			if i+1 < len(args) {
+				apiArgs["channel"] = args[i+1]
+				i++
+			}
 		case "--force":
 			apiArgs["force"] = "true"
 		case "--storage":
-			apiArgs["storage"] = args[i+1]
-			i++
+			if i+1 < len(args) {
+				apiArgs["storage"] = args[i+1]
+				i++
+			}
 		case "--param":
 			if i+1 < len(args) {
 				kv := args[i+1]
@@ -483,8 +489,8 @@ func cmdLogs(args []string) {
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
-	for i := 1; i < len(args)-1; i++ {
-		if args[i] == "--tail" {
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--tail" && i+1 < len(args) {
 			apiArgs["tail"] = args[i+1]
 			i++
 		}
@@ -1005,8 +1011,8 @@ func cmdRestore(args []string) {
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
-	for i := 1; i < len(args)-1; i++ {
-		if args[i] == "--backup" {
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--backup" && i+1 < len(args) {
 			apiArgs["backup"] = args[i+1]
 			i++
 		}
