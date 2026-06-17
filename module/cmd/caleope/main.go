@@ -109,7 +109,7 @@ func main() {
 
 func cmdInstall(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>]")
+		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>] [--param KEY=VALUE]")
 	}
 
 	apiArgs := map[string]string{
@@ -130,6 +130,26 @@ func cmdInstall(args []string) {
 		case "--storage":
 			apiArgs["storage"] = args[i+1]
 			i++
+		case "--param":
+			if i+1 < len(args) {
+				kv := args[i+1]
+				if idx := strings.IndexByte(kv, '='); idx > 0 {
+					apiArgs["param_"+strings.ToLower(kv[:idx])] = kv[idx+1:]
+				}
+				i++
+			}
+		}
+	}
+
+	// Lire CALEOPE_PARAM_* depuis l'environnement (priorité basse : surchargeable par --param)
+	for _, envLine := range os.Environ() {
+		if strings.HasPrefix(envLine, "CALEOPE_PARAM_") {
+			if parts := strings.SplitN(envLine, "=", 2); len(parts) == 2 {
+				key := "param_" + strings.ToLower(strings.TrimPrefix(parts[0], "CALEOPE_PARAM_"))
+				if _, exists := apiArgs[key]; !exists {
+					apiArgs[key] = parts[1]
+				}
+			}
 		}
 	}
 
@@ -1194,6 +1214,7 @@ Commandes:
     --domain <dom>  Domaine (optionnel — auto: <app>.<domaine_base>)
     --channel       Canal: stable (défaut), latest, nightly
     --force         Forcer la réinstallation
+    --param K=V     Paramètre d'installation (répétable ; ou via env CALEOPE_PARAM_K=V)
 
   configure <app>   Reconfigurer une application (wizard interactif)
                     Exemples : caleope configure arr-stack (VPN)
