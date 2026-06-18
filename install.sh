@@ -563,8 +563,14 @@ api:
 entryPoints:
   web:
     address: ":${PORT_TRAEFIK_HTTP}"
+    http:
+      middlewares:
+        - secure-headers@file
   websecure:
     address: ":${PORT_TRAEFIK_HTTPS}"
+    http:
+      middlewares:
+        - secure-headers@file
 
 providers:
   docker:
@@ -589,6 +595,9 @@ api:
 entryPoints:
   web:
     address: ":${PORT_TRAEFIK_HTTP}"
+    http:
+      middlewares:
+        - secure-headers@file
 
 providers:
   docker:
@@ -621,6 +630,9 @@ entryPoints:
           permanent: true
   websecure:
     address: ":${PORT_TRAEFIK_HTTPS}"
+    http:
+      middlewares:
+        - secure-headers@file
 
 providers:
   docker:
