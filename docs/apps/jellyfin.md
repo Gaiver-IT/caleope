@@ -34,12 +34,25 @@ Jellyfin ne génère pas d'identifiants à l'installation — un wizard de premi
 | **Prometheus + Grafana** | Supervision des ressources |
 | **Bazarr** | Sous-titres automatiques |
 
+## Accélération GPU (transcodage matériel)
+
+Jellyfin supporte le transcodage matériel via le GPU de l'hôte. Passer `--gpu` à l'installation :
+
+```bash
+caleope install jellyfin --gpu
+```
+
+Caleope détecte automatiquement le GPU (NVIDIA ou Intel/AMD) et génère la configuration Docker nécessaire. Dans Jellyfin, activer ensuite le transcodage matériel dans **Tableau de bord → Transcodage**.
+
+> GPU supportés : NVIDIA (via nvidia-container-toolkit), Intel Quick Sync, AMD VA-API
+
 ## Commandes utiles
 
 ```bash
 caleope logs jellyfin        # Voir les logs
 caleope restart jellyfin     # Redémarrer
 caleope backup jellyfin      # Sauvegarder la config
+caleope backup jellyfin --restic --repo /mnt/backup --password <pass>
 ```
 
 ## Accès mobile
