@@ -17,6 +17,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,22 +229,31 @@ func (m *Manager) AllocatePort(appID string, min, max int) (int, error) {
 		return 0, err
 	}
 
-	// Construire un set des ports déjà utilisés
-	// map[int]bool = dictionnaire Go (clé: port, valeur: true si utilisé)
+	// Construire un set des ports déjà utilisés selon ports.json
 	used := make(map[int]bool)
 	for _, p := range ports {
 		used[p] = true
 	}
 
-	// Trouver le premier port libre
+	// Trouver le premier port libre — double vérification système (net.Listen)
+	// pour couvrir les apps installées avant le port tracking ou celles bindées
+	// par d'autres processus hors Caleope.
 	for port := min; port <= max; port++ {
-		if !used[port] {
-			ports[appID] = port
-			if err := m.writePorts(ports); err != nil {
-				return 0, err
-			}
-			return port, nil
+		if used[port] {
+			continue
 		}
+		// Vérifier que le port est vraiment libre sur le système
+		// (couvre les apps sans entrée dans ports.json ou les processus tiers)
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			continue // port déjà bindé
+		}
+		ln.Close()
+		ports[appID] = port
+		if err := m.writePorts(ports); err != nil {
+			return 0, err
+		}
+		return port, nil
 	}
 
 	return 0, fmt.Errorf("aucun port disponible entre %d et %d", min, max)
