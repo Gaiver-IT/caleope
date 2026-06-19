@@ -53,5 +53,6 @@ curl -fsSL https://raw.githubusercontent.com/Gaiver-IT/caleope/main/install.sh |
 
 - [Installation](/installation) — Prérequis, installation, première vérification
 - [Guide utilisateur](/guide) — Toutes les commandes avec exemples
+- [Canal Alpha](/alpha) — Fonctionnalités Brownberry, GPU, Restic, mode standalone
 - [API REST](/api) — Référence complète des routes
-- [Applications disponibles](/apps) — Le catalogue du store
+- [Applications disponibles](/apps) — Le catalogue du store (19 apps)
