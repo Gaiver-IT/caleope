@@ -1020,8 +1020,10 @@ sync_store() {
 
     if [[ -d "${store_dir}/.git" ]]; then
         log_step "Mise à jour du store (branche ${store_branch})..."
-        git -C "${store_dir}" fetch origin
-        git -C "${store_dir}" reset --hard "origin/${store_branch}"
+        # fetch la branche explicitement (nécessaire avec les clones --depth=1 :
+        # un simple "fetch origin" ne crée pas les remote-tracking refs de toutes les branches)
+        git -C "${store_dir}" fetch origin "${store_branch}"
+        git -C "${store_dir}" reset --hard FETCH_HEAD
     else
         log_step "Téléchargement du store depuis GitHub (branche ${store_branch})..."
         git clone --depth=1 --branch "${store_branch}" "${store_url}" "${store_dir}"
