@@ -149,6 +149,9 @@ func (s *Store) gitClone(url, destDir, branch string) error {
 }
 
 func (s *Store) gitPull(repoDir, branch string) error {
+	// fetch la branche explicitement : sur un clone --depth=1, "git fetch origin"
+	// sans argument ne crée pas les remote-tracking refs des autres branches.
+	// On utilise FETCH_HEAD après le fetch pour éviter ce problème.
 	fetch := exec.Command("git", "-C", repoDir, "fetch", "origin", branch)
 	fetch.Stdout = os.Stdout
 	fetch.Stderr = os.Stderr
@@ -156,7 +159,7 @@ func (s *Store) gitPull(repoDir, branch string) error {
 		return fmt.Errorf("git fetch dans %s: %w", repoDir, err)
 	}
 
-	reset := exec.Command("git", "-C", repoDir, "reset", "--hard", "origin/"+branch)
+	reset := exec.Command("git", "-C", repoDir, "reset", "--hard", "FETCH_HEAD")
 	reset.Stdout = os.Stdout
 	reset.Stderr = os.Stderr
 	if err := reset.Run(); err != nil {
