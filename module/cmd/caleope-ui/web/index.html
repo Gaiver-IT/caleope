@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CALEOPE</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.34.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── LOGIN ───────────────────────────────────────────────────────────────── -->
+<div id="login-screen" style="display:none">
+  <div class="grid-bg"></div>
+  <div class="login-box">
+
+    <div class="login-logo">
+      <div class="logo-mark"><i class="ti ti-server-2" aria-hidden="true"></i></div>
+      <div>
+        <div class="logo-name">CALEOPE</div>
+        <div class="logo-ver">CLIENT V0.4.18</div>
+      </div>
+    </div>
+
+    <div class="panel-label">// SERVEURS ENREGISTRÉS</div>
+    <div class="servers-panel">
+      <div class="srv-row selected" id="srv-local">
+        <div class="srv-dot dot-ok"></div>
+        <div class="srv-info">
+          <div class="srv-name" id="srv-host">CE SERVEUR</div>
+          <div class="srv-meta" id="srv-meta">Connexion locale — socket /run/caleoped.sock</div>
+        </div>
+        <div class="srv-badges">
+          <span class="badge badge-ok">EN LIGNE</span>
+        </div>
+        <div class="srv-check"><i class="ti ti-check" aria-hidden="true"></i></div>
+      </div>
+    </div>
+
+    <div class="divider">AUTHENTIFICATION</div>
+
+    <form id="login-form">
+      <div class="fields">
+        <div class="field full">
+          <div class="field-label">MOT DE PASSE UI</div>
+          <input class="field-input" id="login-pw" type="password"
+            placeholder="Mot de passe de l'interface" autocomplete="current-password" required>
+        </div>
+      </div>
+      <div class="login-error" id="login-error"></div>
+      <div class="login-actions">
+        <button type="submit" class="btn btn-vio" id="login-btn">
+          <i class="ti ti-arrow-right"></i>CONNECTER
+        </button>
+      </div>
+    </form>
+
+    <div class="status-bar">
+      <i class="ti ti-shield-check" aria-hidden="true"></i>
+      SESSION COOKIE · HTTPONLY · SAMESITE STRICT · 24H
+    </div>
+  </div>
+</div>
+
+<!-- ── APP ─────────────────────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" role="navigation" aria-label="Navigation principale">
+    <div class="sb-logo">
+      <div class="logo-mark"><i class="ti ti-server-2" aria-hidden="true"></i></div>
+      <div>
+        <div class="logo-name">CALEOPE</div>
+        <div class="logo-ver" id="sb-version">V—</div>
+      </div>
+    </div>
+
+    <div class="sb-nav">
+      <div class="sb-group">// APPS</div>
+      <button class="nav-btn active" data-section="apps" onclick="goSection('apps')">
+        <i class="ti ti-layout-grid" aria-hidden="true"></i>APPLICATIONS
+      </button>
+      <button class="nav-btn" data-section="logs" onclick="goSection('logs')">
+        <i class="ti ti-terminal-2" aria-hidden="true"></i>LOGS
+      </button>
+      <button class="nav-btn" data-section="backups" onclick="goSection('backups')">
+        <i class="ti ti-archive" aria-hidden="true"></i>SAUVEGARDES
+      </button>
+
+      <div class="sb-group">// SYSTÈME</div>
+      <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
+        <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
+      </button>
+      <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
+        <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
+      </button>
+      <button class="nav-btn" data-section="audit" onclick="goSection('audit')">
+        <i class="ti ti-clipboard-list" aria-hidden="true"></i>AUDIT
+      </button>
+      <button class="nav-btn" data-section="stats" onclick="goSection('stats')">
+        <i class="ti ti-chart-bar" aria-hidden="true"></i>SYSTÈME
+      </button>
+      <button class="nav-btn" data-section="settings" onclick="goSection('settings')">
+        <i class="ti ti-settings" aria-hidden="true"></i>PARAMÈTRES
+      </button>
+    </div>
+
+    <div class="sb-foot">
+      <div class="srv-chip">
+        <div class="chip-pulse"></div>
+        <div>
+          <div class="chip-host" id="chip-host">—</div>
+          <div class="chip-ip" id="chip-ip">—</div>
+        </div>
+        <i class="ti ti-chevron-right" style="font-size:11px;color:var(--text3);margin-left:auto" aria-hidden="true"></i>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="topbar">
+      <div class="tb-left">
+        <span id="tb-section" class="tb-section">/01</span>
+        <span class="tb-sep">—</span>
+        <span id="tb-title" class="tb-title">APPLICATIONS</span>
+      </div>
+      <div class="tb-right">
+        <span class="sys-clock" id="clock">--:--:--</span>
+        <button class="btn" onclick="loadCurrentSection()">
+          <i class="ti ti-refresh"></i>
+        </button>
+        <button class="btn btn-vio" id="tb-primary-btn" onclick="openInstallModal(S.catalog[0]?.id)">
+          <i class="ti ti-plus"></i>INSTALLER
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- APPS -->
+      <div id="content-apps" class="section-content" role="main"></div>
+
+      <!-- LOGS -->
+      <div id="content-logs" class="section-content hidden">
+        <div class="log-wrap">
+          <div class="log-toolbar">
+            <select class="log-select" id="log-select" onchange="changeLogApp()"></select>
+            <span style="font-size:9px;color:var(--text3);letter-spacing:.5px">— TAIL 100</span>
+            <button class="btn-sm" style="margin-left:auto" onclick="loadLogs()">
+              <i class="ti ti-refresh"></i>REFRESH
+            </button>
+          </div>
+          <div class="log-body" id="log-body"></div>
+        </div>
+      </div>
+
+      <!-- BACKUPS -->
+      <div id="content-backups" class="section-content hidden"></div>
+
+      <!-- SECRETS -->
+      <div id="content-secrets" class="section-content hidden"></div>
+
+      <!-- LOCATIONS -->
+      <div id="content-locations" class="section-content hidden"></div>
+
+      <!-- AUDIT -->
+      <div id="content-audit" class="section-content hidden"></div>
+
+      <!-- STATS -->
+      <div id="content-stats" class="section-content hidden"></div>
+
+      <!-- SETTINGS -->
+      <div id="content-settings" class="section-content hidden"></div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ── MODAL INSTALL ────────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="install-modal" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-title">
+      INSTALLER — <span id="modal-app-name"></span>
+      <button class="modal-close" onclick="document.getElementById('install-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="modal-params" id="modal-params"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('install-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="confirmInstall()"><i class="ti ti-download"></i>INSTALLER</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── NOTIFICATIONS ────────────────────────────────────────────────────────── -->
+<div class="notif-stack" id="notif-stack" aria-live="polite"></div>
+
+<script src="app.js"></script>
+<script>
+// Helpers exposés globalement depuis main.go
+function loadCurrentSection() { if (SECTIONS[S.section]?.load) SECTIONS[S.section].load(); }
+
+// Récup infos daemon pour sidebar dès auth OK
+async function updateSidebarInfo() {
+  const data = await api.get('/api/v1/ping');
+  if (!data) return;
+  const host = data.domain?.split('.')[0]?.toUpperCase() || 'CALEOPE';
+  document.getElementById('chip-host').textContent = host;
+  document.getElementById('chip-ip').textContent   = data.version ? 'v' + data.version : '—';
+  document.getElementById('sb-version').textContent = data.version ? 'V' + data.version.toUpperCase() : 'V—';
+}
+
+const _showApp = showApp;
+window.showApp = function() {
+  _showApp();
+  updateSidebarInfo();
+};
+</script>
+</body>
+</html>

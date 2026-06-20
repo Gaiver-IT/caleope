@@ -9,6 +9,7 @@
 # Variables
 BINARY_DAEMON  = caleoped
 BINARY_CLI     = caleope
+BINARY_UI      = caleope-ui
 BUILD_DIR      = ./build
 INSTALL_DIR    = /usr/local/bin
 SERVICE_DIR    = /etc/systemd/system
@@ -27,22 +28,24 @@ GO_ENV   = CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 
 .PHONY: build release install uninstall dev clean help
 
-## build : Compiler les deux binaires
+## build : Compiler les trois binaires (daemon, CLI, UI)
 build:
 	@echo "🔨 Compilation..."
 	@mkdir -p $(BUILD_DIR)
 	$(GO_ENV) go build $(GO_FLAGS) -o $(BUILD_DIR)/$(BINARY_DAEMON) ./cmd/caleoped/
 	$(GO_ENV) go build $(GO_FLAGS) -o $(BUILD_DIR)/$(BINARY_CLI)    ./cmd/caleope/
+	$(GO_ENV) go build $(GO_FLAGS) -o $(BUILD_DIR)/$(BINARY_UI)     ./cmd/caleope-ui/
 	@echo "✅ Binaires dans $(BUILD_DIR)/"
 	@ls -lh $(BUILD_DIR)/
 
 ## install : Installer sur le système (nécessite sudo)
 install: build
 	@echo "📦 Installation..."
-	
+
 	# Installer les binaires
 	install -m 755 $(BUILD_DIR)/$(BINARY_DAEMON) $(INSTALL_DIR)/
 	install -m 755 $(BUILD_DIR)/$(BINARY_CLI)    $(INSTALL_DIR)/
+	install -m 755 $(BUILD_DIR)/$(BINARY_UI)     $(INSTALL_DIR)/
 	
 	# Créer la structure de répertoires
 	mkdir -p $(BASE_DIR)/{core/{daemon,api,store,runtime,cache},apps-store,apps-installed,app-config,app-data,runtime/{apps,events},backups,logs}
@@ -65,10 +68,14 @@ install: build
 uninstall:
 	@echo "🗑️  Désinstallation..."
 	-systemctl stop caleoped
+	-systemctl stop caleope-ui
 	-systemctl disable caleoped
+	-systemctl disable caleope-ui
 	rm -f $(INSTALL_DIR)/$(BINARY_DAEMON)
 	rm -f $(INSTALL_DIR)/$(BINARY_CLI)
+	rm -f $(INSTALL_DIR)/$(BINARY_UI)
 	rm -f $(SERVICE_DIR)/caleoped.service
+	rm -f $(SERVICE_DIR)/caleope-ui.service
 	systemctl daemon-reload
 	@echo "⚠️  Les données dans $(BASE_DIR)/ sont conservées."
 	@echo "   Supprimez manuellement si nécessaire : sudo rm -rf $(BASE_DIR)"
@@ -79,6 +86,7 @@ release: build
 	@mkdir -p $(BUILD_DIR)/release
 	cp $(BUILD_DIR)/$(BINARY_DAEMON) $(BUILD_DIR)/release/$(BINARY_DAEMON)-linux-amd64
 	cp $(BUILD_DIR)/$(BINARY_CLI)    $(BUILD_DIR)/release/$(BINARY_CLI)-linux-amd64
+	cp $(BUILD_DIR)/$(BINARY_UI)     $(BUILD_DIR)/release/$(BINARY_UI)-linux-amd64
 	@echo ""
 	@echo "✅ Binaires prêts dans $(BUILD_DIR)/release/ :"
 	@ls -lh $(BUILD_DIR)/release/
