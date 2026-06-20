@@ -171,19 +171,24 @@ func (i *Installer) Install(opts InstallOptions) error {
 		return err
 	}
 
-	// ── Étape 6 : Exécution setup.sh ──
-	fmt.Println("  [6/12] Exécution setup.sh...")
-	if err := i.runSetup(ctx, appDir, composeDir, manifest, opts); err != nil {
-		return err
-	}
-
-	// ── Étapes 7-10 : Docker (skippées pour les apps no_container) ──
+	// ── Étapes 6-10 : Docker (skippées pour les apps no_container) ──
 	if manifest.NoContainer {
-		fmt.Println("  [7-10/12] Skipping Docker (outil système sans container)...")
+		fmt.Println("  [6-10/12] Skipping Docker (outil système sans container)...")
+		// setup.sh tourne quand même pour les outils système (config, clés…)
+		fmt.Println("  [6/12] Exécution setup.sh...")
+		if err := i.runSetup(ctx, appDir, composeDir, manifest, opts); err != nil {
+			return err
+		}
 	} else {
-		// ── Étape 7 : Génération compose final ──
-		fmt.Println("  [7/12] Génération du compose...")
+		// ── Étape 6 : Génération compose (avant setup.sh pour que setup.sh puisse le patcher) ──
+		fmt.Println("  [6/12] Génération du compose...")
 		if err := i.generateCompose(appDir, composeDir, manifest, opts); err != nil {
+			return err
+		}
+
+		// ── Étape 7 : Exécution setup.sh (peut modifier le compose généré) ──
+		fmt.Println("  [7/12] Exécution setup.sh...")
+		if err := i.runSetup(ctx, appDir, composeDir, manifest, opts); err != nil {
 			return err
 		}
 
