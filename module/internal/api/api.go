@@ -846,10 +846,10 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	// Choisir l'endpoint GitHub selon le canal
 	// stable → /releases/latest (ignore les pré-releases)
-	// alpha  → /releases?per_page=1 (inclut les pré-releases, plus récent en premier)
+	// alpha  → /releases?per_page=20, filtré sur prerelease:true
 	var apiURL string
 	if channel == "alpha" {
-		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases?per_page=1"
+		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases?per_page=20"
 	} else {
 		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases/latest"
 	}
@@ -862,14 +862,31 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	// Parser le JSON de la release (format différent selon le canal)
 	type releaseInfo struct {
-		TagName string `json:"tag_name"`
-		HTMLURL string `json:"html_url"`
+		TagName    string `json:"tag_name"`
+		HTMLURL    string `json:"html_url"`
+		Prerelease bool   `json:"prerelease"`
 	}
 	var release releaseInfo
 	if channel == "alpha" {
 		var releases []releaseInfo
-		if err := json.Unmarshal(out, &releases); err != nil || len(releases) == 0 {
+		if err := json.Unmarshal(out, &releases); err != nil {
 			return nil, fmt.Errorf("réponse GitHub invalide (canal alpha): %w", err)
+		}
+		// Prendre uniquement la première pre-release — évite de rétrogader vers une release stable
+		found := false
+		for _, r := range releases {
+			if r.Prerelease {
+				release = r
+				found = true
+				break
+			}
+		}
+		if !found {
+			return map[string]string{
+				"status":  "up_to_date",
+				"version": version.Version,
+				"message": "Aucune pré-release alpha disponible sur GitHub",
+			}, nil
 		}
 		release = releases[0]
 	} else {
