@@ -118,45 +118,45 @@ func (s *Store) ReadParams(appDir string) ([]types.ParamDef, error) {
 
 // SyncRepo synchronise un dépôt Git local.
 // Si le cache n'existe pas → git clone
-// Si le cache existe → git pull
+// Si le cache existe → git fetch + reset --hard
 func (s *Store) SyncRepo(repo *types.Repo) error {
-	// Créer le dossier parent si besoin
 	if err := os.MkdirAll(filepath.Dir(repo.LocalDir), 0755); err != nil {
 		return err
 	}
 
-	// Vérifier si le repo est déjà cloné
-	if _, err := os.Stat(filepath.Join(repo.LocalDir, ".git")); os.IsNotExist(err) {
-		// Premier clone
-		fmt.Printf("→ Clonage du dépôt %s...\n", repo.Name)
-		return s.gitClone(repo.URL, repo.LocalDir)
+	branch := repo.Branch
+	if branch == "" {
+		branch = "main"
 	}
 
-	// Mise à jour
-	fmt.Printf("→ Synchronisation du dépôt %s...\n", repo.Name)
-	return s.gitPull(repo.LocalDir)
+	if _, err := os.Stat(filepath.Join(repo.LocalDir, ".git")); os.IsNotExist(err) {
+		fmt.Printf("→ Clonage du dépôt %s (branche %s)...\n", repo.Name, branch)
+		return s.gitClone(repo.URL, repo.LocalDir, branch)
+	}
+
+	fmt.Printf("→ Synchronisation du dépôt %s (branche %s)...\n", repo.Name, branch)
+	return s.gitPull(repo.LocalDir, branch)
 }
 
-func (s *Store) gitClone(url, destDir string) error {
-	cmd := exec.Command("git", "clone", "--depth=1", url, destDir)
+func (s *Store) gitClone(url, destDir, branch string) error {
+	cmd := exec.Command("git", "clone", "--depth=1", "--branch", branch, url, destDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git clone %s: %w", url, err)
+		return fmt.Errorf("git clone %s (branch %s): %w", url, branch, err)
 	}
 	return nil
 }
 
-func (s *Store) gitPull(repoDir string) error {
-	// fetch + reset --hard : le cache est en lecture seule, on écrase toujours les modifs locales
-	fetch := exec.Command("git", "-C", repoDir, "fetch", "origin")
+func (s *Store) gitPull(repoDir, branch string) error {
+	fetch := exec.Command("git", "-C", repoDir, "fetch", "origin", branch)
 	fetch.Stdout = os.Stdout
 	fetch.Stderr = os.Stderr
 	if err := fetch.Run(); err != nil {
 		return fmt.Errorf("git fetch dans %s: %w", repoDir, err)
 	}
 
-	reset := exec.Command("git", "-C", repoDir, "reset", "--hard", "origin/main")
+	reset := exec.Command("git", "-C", repoDir, "reset", "--hard", "origin/"+branch)
 	reset.Stdout = os.Stdout
 	reset.Stderr = os.Stderr
 	if err := reset.Run(); err != nil {

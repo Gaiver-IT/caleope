@@ -241,4 +241,5 @@ type Repo struct {
 	Trust    TrustLevel `json:"trust"`
 	LocalDir string     `json:"local_dir"` // chemin du cache local
 	LastSync time.Time  `json:"last_sync"`
+	Branch   string     `json:"branch,omitempty"` // branche git (défaut : "main")
 }

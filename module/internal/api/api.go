@@ -546,10 +546,32 @@ func (s *Server) handleUpdate(args map[string]string) error {
 	if err != nil {
 		return err
 	}
+
+	// Si channel=alpha est explicitement demandé, forcer la branche alpha sur tous les repos officiels.
+	// Sinon lire le canal depuis caleope.conf pour les repos sans branche explicite.
+	channel := ""
+	if args != nil {
+		channel = args["channel"]
+	}
+	if channel == "" {
+		if cfg, err := s.rt.GetConfig(); err == nil {
+			channel = cfg.Channel
+		}
+	}
+
 	var syncErr error
 	for i := range repos {
-		if err := s.st.SyncRepo(&repos[i]); err != nil {
-			fmt.Printf("⚠️  Erreur sync repo %s: %v\n", repos[i].Name, err)
+		r := &repos[i]
+		if r.Branch == "" {
+			switch channel {
+			case "alpha":
+				r.Branch = "alpha"
+			default:
+				r.Branch = "main"
+			}
+		}
+		if err := s.st.SyncRepo(r); err != nil {
+			fmt.Printf("⚠️  Erreur sync repo %s: %v\n", r.Name, err)
 			syncErr = err
 		}
 	}

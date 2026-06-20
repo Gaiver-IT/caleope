@@ -1160,8 +1160,18 @@ func cmdBackupList(args []string) {
 }
 
 func cmdUpdate(args []string) {
-	fmt.Println("🔄 Synchronisation des dépôts...")
-	resp := callDaemon("update", nil)
+	apiArgs := map[string]string{}
+	for _, a := range args {
+		if a == "--alpha" {
+			apiArgs["channel"] = "alpha"
+		}
+	}
+	if apiArgs["channel"] == "alpha" {
+		fmt.Println("🔄 Synchronisation des dépôts (canal alpha)...")
+	} else {
+		fmt.Println("🔄 Synchronisation des dépôts...")
+	}
+	resp := callDaemon("update", apiArgs)
 	if !resp.Success {
 		die("❌ " + resp.Error)
 	}
@@ -1364,7 +1374,8 @@ Commandes:
   location mount <n>    Monter un emplacement
   location unmount <n>  Démonter un emplacement
 
-  update            Synchroniser les dépôts Git
+  update            Synchroniser les dépôts Git (branche main)
+    --alpha         Synchroniser depuis la branche alpha du store
   upgrade           Mettre à jour Caleope vers la dernière version
     --check         Vérifier sans installer
   token             Afficher le token d'accès à l'API REST (:8765)
