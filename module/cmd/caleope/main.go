@@ -161,6 +161,80 @@ func cmdInstall(args []string) {
 		}
 	}
 
+	// Collecter les params requis manquants via prompt interactif (terminal seulement)
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		paramsResp := callDaemon("store-params", map[string]string{"app": args[0]})
+		if paramsResp.Success {
+			if paramDefs, ok := paramsResp.Data.([]interface{}); ok && len(paramDefs) > 0 {
+				r := bufio.NewReader(os.Stdin)
+				needHeader := true
+				for _, raw := range paramDefs {
+					def, ok := raw.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					id, _ := def["id"].(string)
+					if id == "" {
+						continue
+					}
+					paramKey := "param_" + strings.ToLower(id)
+					if _, alreadySet := apiArgs[paramKey]; alreadySet {
+						continue
+					}
+					required, _ := def["required"].(bool)
+					defaultVal, _ := def["default"].(string)
+					if !required && defaultVal != "" {
+						continue
+					}
+					if needHeader {
+						fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+						fmt.Printf("  Paramètres de configuration pour '%s'\n", args[0])
+						fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+						needHeader = false
+					}
+					label, _ := def["label"].(string)
+					desc, _ := def["description"].(string)
+					ptype, _ := def["type"].(string)
+					if desc != "" {
+						fmt.Printf("\n  %s\n  (%s)\n", label, desc)
+					} else {
+						fmt.Printf("\n  %s\n", label)
+					}
+					var val string
+					for {
+						if defaultVal != "" {
+							fmt.Printf("  Valeur [%s] : ", defaultVal)
+						} else {
+							fmt.Printf("  Valeur : ")
+						}
+						var line string
+						if ptype == "secret" {
+							b, err := term.ReadPassword(int(os.Stdin.Fd()))
+							fmt.Println()
+							if err == nil {
+								line = strings.TrimSpace(string(b))
+							}
+						} else {
+							line, _ = r.ReadString('\n')
+							line = strings.TrimSpace(line)
+						}
+						if line == "" {
+							line = defaultVal
+						}
+						if line != "" || !required {
+							val = line
+							break
+						}
+						fmt.Println("  ❌ Ce paramètre est obligatoire.")
+					}
+					if val != "" {
+						apiArgs[paramKey] = val
+					}
+				}
+			}
+		}
+	}
+
 	if storage, ok := apiArgs["storage"]; ok && storage != "" {
 		fmt.Printf("📦 Installation de '%s' (données sur NAS '%s')...\n", args[0], storage)
 	} else {
