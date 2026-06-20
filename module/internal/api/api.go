@@ -834,9 +834,12 @@ func isClosedError(err error) bool {
 }
 
 func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
-	// Déterminer le canal (stable ou alpha) depuis caleope.conf
-	cfg, _ := s.rt.GetConfig()
-	channel := cfg.Channel
+	// Canal : arg explicite > caleope.conf > stable
+	channel := args["channel"]
+	if channel == "" {
+		cfg, _ := s.rt.GetConfig()
+		channel = cfg.Channel
+	}
 	if channel == "" {
 		channel = "stable"
 	}

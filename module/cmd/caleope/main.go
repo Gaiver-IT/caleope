@@ -1180,6 +1180,7 @@ func cmdUpdate(args []string) {
 
 func cmdUpgrade(args []string) {
 	checkOnly := contains(args, "--check")
+	useAlpha := contains(args, "--alpha")
 
 	if checkOnly {
 		fmt.Println("🔍 Vérification des mises à jour...")
@@ -1191,6 +1192,9 @@ func cmdUpgrade(args []string) {
 	apiArgs := map[string]string{}
 	if checkOnly {
 		apiArgs["check"] = "true"
+	}
+	if useAlpha {
+		apiArgs["channel"] = "alpha"
 	}
 
 	resp := callDaemon("upgrade", apiArgs)
@@ -1378,6 +1382,7 @@ Commandes:
     --alpha         Synchroniser depuis la branche alpha du store
   upgrade           Mettre à jour Caleope vers la dernière version
     --check         Vérifier sans installer
+    --alpha         Installer la dernière pré-release alpha
   token             Afficher le token d'accès à l'API REST (:8765)
   version           Afficher la version installée
   ping              Vérifier que le daemon est actif
