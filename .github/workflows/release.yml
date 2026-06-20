@@ -1,0 +1,82 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main, alpha]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: module/go.mod
+          cache-dependency-path: module/go.sum
+
+      - name: Déterminer version et canal
+        id: meta
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          if [[ "${BRANCH}" == "alpha" ]]; then
+            VERSION="alpha-${SHORT_SHA}"
+            TAG="alpha-latest"
+            PRERELEASE="true"
+            TITLE="Caleope alpha (${SHORT_SHA})"
+          else
+            # main : lire la version depuis version.go ou git tag
+            VERSION=$(grep 'Version = ' module/pkg/version/version.go | sed 's/.*"\(.*\)".*/\1/' | tr -d ' ')
+            [[ "${VERSION}" == "dev" || -z "${VERSION}" ]] && VERSION="v0.0.0"
+            TAG="${VERSION}"
+            PRERELEASE="false"
+            TITLE="Caleope ${VERSION}"
+          fi
+
+          echo "version=${VERSION}"    >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"            >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}"        >> "$GITHUB_OUTPUT"
+
+      - name: Build binaires linux/amd64
+        working-directory: module
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          COMMIT="${GITHUB_SHA::7}"
+          LDFLAGS="-s -w -X github.com/gaiver-it/caleope/pkg/version.Version=${VERSION} -X github.com/gaiver-it/caleope/pkg/version.Commit=${COMMIT}"
+
+          go build -ldflags "${LDFLAGS}" -o ../dist/caleoped-linux-amd64 ./cmd/caleoped/
+          go build -ldflags "${LDFLAGS}" -o ../dist/caleope-linux-amd64  ./cmd/caleope/
+
+      - name: Créer ou mettre à jour la release GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          TITLE="${{ steps.meta.outputs.title }}"
+          PRERELEASE="${{ steps.meta.outputs.prerelease }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+
+          # Supprimer l'ancienne release et tag si c'est alpha-latest (rolling)
+          if [[ "${TAG}" == "alpha-latest" ]]; then
+            gh release delete "${TAG}" --yes 2>/dev/null || true
+            git push origin ":refs/tags/${TAG}" 2>/dev/null || true
+          fi
+
+          FLAGS="--title ${TITLE} --notes-file /dev/null"
+          [[ "${PRERELEASE}" == "true" ]] && FLAGS="${FLAGS} --prerelease"
+
+          gh release create "${TAG}" ${FLAGS} \
+            dist/caleoped-linux-amd64 \
+            dist/caleope-linux-amd64
