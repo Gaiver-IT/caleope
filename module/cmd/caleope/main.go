@@ -1291,9 +1291,18 @@ func readPassword() (string, error) {
 }
 
 // callDaemon envoie une requête au daemon et retourne la réponse.
+// Réessaie jusqu'à 10 fois (3 s) si le socket n'est pas encore disponible
+// — absorbe la race condition entre `systemctl restart` et la première commande.
 func callDaemon(command string, args map[string]string) types.APIResponse {
-	// Se connecter au socket UNIX
-	conn, err := net.Dial("unix", SOCKET_PATH)
+	var conn net.Conn
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		conn, err = net.Dial("unix", SOCKET_PATH)
+		if err == nil {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Impossible de contacter le daemon.\n")
 		fmt.Fprintf(os.Stderr, "   Vérifiez que caleoped tourne : systemctl status caleoped\n")
