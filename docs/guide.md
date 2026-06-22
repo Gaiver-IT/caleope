@@ -267,6 +267,33 @@ Ces apps sont visibles dans `caleope list` mais `caleope start/stop` ne s'appliq
 
 ---
 
+## Mode submarine (hors-ligne)
+
+Le mode submarine permet d'installer ou mettre à jour Caleope sans accès internet.
+
+### Créer un bundle
+
+```bash
+caleope offline-pack /media/usb/
+# → crée /media/usb/caleope-bundle-2026-06-22/ avec binaires, store et images Docker
+```
+
+### Mettre à jour une installation existante
+
+```bash
+caleope offline-update /media/usb/caleope-bundle-2026-06-22
+sudo systemctl restart caleoped caleope-ui
+```
+
+| Commande | Description |
+|----------|-------------|
+| `caleope offline-pack <dest>` | Créer un bundle d'installation offline |
+| `caleope offline-update <bundle>` | Appliquer un bundle sur une installation existante |
+
+→ [Documentation complète du mode submarine](/submarine)
+
+---
+
 ## API REST
 
 L'API REST écoute sur le port **8765**.

@@ -102,6 +102,24 @@ Caleope s'installe dans `/opt/gaiver-it/caleope/` :
 
 ---
 
+## Installation hors-ligne (mode submarine)
+
+Pour installer Caleope **sans accès internet** (réseau isolé, clé USB, air-gap) :
+
+```bash
+# 1. Sur une machine connectée, créer un bundle
+caleope offline-pack /media/usb/
+
+# 2. Sur le serveur hors-ligne, lancer l'installation
+sudo bash install.sh --offline /media/usb/caleope-bundle-2026-06-22
+```
+
+> Docker doit être installé avant de lancer l'installation offline.
+
+→ [Documentation complète du mode submarine](/submarine)
+
+---
+
 ## Mises à jour
 
 ```bash
