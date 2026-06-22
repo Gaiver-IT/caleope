@@ -1401,10 +1401,10 @@ Commandes:
   ping              Vérifier que le daemon est actif
 
 Mode submarine (installation hors-ligne) :
-  offline-pack <dest>     Créer un bundle d'installation offline dans <dest>/
-                          Contient : binaires, store, images Docker
-  offline-update <bundle> Appliquer un bundle sur une installation existante
-  Installation offline :  sudo bash install.sh --offline <bundle-path>
+  offline-pack <dest>              Créer un bundle dans <dest>/ (binaires + store + images Docker)
+  offline-pack <dest> --no-images  Bundle sans images Docker (binaires + store uniquement)
+  offline-update <bundle>          Appliquer un bundle sur une installation existante
+  Installation offline :           sudo bash install.sh --offline <bundle-path>
 
 Exemples:
   caleope install jellyfin --domain media.home.local

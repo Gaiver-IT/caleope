@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gaiver-it/caleope/pkg/version"
@@ -17,26 +18,36 @@ import (
 
 // cmdOfflinePack crée un bundle d'installation offline.
 //
-// Usage : caleope offline-pack <dest>
+// Usage : caleope offline-pack <dest> [--no-images]
 //
 // Structure du bundle créé :
 //
 //	caleope-bundle-YYYY-MM-DD/
 //	  binaries/        caleoped, caleope, caleope-ui
 //	  store.tar.gz     archive du store officiel local
-//	  images/          images Docker sauvegardées (.tar)
+//	  images/          images Docker sauvegardées (.tar)  — sauf si --no-images
 //	  caleope-completion.bash
 //	  pack-info.json   métadonnées (version, date, arch)
 func cmdOfflinePack(args []string) {
 	if len(args) < 1 {
-		die("Usage : caleope offline-pack <destination>\n\nCrée un bundle d'installation offline dans le répertoire spécifié.")
+		die("Usage : caleope offline-pack <destination> [--no-images]\n\nCrée un bundle d'installation offline dans le répertoire spécifié.\n\nOptions :\n  --no-images   Inclure uniquement les binaires et le store (sans images Docker)")
 	}
 
 	dest := args[0]
+	noImages := false
+	for _, a := range args[1:] {
+		if a == "--no-images" {
+			noImages = true
+		}
+	}
+
 	bundleName := "caleope-bundle-" + time.Now().Format("2006-01-02")
 	bundleDir := filepath.Join(dest, bundleName)
 
 	fmt.Printf("📦 Création du bundle submarine dans %s\n\n", bundleDir)
+	if noImages {
+		fmt.Printf("   Mode : binaires + store uniquement (--no-images)\n\n")
+	}
 
 	if err := os.MkdirAll(bundleDir, 0755); err != nil {
 		die("Impossible de créer le répertoire du bundle : " + err.Error())
@@ -52,16 +63,18 @@ func cmdOfflinePack(args []string) {
 		fmt.Fprintf(os.Stderr, "⚠  Store : %v — ignoré\n", err)
 	}
 
-	packStep("Sauvegarde des images Docker")
-	if err := packDockerImages(bundleDir); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠  Images Docker : %v — ignoré\n", err)
+	if !noImages {
+		packStep("Sauvegarde des images Docker")
+		if err := packDockerImages(bundleDir); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠  Images Docker : %v — ignoré\n", err)
+		}
 	}
 
 	packStep("Copie des scripts")
 	copyCompletionScript(bundleDir)
 
 	packStep("Écriture de pack-info.json")
-	if err := writePackInfo(bundleDir); err != nil {
+	if err := writePackInfo(bundleDir, noImages); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠  pack-info.json : %v\n", err)
 	}
 
@@ -208,7 +221,7 @@ func packDockerImages(bundleDir string) error {
 		return err
 	}
 
-	// Collecter toutes les images Docker locales (filtre sur les images Caleope + core)
+	// Collecter toutes les images Docker locales
 	out, err := exec.Command("docker", "images", "--format", "{{.Repository}}:{{.Tag}}").Output()
 	if err != nil {
 		return fmt.Errorf("docker images inaccessible : %w", err)
@@ -220,14 +233,39 @@ func packDockerImages(bundleDir string) error {
 		return nil
 	}
 
-	saved := 0
+	// Filtrer les images valides
+	var images []string
 	for _, img := range lines {
 		img = strings.TrimSpace(img)
 		if img == "" || strings.HasSuffix(img, ":<none>") || strings.HasPrefix(img, "<none>") {
 			continue
 		}
+		images = append(images, img)
+	}
 
-		// Nom de fichier sûr : remplace "/" et ":" par "_"
+	// Estimation de la taille totale via docker inspect
+	totalBytes := estimateDockerImagesSize(images)
+	if totalBytes > 0 {
+		fmt.Printf("     ℹ  %d image(s) — taille estimée : %s\n", len(images), formatSize(totalBytes))
+	}
+
+	// Vérification de l'espace disque disponible sur la destination
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(imagesDir, &st); err == nil {
+		available := int64(st.Bavail) * int64(st.Bsize)
+		if totalBytes > 0 && available < totalBytes {
+			fmt.Fprintf(os.Stderr, "     ⚠  Espace insuffisant : %s disponible, ~%s requis\n",
+				formatSize(available), formatSize(totalBytes))
+			fmt.Fprintf(os.Stderr, "        Utilise caleope offline-pack --no-images pour un bundle sans images\n")
+			fmt.Fprintf(os.Stderr, "        ou choisis une destination avec plus d'espace disque.\n")
+		} else if available < 2*1024*1024*1024 {
+			fmt.Fprintf(os.Stderr, "     ⚠  Attention : seulement %s disponible sur la destination\n", formatSize(available))
+		}
+	}
+
+	saved := 0
+	failed := 0
+	for _, img := range images {
 		safe := strings.NewReplacer("/", "_", ":", "_").Replace(img)
 		tarPath := filepath.Join(imagesDir, safe+".tar")
 
@@ -235,14 +273,51 @@ func packDockerImages(bundleDir string) error {
 		cmd := exec.Command("docker", "save", "-o", tarPath, img)
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "     ⚠  échec pour %s : %v\n", img, err)
+			fmt.Fprintf(os.Stderr, "     ✗  échec %s : %v\n", img, err)
+			// Nettoyer le fichier partiel laissé par docker save
+			os.Remove(tarPath)
+			failed++
 			continue
+		}
+		stat, _ := os.Stat(tarPath)
+		if stat != nil {
+			fmt.Printf("     ✔  %s (%s)\n", img, formatSize(stat.Size()))
 		}
 		saved++
 	}
 
-	fmt.Printf("     ✔  %d image(s) sauvegardée(s)\n", saved)
+	if failed > 0 {
+		fmt.Printf("     ⚠  %d image(s) sauvegardée(s), %d échec(s)\n", saved, failed)
+		fmt.Printf("        Pour un bundle complet, utilise une destination avec plus d'espace,\n")
+		fmt.Printf("        ou passe --no-images pour exclure les images Docker.\n")
+	} else {
+		fmt.Printf("     ✔  %d image(s) sauvegardée(s)\n", saved)
+	}
 	return nil
+}
+
+// estimateDockerImagesSize retourne la taille totale estimée (non compressée) de la liste d'images.
+// Utilise docker inspect pour récupérer la taille de chaque image.
+func estimateDockerImagesSize(images []string) int64 {
+	if len(images) == 0 {
+		return 0
+	}
+	args := append([]string{"inspect", "--format", "{{.Size}}"}, images...)
+	out, err := exec.Command("docker", args...).Output()
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var n int64
+		fmt.Sscanf(line, "%d", &n)
+		total += n
+	}
+	return total
 }
 
 func copyCompletionScript(bundleDir string) {
@@ -255,9 +330,14 @@ func copyCompletionScript(bundleDir string) {
 	fmt.Printf("     ✔  caleope-completion.bash\n")
 }
 
-func writePackInfo(bundleDir string) error {
+func writePackInfo(bundleDir string, noImages bool) error {
 	arch, _ := exec.Command("uname", "-m").Output()
 	hostname, _ := os.Hostname()
+
+	includes := "binaries,store,images"
+	if noImages {
+		includes = "binaries,store"
+	}
 
 	info := map[string]string{
 		"caleope_version": version.Version,
@@ -265,6 +345,7 @@ func writePackInfo(bundleDir string) error {
 		"arch":            strings.TrimSpace(string(arch)),
 		"hostname":        hostname,
 		"bundle_dir":      bundleDir,
+		"includes":        includes,
 	}
 
 	f, err := os.Create(filepath.Join(bundleDir, "pack-info.json"))
