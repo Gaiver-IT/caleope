@@ -94,6 +94,10 @@ func main() {
 		cmdPing()
 	case "token":
 		cmdToken()
+	case "offline-pack":
+		cmdOfflinePack(args)
+	case "offline-update":
+		cmdOfflineUpdate(args)
 	case "help", "--help", "-h":
 		printHelp()
 	default:
@@ -1395,6 +1399,12 @@ Commandes:
   token             Afficher le token d'accès à l'API REST (:8765)
   version           Afficher la version installée
   ping              Vérifier que le daemon est actif
+
+Mode submarine (installation hors-ligne) :
+  offline-pack <dest>     Créer un bundle d'installation offline dans <dest>/
+                          Contient : binaires, store, images Docker
+  offline-update <bundle> Appliquer un bundle sur une installation existante
+  Installation offline :  sudo bash install.sh --offline <bundle-path>
 
 Exemples:
   caleope install jellyfin --domain media.home.local

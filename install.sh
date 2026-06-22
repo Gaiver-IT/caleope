@@ -17,13 +17,26 @@ export PATH="/usr/sbin:/sbin:/usr/bin:/bin:/usr/local/bin:${PATH}"
 # =============================================================================
 
 LOG_MODE="classic"
+OFFLINE_MODE=false
+OFFLINE_BUNDLE_PATH=""
 
 parse_args() {
-    for arg in "$@"; do
+    local i=1
+    while [[ $i -le $# ]]; do
+        local arg="${!i}"
         case $arg in
             --debug)   LOG_MODE="debug"   ;;
             --classic) LOG_MODE="classic" ;;
+            --offline)
+                OFFLINE_MODE=true
+                i=$((i + 1))
+                [[ $i -le $# ]] && OFFLINE_BUNDLE_PATH="${!i}" || {
+                    echo "Erreur : --offline requiert un chemin vers le bundle" >&2
+                    exit 1
+                }
+                ;;
         esac
+        i=$((i + 1))
     done
 }
 
@@ -102,6 +115,60 @@ run_cmd() {
     else
         "$@" &>/dev/null
     fi
+}
+
+# =============================================================================
+# MODE SUBMARINE (OFFLINE)
+# =============================================================================
+
+check_offline_bundle() {
+    [[ "${OFFLINE_MODE}" != "true" ]] && return 0
+
+    log_section "Mode submarine — vérification du bundle"
+
+    [[ -z "${OFFLINE_BUNDLE_PATH}" ]] && log_error "--offline requiert un chemin vers le bundle"
+    [[ ! -d "${OFFLINE_BUNDLE_PATH}" ]] && log_error "Bundle introuvable : ${OFFLINE_BUNDLE_PATH}"
+
+    local required=("binaries/caleoped" "binaries/caleope" "store.tar.gz")
+    for f in "${required[@]}"; do
+        [[ -f "${OFFLINE_BUNDLE_PATH}/${f}" ]] || log_error "Fichier manquant dans le bundle : ${f}"
+    done
+
+    # Lire et afficher les métadonnées du bundle
+    if [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]]; then
+        local pack_version pack_date
+        pack_version=$(jq -r '.caleope_version // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        pack_date=$(jq -r '.packed_at // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        log_success "Bundle valide — version ${pack_version} (empaqueté le ${pack_date})"
+    else
+        log_warning "pack-info.json absent — bundle non versionné"
+    fi
+}
+
+load_docker_images_from_bundle() {
+    [[ "${OFFLINE_MODE}" != "true" ]] && return 0
+
+    local images_dir="${OFFLINE_BUNDLE_PATH}/images"
+    [[ ! -d "${images_dir}" ]] && { log_warning "Aucun répertoire images/ dans le bundle — images ignorées"; return 0; }
+
+    local tars
+    tars=$(find "${images_dir}" -maxdepth 1 -name "*.tar" 2>/dev/null)
+    [[ -z "${tars}" ]] && { log_warning "Aucune image Docker dans le bundle"; return 0; }
+
+    log_section "Chargement des images Docker (mode submarine)"
+    local count=0
+    while IFS= read -r tar_file; do
+        local name
+        name=$(basename "${tar_file}" .tar)
+        log_step "Chargement de ${name}..."
+        if docker load -i "${tar_file}" &>/dev/null; then
+            log_success "${name} chargée"
+            count=$((count + 1))
+        else
+            log_warning "Échec du chargement de ${name}"
+        fi
+    done <<< "${tars}"
+    log_success "${count} image(s) Docker chargée(s) depuis le bundle"
 }
 
 # =============================================================================
@@ -299,8 +366,13 @@ check_user() {
 
 install_prerequisites() {
     log_section "Prérequis système"
-    log_step "Mise à jour des paquets..."
-    run_cmd apt-get update
+
+    if [[ "${OFFLINE_MODE}" != "true" ]]; then
+        log_step "Mise à jour des paquets..."
+        run_cmd apt-get update
+    else
+        log_warning "Mode submarine : apt-get update ignoré (pas d'accès réseau)"
+    fi
 
     log_step "Installation des outils de base..."
     run_cmd apt-get install -y \
@@ -326,7 +398,12 @@ install_docker() {
 
     if command -v docker &>/dev/null; then
         log_warning "Docker déjà installé : $(docker --version)"
+        usermod -aG docker "${CALEOPE_USER}" 2>/dev/null || true
         return 0
+    fi
+
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        log_error "Mode submarine : Docker n'est pas installé. Installe Docker avant de lancer l'installation offline (apt-get install docker-ce depuis un dépôt local ou via dpkg)."
     fi
 
     log_step "Suppression des anciennes versions..."
@@ -383,7 +460,35 @@ create_docker_networks() {
 install_caleope_binaries() {
     log_section "Binaires Caleope (caleoped + caleope)"
 
-    download_binaries_from_release || log_error "Impossible de télécharger les binaires Caleope depuis GitHub. Vérifie ta connexion ou https://github.com/${GITHUB_REPO}/releases"
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        install_binaries_from_bundle
+    else
+        download_binaries_from_release || log_error "Impossible de télécharger les binaires Caleope depuis GitHub. Vérifie ta connexion ou https://github.com/${GITHUB_REPO}/releases"
+    fi
+}
+
+install_binaries_from_bundle() {
+    local bin_dir="${OFFLINE_BUNDLE_PATH}/binaries"
+    log_step "Copie des binaires depuis le bundle..."
+
+    cp "${bin_dir}/caleoped" /usr/local/bin/caleoped
+    cp "${bin_dir}/caleope"  /usr/local/bin/caleope
+    chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope
+
+    if [[ -f "${bin_dir}/caleope-ui" ]]; then
+        cp "${bin_dir}/caleope-ui" /usr/local/bin/caleope-ui
+        chmod 755 /usr/local/bin/caleope-ui
+        log_debug "Binaire caleope-ui copié"
+    else
+        log_warning "caleope-ui absent du bundle — interface web non disponible"
+    fi
+
+    ln -sf /usr/local/bin/caleope /usr/local/bin/caleope-store
+
+    local pack_ver="?"
+    [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]] && \
+        pack_ver=$(jq -r '.caleope_version // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+    log_success "Binaires installés depuis le bundle (version ${pack_ver})"
 }
 
 download_binaries_from_release() {
@@ -447,11 +552,21 @@ download_binaries_from_release() {
 install_bash_completion() {
     log_section "Autocomplétion bash"
 
-    local completion_url="${GITHUB_RAW}/module/scripts/caleope-completion.bash"
     local completion_dest="/etc/bash_completion.d/caleope"
-
     log_step "Installation du script d'autocomplétion..."
 
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        if [[ -f "${OFFLINE_BUNDLE_PATH}/caleope-completion.bash" ]]; then
+            cp "${OFFLINE_BUNDLE_PATH}/caleope-completion.bash" "${completion_dest}"
+            chmod 644 "${completion_dest}"
+            log_success "Autocomplétion installée depuis le bundle"
+        else
+            log_warning "Script d'autocomplétion absent du bundle — ignoré"
+        fi
+        return 0
+    fi
+
+    local completion_url="${GITHUB_RAW}/module/scripts/caleope-completion.bash"
     if wget -q "${completion_url}" -O "${completion_dest}" 2>/dev/null; then
         chmod 644 "${completion_dest}"
         log_success "Autocomplétion installée → ${completion_dest}"
@@ -897,6 +1012,11 @@ EOF
 install_default_apps() {
     log_section "Applications de sécurité par défaut"
 
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        log_warning "Mode submarine : installation des apps par défaut ignorée (images déjà chargées — installer via 'caleope install' après le démarrage)"
+        return 0
+    fi
+
     # Attendre que le daemon soit opérationnel (max 30s)
     local max=15 waited=0
     log_step "Attente du daemon caleoped..."
@@ -1092,6 +1212,17 @@ sync_store() {
     log_section "Synchronisation du store Caleope"
 
     local store_dir="${CALEOPE_ROOT}/core/cache/official"
+
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        local store_archive="${OFFLINE_BUNDLE_PATH}/store.tar.gz"
+        log_step "Extraction du store depuis le bundle..."
+        mkdir -p "${store_dir}"
+        tar -xzf "${store_archive}" -C "${store_dir}" --strip-components=1
+        chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${store_dir}"
+        log_success "Store extrait — $(find "${store_dir}/apps" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l) application(s) disponible(s)"
+        return 0
+    fi
+
     local store_url="https://github.com/${GITHUB_REPO}-store"
 
     # Supprimer le dossier s'il existe déjà mais est vide (créé par mkdir -p)
@@ -1109,8 +1240,6 @@ sync_store() {
 
     if [[ -d "${store_dir}/.git" ]]; then
         log_step "Mise à jour du store (branche ${store_branch})..."
-        # fetch la branche explicitement (nécessaire avec les clones --depth=1 :
-        # un simple "fetch origin" ne crée pas les remote-tracking refs de toutes les branches)
         git -C "${store_dir}" fetch origin "${store_branch}"
         git -C "${store_dir}" reset --hard FETCH_HEAD
     else
@@ -1246,7 +1375,9 @@ main() {
     echo "╚══════════════════════════════════════════╝"
     echo -e "${NC}"
 
-    if [[ "${LOG_MODE}" == "debug" ]]; then
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        echo -e "${YELLOW}Mode : SUBMARINE (offline) — bundle : ${OFFLINE_BUNDLE_PATH}${NC}\n"
+    elif [[ "${LOG_MODE}" == "debug" ]]; then
         echo -e "${GRAY}Mode : DEBUG${NC}\n"
     else
         echo -e "${GRAY}Mode : CLASSIC  |  --debug pour plus de détails${NC}\n"
@@ -1257,6 +1388,7 @@ main() {
     check_debian
     check_debian_codename
     check_user
+    check_offline_bundle       # Valide le bundle si --offline
 
     # Configuration interactive (domaine, mode proxy, email)
     ask_config
@@ -1267,14 +1399,15 @@ main() {
     install_docker
     setup_security             # UFW + fail2ban + unattended-upgrades
     create_docker_networks
+    load_docker_images_from_bundle  # Mode submarine : charge les images .tar
     create_structure
     setup_caleope_group
-    install_caleope_binaries   # release GitHub → fallback compile
+    install_caleope_binaries   # release GitHub → bundle (mode submarine)
     install_bash_completion    # tab completion pour caleope
     init_caleope_runtime
     save_config                # Sauvegarder domaine + mode proxy + SMTP dans caleope.conf
     init_secrets_encryption    # Transmettre mot de passe chiffrement au daemon
-    sync_store                 # git clone du store officiel
+    sync_store                 # git clone officiel → extract bundle (mode submarine)
     install_caleoped_service
     install_caleope_ui_service
     deploy_traefik
