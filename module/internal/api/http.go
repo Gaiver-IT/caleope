@@ -24,6 +24,11 @@
 //   GET    /api/v1/store                ?q=terme
 //   POST   /api/v1/upgrade              ?check=true
 //   GET    /api/v1/token               (localhost seulement)
+//   GET    /api/v1/tasks
+//   POST   /api/v1/tasks               body JSON: Task
+//   DELETE /api/v1/tasks/{id}
+//   POST   /api/v1/tasks/{id}/run      exécution immédiate
+//   PATCH  /api/v1/tasks/{id}/toggle   body JSON: {"enabled": true|false}
 
 package api
 
@@ -39,6 +44,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
 )
 
@@ -173,6 +179,13 @@ func (s *Server) StartHTTP(port int) error {
 
 	// /api/v1/locations/{name}[/action]
 	mux.Handle("/api/v1/locations/", s.auth(http.HandlerFunc(s.routeLocation)))
+
+	// GET /api/v1/tasks — liste des tâches planifiées
+	// POST /api/v1/tasks — créer une tâche
+	mux.Handle("/api/v1/tasks", s.auth(http.HandlerFunc(s.routeTasks)))
+
+	// /api/v1/tasks/{id}[/action]
+	mux.Handle("/api/v1/tasks/", s.auth(http.HandlerFunc(s.routeTask)))
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("✓ API REST sur %s\n", addr)
@@ -693,5 +706,99 @@ func (s *Server) routeLocation(w http.ResponseWriter, r *http.Request) {
 		s.httpOK(w, map[string]string{"status": "unmounted"})
 	default:
 		s.httpError(w, fmt.Sprintf("route non trouvée: %s /api/v1/locations/%s/%s", r.Method, name, action), http.StatusNotFound)
+	}
+}
+
+// ─────────────────────────────────────────────
+// TÂCHES PLANIFIÉES
+// ─────────────────────────────────────────────
+
+// routeTasks : GET /api/v1/tasks  —  POST /api/v1/tasks
+func (s *Server) routeTasks(w http.ResponseWriter, r *http.Request) {
+	if s.sched == nil {
+		s.httpError(w, "scheduler non initialisé", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		tasks, err := s.sched.Load()
+		if err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, tasks)
+
+	case http.MethodPost:
+		var t types.Task
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+			s.httpError(w, "corps JSON invalide: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if t.ID == "" {
+			s.httpError(w, "champ 'id' requis", http.StatusBadRequest)
+			return
+		}
+		if t.Type == "" {
+			s.httpError(w, "champ 'type' requis (backup, upgrade, update)", http.StatusBadRequest)
+			return
+		}
+		t.CreatedAt = time.Now()
+		t.Enabled = true
+		if err := s.sched.Add(t); err != nil {
+			s.httpError(w, err.Error(), http.StatusConflict)
+			return
+		}
+		s.httpOK(w, t)
+
+	default:
+		s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+	}
+}
+
+// routeTask : DELETE /api/v1/tasks/{id}  —  POST /api/v1/tasks/{id}/run  —  PATCH /api/v1/tasks/{id}/toggle
+func (s *Server) routeTask(w http.ResponseWriter, r *http.Request) {
+	if s.sched == nil {
+		s.httpError(w, "scheduler non initialisé", http.StatusServiceUnavailable)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/tasks/")
+	parts := strings.SplitN(rest, "/", 2)
+	id := parts[0]
+	action := ""
+	if len(parts) == 2 {
+		action = parts[1]
+	}
+
+	switch r.Method + " " + action {
+	case "DELETE ":
+		if err := s.sched.Remove(id); err != nil {
+			s.httpError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "deleted", "id": id})
+
+	case "POST run":
+		if err := s.sched.RunNow(id); err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "executed", "id": id})
+
+	case "PATCH toggle":
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			s.httpError(w, "JSON invalide", http.StatusBadRequest)
+			return
+		}
+		if err := s.sched.Toggle(id, body.Enabled); err != nil {
+			s.httpError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "updated", "id": id})
+
+	default:
+		s.httpError(w, fmt.Sprintf("route non trouvée: %s /api/v1/tasks/%s/%s", r.Method, id, action), http.StatusNotFound)
 	}
 }

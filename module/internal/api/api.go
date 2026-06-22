@@ -35,6 +35,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/scheduler"
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/pkg/types"
@@ -55,6 +56,7 @@ type Server struct {
 	col        *metrics.Collector
 	emitter    *events.Emitter
 	net        *network.Manager
+	sched      *scheduler.Scheduler
 	baseDir    string
 	token      string
 }
@@ -71,7 +73,7 @@ func NewServer(
 	net *network.Manager,
 	baseDir string,
 ) *Server {
-	return &Server{
+	s := &Server{
 		socketPath: socketPath,
 		rt:         rt,
 		st:         st,
@@ -84,6 +86,40 @@ func NewServer(
 		baseDir:    baseDir,
 		token:      loadOrCreateToken(baseDir),
 	}
+	// Le scheduler est injecté après construction (le daemon appelle scheduler.New(baseDir, server))
+	return s
+}
+
+// SetScheduler injecte le scheduler dans le server (appelé par le daemon après construction).
+func (s *Server) SetScheduler(sched *scheduler.Scheduler) {
+	s.sched = sched
+}
+
+// ── Implémentation de scheduler.Runner ────────────────────────────────────────
+
+func (s *Server) RunBackup(app string, scope types.BackupScope) error {
+	if app == "" {
+		_, errs := s.bkp.BackupAll(scope)
+		if len(errs) > 0 {
+			msgs := make([]string, len(errs))
+			for i, e := range errs {
+				msgs[i] = e.Error()
+			}
+			return fmt.Errorf("%d erreur(s): %s", len(errs), strings.Join(msgs, "; "))
+		}
+		return nil
+	}
+	_, err := s.bkp.BackupWithScope(app, scope)
+	return err
+}
+
+func (s *Server) RunUpgrade() error {
+	_, err := s.handleUpgrade(map[string]string{})
+	return err
+}
+
+func (s *Server) RunUpdate() error {
+	return s.handleUpdate(map[string]string{})
 }
 
 // ─────────────────────────────────────────────
@@ -196,6 +232,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleLocationUnmount(req.Args)
 	case "location-storage":
 		data, err = s.handleLocationStorage(req.Args)
+	case "task-list":
+		data, err = s.handleTaskList()
+	case "task-add":
+		data, err = s.handleTaskAdd(req.Args)
+	case "task-remove":
+		err = s.handleTaskRemove(req.Args)
+	case "task-run":
+		err = s.handleTaskRun(req.Args)
+	case "task-toggle":
+		err = s.handleTaskToggle(req.Args)
 	case "configure":
 		data, err = s.handleConfigure(req.Args)
 	case "ping":
@@ -1176,4 +1222,67 @@ func (s *Server) handleAuditList(args map[string]string) (interface{}, error) {
 		return nil, err
 	}
 	return map[string]interface{}{"lines": lines, "count": len(lines)}, nil
+}
+
+// ─────────────────────────────────────────────
+// TÂCHES PLANIFIÉES
+// ─────────────────────────────────────────────
+
+func (s *Server) handleTaskList() (interface{}, error) {
+	if s.sched == nil {
+		return []types.Task{}, nil
+	}
+	return s.sched.Load()
+}
+
+func (s *Server) handleTaskAdd(args map[string]string) (interface{}, error) {
+	if s.sched == nil {
+		return nil, fmt.Errorf("scheduler non initialisé")
+	}
+	taskJSON, ok := args["task"]
+	if !ok || taskJSON == "" {
+		return nil, fmt.Errorf("argument 'task' (JSON) manquant")
+	}
+	var t types.Task
+	if err := json.Unmarshal([]byte(taskJSON), &t); err != nil {
+		return nil, fmt.Errorf("JSON tâche invalide : %w", err)
+	}
+	if err := s.sched.Add(t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func (s *Server) handleTaskRemove(args map[string]string) error {
+	if s.sched == nil {
+		return fmt.Errorf("scheduler non initialisé")
+	}
+	id := args["id"]
+	if id == "" {
+		return fmt.Errorf("argument 'id' manquant")
+	}
+	return s.sched.Remove(id)
+}
+
+func (s *Server) handleTaskRun(args map[string]string) error {
+	if s.sched == nil {
+		return fmt.Errorf("scheduler non initialisé")
+	}
+	id := args["id"]
+	if id == "" {
+		return fmt.Errorf("argument 'id' manquant")
+	}
+	return s.sched.RunNow(id)
+}
+
+func (s *Server) handleTaskToggle(args map[string]string) error {
+	if s.sched == nil {
+		return fmt.Errorf("scheduler non initialisé")
+	}
+	id := args["id"]
+	if id == "" {
+		return fmt.Errorf("argument 'id' manquant")
+	}
+	enabled := args["enabled"] == "true"
+	return s.sched.Toggle(id, enabled)
 }

@@ -98,6 +98,8 @@ func main() {
 		cmdOfflinePack(args)
 	case "offline-update":
 		cmdOfflineUpdate(args)
+	case "task", "tasks":
+		cmdTask(args)
 	case "help", "--help", "-h":
 		printHelp()
 	default:
@@ -1400,6 +1402,14 @@ Commandes:
   version           Afficher la version installée
   ping              Vérifier que le daemon est actif
 
+Tâches planifiées :
+  task list                         Lister les tâches planifiées
+  task add <id> --type <type> --at HH:MM [--days j1,j2] [--app <app>] [--scope all|config|data]
+                                    Créer une tâche (type: backup, upgrade, update)
+  task remove <id>                  Supprimer une tâche
+  task run <id>                     Exécuter une tâche immédiatement
+  task enable/disable <id>          Activer ou désactiver une tâche
+
 Mode submarine (installation hors-ligne) :
   offline-pack <dest>              Créer un bundle dans <dest>/ (binaires + store + images Docker)
   offline-pack <dest> --no-images  Bundle sans images Docker (binaires + store uniquement)
@@ -1408,7 +1418,10 @@ Mode submarine (installation hors-ligne) :
 
 Exemples:
   caleope install jellyfin --domain media.home.local
-  caleope install nextcloud --domain cloud.home.local
+  caleope task add backup-nuit --type backup --at 03:00
+  caleope task add backup-configs --type backup --scope config --at 01:00 --days lun,mer,ven
+  caleope task add upgrade-auto --type upgrade --at 01:00 --days dim
+  caleope task list
   caleope list
   caleope remove jellyfin
   caleope search media

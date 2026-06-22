@@ -35,6 +35,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/scheduler"
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 )
@@ -113,6 +114,12 @@ func main() {
 	}()
 
 	server := api.NewServer(*socketPath, rt, st, installer, bkp, dc, col, em, net, *baseDir)
+
+	// Planificateur de tâches (backup auto, upgrade, update store)
+	sched := scheduler.New(*baseDir, server)
+	server.SetScheduler(sched)
+	sched.Start()
+	defer sched.Stop()
 
 	// API REST HTTP
 	go func() {
