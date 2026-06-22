@@ -6,6 +6,7 @@
   <title>CALEOPE</title>
   <link rel="icon" href="img/logo.png" type="image/png">
   <link rel="stylesheet" href="tabler-icons.min.css">
+  <link rel="stylesheet" href="xterm.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -98,6 +99,23 @@
       <!-- Sections injectées dynamiquement selon les apps installées -->
       <div id="sb-integrations"></div>
 
+      <div class="sb-group">// SERVEUR</div>
+      <button class="nav-btn" data-section="terminal" onclick="goSection('terminal')">
+        <i class="ti ti-terminal-2" aria-hidden="true"></i>TERMINAL
+      </button>
+      <button class="nav-btn" data-section="services" onclick="goSection('services')">
+        <i class="ti ti-list-check" aria-hidden="true"></i>SERVICES
+      </button>
+      <button class="nav-btn" data-section="network" onclick="goSection('network')">
+        <i class="ti ti-wifi" aria-hidden="true"></i>RÉSEAU
+      </button>
+      <button class="nav-btn" data-section="storage" onclick="goSection('storage')">
+        <i class="ti ti-database" aria-hidden="true"></i>STOCKAGE
+      </button>
+      <button class="nav-btn" data-section="journal" onclick="goSection('journal')">
+        <i class="ti ti-file-text" aria-hidden="true"></i>JOURNAL
+      </button>
+
       <div class="sb-group">// SYSTÈME</div>
       <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
         <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
@@ -186,6 +204,37 @@
 
       <!-- SETTINGS -->
       <div id="content-settings" class="section-content hidden"></div>
+
+      <!-- TERMINAL -->
+      <div id="content-terminal" class="section-content hidden">
+        <div class="term-wrap">
+          <div id="xterm-container"></div>
+        </div>
+      </div>
+
+      <!-- SERVICES -->
+      <div id="content-services" class="section-content hidden"></div>
+
+      <!-- NETWORK -->
+      <div id="content-network" class="section-content hidden"></div>
+
+      <!-- STORAGE -->
+      <div id="content-storage" class="section-content hidden"></div>
+
+      <!-- JOURNAL -->
+      <div id="content-journal" class="section-content hidden">
+        <div class="journal-wrap">
+          <div class="journal-toolbar">
+            <select class="log-select" id="journal-unit-select" onchange="loadJournal()">
+              <option value="all">— Toutes les unités —</option>
+            </select>
+            <button class="btn-sm" style="margin-left:auto" onclick="loadJournal()">
+              <i class="ti ti-refresh"></i>REFRESH
+            </button>
+          </div>
+          <div class="log-body" id="journal-body"></div>
+        </div>
+      </div>
 
     </div><!-- /content -->
   </div><!-- /main -->
@@ -294,6 +343,7 @@
 <!-- ── NOTIFICATIONS ────────────────────────────────────────────────────────── -->
 <div class="notif-stack" id="notif-stack" aria-live="polite"></div>
 
+<script src="xterm.js"></script>
 <script src="app.js"></script>
 <script>
 // Helpers exposés globalement depuis main.go

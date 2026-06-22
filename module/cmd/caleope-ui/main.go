@@ -452,6 +452,28 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	// ── Terminal WebSocket (session requise) ──────────────────────────────────
+	mux.HandleFunc("/ws/terminal", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTerminal(w, r)
+	}))
+
+	// ── API système (session requise) ─────────────────────────────────────────
+	mux.HandleFunc("/sys/services", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysServices(w, r)
+	}))
+	mux.HandleFunc("/sys/services/", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysServices(w, r)
+	}))
+	mux.HandleFunc("/sys/network", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysNetwork(w, r)
+	}))
+	mux.HandleFunc("/sys/storage", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysStorage(w, r)
+	}))
+	mux.HandleFunc("/sys/journal", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysJournal(w, r)
+	}))
+
 	// API proxy (session requise) — logs en streaming aussi
 	mux.HandleFunc("/api/", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		// SSE : désactiver le buffering

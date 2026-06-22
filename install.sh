@@ -46,7 +46,7 @@ PORT_TRAEFIK_HTTP=80
 PORT_TRAEFIK_HTTPS=443
 PORT_TRAEFIK_DASHBOARD=8080
 PORT_PORTAINER=8010
-PORT_COCKPIT=8020
+PORT_COCKPIT=8020  # conservé pour rétro-compat. éventuelle
 PORT_UI=8766
 
 # Réseaux Docker
@@ -933,48 +933,7 @@ install_default_apps() {
 # COCKPIT
 # =============================================================================
 
-install_cockpit() {
-    log_section "Cockpit"
-
-    if ss -tlnp | grep -q ":${PORT_COCKPIT}"; then
-        log_warning "Cockpit déjà actif sur le port ${PORT_COCKPIT}"
-        return 0
-    fi
-
-    log_step "Installation de Cockpit..."
-    run_cmd apt-get install -y cockpit
-
-    log_step "Configuration du port ${PORT_COCKPIT}..."
-    systemctl stop cockpit.service 2>/dev/null || true
-    systemctl stop cockpit.socket  2>/dev/null || true
-
-    mkdir -p /etc/cockpit
-    cat > /etc/cockpit/cockpit.conf << EOF
-[WebService]
-ListenStream=${PORT_COCKPIT}
-EOF
-
-    mkdir -p /etc/systemd/system/cockpit.socket.d/
-    cat > /etc/systemd/system/cockpit.socket.d/listen.conf << EOF
-[Socket]
-ListenStream=
-ListenStream=${PORT_COCKPIT}
-EOF
-
-    log_step "Activation de Cockpit..."
-    systemctl daemon-reload
-    systemctl enable cockpit.socket
-    systemctl restart cockpit.socket
-    systemctl restart cockpit.service 2>/dev/null || true
-
-    sleep 3
-
-    if ss -tlnp | grep -q ":${PORT_COCKPIT}"; then
-        log_success "Cockpit actif sur le port ${PORT_COCKPIT}"
-    else
-        log_warning "Cockpit démarré — port ${PORT_COCKPIT} non encore détecté"
-    fi
-}
+# Cockpit remplacé par le terminal intégré dans Caleope UI (section SERVEUR)
 
 # =============================================================================
 # SUDO
@@ -1181,7 +1140,7 @@ generate_links_file() {
 | Caleope UI         | http://${IP}:${PORT_UI}                     |
 | Traefik dashboard  | http://${IP}:${PORT_TRAEFIK_DASHBOARD}      |
 | Portainer          | https://${IP}:${PORT_PORTAINER}             |
-| Cockpit            | https://${IP}:${PORT_COCKPIT}               |
+| Terminal           | Intégré dans Caleope UI → section SERVEUR   |
 
 ---
 
@@ -1248,7 +1207,7 @@ print_summary() {
     echo -e "${CYAN}║${NC}  🌐 Caleope UI  → ${YELLOW}http://${IP}:${PORT_UI}${NC}"
     echo -e "${CYAN}║${NC}  🔀 Traefik     → ${YELLOW}http://${IP}:${PORT_TRAEFIK_DASHBOARD}${NC}"
     echo -e "${CYAN}║${NC}  🐳 Portainer   → ${YELLOW}https://${IP}:${PORT_PORTAINER}${NC}"
-    echo -e "${CYAN}║${NC}  🖥️  Cockpit     → ${YELLOW}https://${IP}:${PORT_COCKPIT}${NC}"
+    echo -e "${CYAN}║${NC}  🖥️  Terminal    → ${YELLOW}Caleope UI → section SERVEUR${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║                   Caleope Daemon                     ║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
@@ -1321,7 +1280,6 @@ main() {
     deploy_traefik
     deploy_portainer
     install_default_apps
-    install_cockpit
     generate_links_file
     print_summary
 }

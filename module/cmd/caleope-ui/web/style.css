@@ -931,3 +931,107 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
 .text-err  { color: var(--err); }
 .text-warn { color: var(--warn); }
 .text-dim  { color: var(--text3); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TERMINAL
+   ══════════════════════════════════════════════════════════════════════════ */
+.term-wrap {
+  width: 100%; height: calc(100vh - 56px);
+  background: #0a0a0f;
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+#xterm-container {
+  width: 100%; height: 100%;
+}
+#xterm-container .xterm { height: 100%; }
+#xterm-container .xterm-viewport { overflow-y: auto !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SERVICES
+   ══════════════════════════════════════════════════════════════════════════ */
+.svc-list { display: flex; flex-direction: column; gap: 4px; padding: 16px; }
+.svc-row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 14px;
+  transition: background .15s;
+}
+.svc-row:hover { background: var(--bg3); }
+.svc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.svc-info { flex: 1; min-width: 0; }
+.svc-name { font-size: 11px; font-weight: 600; letter-spacing: .5px; color: var(--text1); font-family: var(--mono); }
+.svc-desc { font-size: 9px; color: var(--text3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.svc-badges { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+.svc-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RÉSEAU
+   ══════════════════════════════════════════════════════════════════════════ */
+.net-section-title {
+  font-size: 9px; letter-spacing: 1px; color: var(--blue);
+  padding: 0 16px; margin-top: 16px; margin-bottom: 8px;
+}
+.net-grid { display: flex; flex-direction: column; gap: 8px; padding: 0 16px; }
+.net-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px 14px;
+}
+.net-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.net-ifname { font-size: 12px; font-weight: 700; font-family: var(--mono); color: var(--text1); }
+.net-mac { font-size: 9px; color: var(--text3); font-family: var(--mono); flex: 1; }
+.net-addr { display: flex; align-items: baseline; gap: 4px; font-family: var(--mono); font-size: 10px; padding: 2px 0; }
+.net-ip { color: var(--text1); }
+.net-prefix { color: var(--text3); }
+.net-scope { font-size: 8px; color: var(--text3); letter-spacing: .5px; }
+.table-wrap { padding: 0 16px; overflow-x: auto; }
+.sys-table { width: 100%; border-collapse: collapse; font-size: 10px; font-family: var(--mono); }
+.sys-table th { color: var(--text3); font-weight: 500; letter-spacing: .5px; border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+.sys-table td { color: var(--text2); border-bottom: 1px solid var(--border)20; padding: 5px 8px; }
+.sys-table tr:hover td { background: var(--bg3); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   STOCKAGE
+   ══════════════════════════════════════════════════════════════════════════ */
+.disk-list { display: flex; flex-direction: column; gap: 8px; padding: 0 16px; }
+.disk-row {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px 14px;
+  display: flex; align-items: center; gap: 16px;
+}
+.disk-info { min-width: 160px; flex-shrink: 0; }
+.disk-target { font-size: 11px; font-weight: 600; font-family: var(--mono); color: var(--text1); }
+.disk-source { font-size: 9px; color: var(--text3); margin-top: 2px; font-family: var(--mono); }
+.disk-bar-wrap { flex: 1; }
+.disk-bar { height: 4px; background: var(--bg3); border-radius: 2px; margin-bottom: 4px; overflow: hidden; }
+.disk-bar-fill { height: 100%; border-radius: 2px; transition: width .3s; }
+.disk-stats { font-size: 9px; color: var(--text3); font-family: var(--mono); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   JOURNAL
+   ══════════════════════════════════════════════════════════════════════════ */
+.journal-wrap { display: flex; flex-direction: column; height: calc(100vh - 56px); }
+.journal-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#journal-body {
+  flex: 1; overflow-y: auto;
+  font-family: var(--mono); font-size: 10px;
+  padding: 8px 0;
+  background: var(--bg1);
+}
+#journal-body .log-line { padding: 2px 14px; display: flex; gap: 8px; align-items: baseline; }
+#journal-body .log-line:hover { background: var(--bg2); }
+#journal-body .log-ts  { color: var(--text3); flex-shrink: 0; min-width: 56px; }
+#journal-body .log-app { flex-shrink: 0; min-width: 100px; }
+#journal-body .log-level { flex-shrink: 0; min-width: 52px; font-size: 9px; letter-spacing: .3px; }
+#journal-body .log-msg { color: var(--text2); word-break: break-word; }
+
+/* ── Loading / empty states ─────────────────────────────────────────────── */
+.loading-msg, .empty-msg {
+  padding: 40px 20px; text-align: center;
+  color: var(--text3); font-size: 11px; letter-spacing: .5px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}

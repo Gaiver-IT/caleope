@@ -1476,6 +1476,11 @@ const SECTIONS = {
   audit:     { label: 'AUDIT',           num: '/06', load: loadAudit,      content: 'content-audit',      btn: null },
   settings:  { label: 'PARAMÈTRES',      num: '/07', load: loadSettings,   content: 'content-settings',   btn: null },
   stats:     { label: 'SYSTÈME',         num: '/08', load: loadStats,      content: 'content-stats',      btn: null },
+  terminal:  { label: 'TERMINAL',        num: '/09', load: loadTerminal,   content: 'content-terminal',   btn: null },
+  services:  { label: 'SERVICES',        num: '/10', load: loadServices,   content: 'content-services',   btn: null },
+  network:   { label: 'RÉSEAU',          num: '/11', load: loadNetwork,    content: 'content-network',    btn: null },
+  storage:   { label: 'STOCKAGE',        num: '/12', load: loadStorage,    content: 'content-storage',    btn: null },
+  journal:   { label: 'JOURNAL',         num: '/13', load: loadJournal,    content: 'content-journal',    btn: null },
 };
 
 // ── Intégrations apps (panels embarqués) ─────────────────────────────────────
@@ -1840,6 +1845,290 @@ async function init() {
       btn.innerHTML = '<i class="ti ti-arrow-right"></i>CONNECTER';
     }
   });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TERMINAL
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _term = null, _termWs = null, _termFitted = false;
+
+function loadTerminal() {
+  const container = document.getElementById('xterm-container');
+  if (!container) return;
+
+  // Si le terminal existe déjà et la connexion est ouverte, rien à faire
+  if (_term && _termWs && _termWs.readyState === WebSocket.OPEN) return;
+
+  // Nettoyer une ancienne instance
+  if (_term) { _term.dispose(); _term = null; }
+  if (_termWs) { _termWs.close(); _termWs = null; }
+  container.innerHTML = '';
+
+  _term = new Terminal({
+    cursorBlink:    true,
+    fontSize:       13,
+    fontFamily:     "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+    theme: {
+      background:   '#0a0a0f',
+      foreground:   '#e0e0e0',
+      cursor:       '#00D4FF',
+      selectionBackground: 'rgba(0,212,255,0.25)',
+      black:   '#000000', brightBlack:   '#555555',
+      red:     '#ff5555', brightRed:     '#ff7777',
+      green:   '#50fa7b', brightGreen:   '#69ff94',
+      yellow:  '#f1fa8c', brightYellow:  '#ffffa5',
+      blue:    '#6272a4', brightBlue:    '#8be9fd',
+      magenta: '#ff79c6', brightMagenta: '#ff92df',
+      cyan:    '#8be9fd', brightCyan:    '#a4ffff',
+      white:   '#bfbfbf', brightWhite:   '#ffffff',
+    },
+  });
+
+  _term.open(container);
+  fitTerminal();
+
+  // WebSocket — même host, port 8766
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  _termWs = new WebSocket(`${proto}//${location.host}/ws/terminal`);
+  _termWs.binaryType = 'arraybuffer';
+
+  _termWs.onopen = () => {
+    fitTerminal();
+  };
+  _termWs.onmessage = e => {
+    if (e.data instanceof ArrayBuffer) {
+      _term.write(new Uint8Array(e.data));
+    } else {
+      _term.write(e.data);
+    }
+  };
+  _termWs.onclose = () => {
+    _term?.write('\r\n\x1b[33m[connexion terminée]\x1b[0m\r\n');
+  };
+  _termWs.onerror = () => {
+    _term?.write('\r\n\x1b[31m[erreur WebSocket]\x1b[0m\r\n');
+  };
+
+  _term.onData(data => {
+    if (_termWs?.readyState === WebSocket.OPEN) _termWs.send(data);
+  });
+
+  _term.onResize(({ cols, rows }) => {
+    if (_termWs?.readyState === WebSocket.OPEN) {
+      _termWs.send(JSON.stringify({ r: { c: cols, r: rows } }));
+    }
+  });
+
+  // Redimensionner quand la fenêtre change
+  window.addEventListener('resize', fitTerminal);
+}
+
+function fitTerminal() {
+  if (!_term) return;
+  const container = document.getElementById('xterm-container');
+  if (!container) return;
+
+  // Calculer cols/rows à partir des dimensions du container
+  const wrap = container.closest('.term-wrap');
+  if (!wrap) return;
+  const w = wrap.clientWidth  - 24; // padding 12px de chaque côté
+  const h = wrap.clientHeight - 24;
+
+  // Dimensions approximatives d'une cellule à fontSize=13 (monospace)
+  const cellW = 7.8;
+  const cellH = 17;
+
+  const cols = Math.max(80, Math.floor(w / cellW));
+  const rows = Math.max(24, Math.floor(h / cellH));
+
+  _term.resize(cols, rows);
+  if (_termWs?.readyState === WebSocket.OPEN) {
+    _termWs.send(JSON.stringify({ r: { c: cols, r: rows } }));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SERVICES
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function loadServices() {
+  const el = document.getElementById('content-services');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-msg"><span class="spinner"></span>Chargement des services...</div>';
+
+  const data = await fetch('/sys/services').then(r => r.json()).catch(() => null);
+  if (!data?.services) { el.innerHTML = '<div class="empty-msg">Impossible de charger les services</div>'; return; }
+
+  const stateColor = s => s === 'active' ? 'var(--ok)' : s === 'failed' ? 'var(--err)' : s === 'inactive' ? 'var(--text3)' : 'var(--warn)';
+  const stateLabel = s => s === 'active' ? 'ACTIF' : s === 'failed' ? 'ERREUR' : s === 'inactive' ? 'INACTIF' : s?.toUpperCase() || '—';
+
+  const rows = data.services.map(s => `
+    <div class="svc-row">
+      <div class="svc-dot" style="background:${stateColor(s.active)}"></div>
+      <div class="svc-info">
+        <div class="svc-name">${escapeHtml(s.name)}</div>
+        <div class="svc-desc">${escapeHtml(s.description || '—')}</div>
+      </div>
+      <div class="svc-badges">
+        <span class="badge" style="color:${stateColor(s.active)};border-color:${stateColor(s.active)}20">${stateLabel(s.active)}</span>
+        ${s.sub && s.sub !== s.active ? `<span class="badge" style="color:var(--text3)">${escapeHtml(s.sub)}</span>` : ''}
+      </div>
+      <div class="svc-actions">
+        <button class="btn-sm" title="Démarrer"  onclick="svcAction('${s.name}','start')"><i class="ti ti-player-play"></i></button>
+        <button class="btn-sm" title="Arrêter"   onclick="svcAction('${s.name}','stop')"><i class="ti ti-player-stop"></i></button>
+        <button class="btn-sm" title="Redémarrer" onclick="svcAction('${s.name}','restart')"><i class="ti ti-refresh"></i></button>
+      </div>
+    </div>`).join('');
+
+  el.innerHTML = `<div class="svc-list">${rows}</div>`;
+}
+
+async function svcAction(name, action) {
+  const r = await fetch(`/sys/services/${name}/${action}`, { method: 'POST' }).then(r => r.json()).catch(() => null);
+  if (r?.status === 'ok') {
+    notify(`${name} : ${action}`, 'ok');
+    setTimeout(loadServices, 1200);
+  } else {
+    notify(`Erreur : ${r?.error || 'inconnue'}`, 'err');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RÉSEAU
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function loadNetwork() {
+  const el = document.getElementById('content-network');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-msg"><span class="spinner"></span>Chargement du réseau...</div>';
+
+  const data = await fetch('/sys/network').then(r => r.json()).catch(() => null);
+  if (!data?.interfaces) { el.innerHTML = '<div class="empty-msg">Impossible de charger les infos réseau</div>'; return; }
+
+  const ifaces = Array.isArray(data.interfaces) ? data.interfaces : [];
+  const ifaceCards = ifaces
+    .filter(i => i.link_type !== 'loopback')
+    .map(i => {
+      const addrs = (i.addr_info || []).map(a =>
+        `<div class="net-addr"><span class="net-ip">${escapeHtml(a.local)}</span><span class="net-prefix">/${a.prefixlen}</span><span class="net-scope">${escapeHtml(a.scope || '')}</span></div>`
+      ).join('');
+      const up = (i.flags || []).includes('UP');
+      return `<div class="net-card">
+        <div class="net-header">
+          <div class="svc-dot" style="background:${up ? 'var(--ok)' : 'var(--text3)'}"></div>
+          <div class="net-ifname">${escapeHtml(i.ifname)}</div>
+          <div class="net-mac">${escapeHtml(i.address || '')}</div>
+          <span class="badge" style="color:${up ? 'var(--ok)' : 'var(--text3)'}">${up ? 'UP' : 'DOWN'}</span>
+        </div>
+        ${addrs || '<div class="net-addr" style="color:var(--text3)">aucune adresse</div>'}
+      </div>`;
+    }).join('');
+
+  const routes = Array.isArray(data.routes) ? data.routes : [];
+  const routeRows = routes.slice(0, 20).map(r =>
+    `<tr><td>${escapeHtml(r.dst || 'default')}</td><td>${escapeHtml(r.gateway || '—')}</td><td>${escapeHtml(r.dev || '—')}</td><td>${escapeHtml(String(r.metric ?? ''))}</td></tr>`
+  ).join('');
+
+  el.innerHTML = `
+    <div class="net-section-title">// INTERFACES</div>
+    <div class="net-grid">${ifaceCards || '<div class="empty-msg">Aucune interface</div>'}</div>
+    <div class="net-section-title" style="margin-top:24px">// ROUTES</div>
+    <div class="table-wrap">
+      <table class="sys-table"><thead><tr><th>DESTINATION</th><th>PASSERELLE</th><th>INTERFACE</th><th>MÉTRIQUE</th></tr></thead>
+      <tbody>${routeRows}</tbody></table>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STOCKAGE
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function loadStorage() {
+  const el = document.getElementById('content-storage');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-msg"><span class="spinner"></span>Chargement du stockage...</div>';
+
+  const data = await fetch('/sys/storage').then(r => r.json()).catch(() => null);
+  if (!data?.disks) { el.innerHTML = '<div class="empty-msg">Impossible de charger le stockage</div>'; return; }
+
+  const diskRows = (data.disks || []).map(d => {
+    const pct = parseInt(d.use_pct) || 0;
+    const barColor = pct > 90 ? 'var(--err)' : pct > 75 ? 'var(--warn)' : 'var(--ok)';
+    return `<div class="disk-row">
+      <div class="disk-info">
+        <div class="disk-target">${escapeHtml(d.target)}</div>
+        <div class="disk-source">${escapeHtml(d.source)}</div>
+      </div>
+      <div class="disk-bar-wrap">
+        <div class="disk-bar"><div class="disk-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>
+        <div class="disk-stats">${escapeHtml(d.used)} / ${escapeHtml(d.size)} — <span style="color:${barColor}">${escapeHtml(d.use_pct)}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Blocs (lsblk)
+  const blkDevices = data.lsblk?.blockdevices || [];
+  const blkRows = blkDevices.map(d => renderBlkDevice(d, 0)).join('');
+
+  el.innerHTML = `
+    <div class="net-section-title">// SYSTÈMES DE FICHIERS</div>
+    <div class="disk-list">${diskRows || '<div class="empty-msg">Aucune partition montée</div>'}</div>
+    ${blkRows ? `<div class="net-section-title" style="margin-top:24px">// PÉRIPHÉRIQUES BLOC</div>
+    <div class="table-wrap"><table class="sys-table"><thead><tr><th>NOM</th><th>TAILLE</th><th>TYPE</th><th>FS</th><th>POINT DE MONTAGE</th></tr></thead>
+    <tbody>${blkRows}</tbody></table></div>` : ''}`;
+}
+
+function renderBlkDevice(d, depth) {
+  const pad = depth > 0 ? `<span style="opacity:.4;padding-left:${depth*12}px">└─ </span>` : '';
+  let rows = `<tr><td>${pad}${escapeHtml(d.name)}</td><td>${escapeHtml(d.size||'')}</td><td>${escapeHtml(d.type||'')}</td><td>${escapeHtml(d.fstype||'—')}</td><td>${escapeHtml(d.mountpoint||'—')}</td></tr>`;
+  if (d.children) d.children.forEach(c => { rows += renderBlkDevice(c, depth+1); });
+  return rows;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// JOURNAL
+// ══════════════════════════════════════════════════════════════════════════════
+
+const JOURNAL_UNITS = [
+  'all', 'caleoped', 'caleope-ui', 'docker', 'traefik', 'crowdsec',
+  'ssh', 'fail2ban', 'ufw', 'kernel',
+];
+
+function initJournalSelect() {
+  const sel = document.getElementById('journal-unit-select');
+  if (!sel || sel.dataset.init) return;
+  sel.innerHTML = JOURNAL_UNITS.map(u =>
+    `<option value="${u}">${u === 'all' ? '— Toutes les unités —' : u}</option>`
+  ).join('');
+  sel.dataset.init = '1';
+}
+
+async function loadJournal() {
+  initJournalSelect();
+  const el = document.getElementById('journal-body');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-msg"><span class="spinner"></span></div>';
+
+  const unit = document.getElementById('journal-unit-select')?.value || 'all';
+  const url  = `/sys/journal?n=300${unit !== 'all' ? '&unit=' + encodeURIComponent(unit) : ''}`;
+  const data = await fetch(url).then(r => r.json()).catch(() => null);
+  if (!data?.entries) { el.innerHTML = '<div class="empty-msg">Journal non disponible</div>'; return; }
+
+  const priColor = p => ({ err:'var(--err)', warning:'var(--warn)', crit:'var(--err)', alert:'var(--err)', emerg:'var(--err)', debug:'var(--text3)' }[p] || 'var(--text2)');
+
+  const lines = data.entries.map(e => {
+    const ts = e.time ? new Date(parseInt(e.time.replace('.',''))/1000).toLocaleTimeString('fr-FR') : '';
+    return `<div class="log-line">
+      <span class="log-ts">${escapeHtml(ts)}</span>
+      <span class="log-app" style="color:var(--blue)">${escapeHtml(e.unit || '—')}</span>
+      <span class="log-level" style="color:${priColor(e.priority)}">${escapeHtml(e.priority || '')}</span>
+      <span class="log-msg">${escapeHtml(e.message || '')}</span>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = lines || '<div class="empty-msg">Aucune entrée</div>';
+  el.scrollTop = el.scrollHeight;
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
