@@ -42,9 +42,21 @@ func NewManager(rt *runtime.Manager, dc *docker.Client, baseDir string) *Manager
 // BACKUP
 // ─────────────────────────────────────────────
 
-// Backup crée une sauvegarde complète d'une application.
+// Backup crée une sauvegarde complète d'une application (scope = all).
 // Retourne le chemin du dossier de backup créé.
 func (m *Manager) Backup(appID string) (string, error) {
+	return m.BackupWithScope(appID, types.BackupScopeAll)
+}
+
+// BackupWithScope sauvegarde une application avec un scope précis.
+//   - BackupScopeAll    : données + config (défaut, équivalent à Backup)
+//   - BackupScopeConfig : config uniquement (léger, pour les settings)
+//   - BackupScopeData   : données uniquement (médias, BDD, etc.)
+func (m *Manager) BackupWithScope(appID string, scope types.BackupScope) (string, error) {
+	if scope == "" {
+		scope = types.BackupScopeAll
+	}
+
 	app, err := m.rt.GetApp(appID)
 	if err != nil {
 		return "", fmt.Errorf("application '%s' non trouvée: %w", appID, err)
@@ -57,14 +69,18 @@ func (m *Manager) Backup(appID string) (string, error) {
 		return "", fmt.Errorf("création dossier backup: %w", err)
 	}
 
-	// Arrêter les containers pour garantir la cohérence des données
-	fmt.Println("  [1/4] Arrêt des containers...")
+	steps := 2
+	if scope == types.BackupScopeAll {
+		steps = 4
+	}
+	step := 1
+
+	fmt.Printf("  [%d/%d] Arrêt des containers...\n", step, steps)
+	step++
 	if err := m.docker.Stop(app.ComposeDir); err != nil {
 		_ = os.RemoveAll(backupDir)
 		return "", fmt.Errorf("arrêt containers: %w", err)
 	}
-
-	// Toujours redémarrer, même en cas d'erreur
 	defer func() {
 		fmt.Println("  → Redémarrage des containers...")
 		_ = m.docker.Start(app.ComposeDir)
@@ -73,38 +89,63 @@ func (m *Manager) Backup(appID string) (string, error) {
 	manifest := types.BackupManifest{
 		App:            appID,
 		AppName:        app.Name,
-		Timestamp:      now, // même instant que le nom de dossier
+		Timestamp:      now,
 		CaleopeVersion: version.Version,
 	}
-
-	// Sauvegarder app-data/<app>/
-	fmt.Println("  [2/4] Sauvegarde des données...")
-	dataDir := filepath.Join(m.baseDir, "app-data", appID)
-	if _, err := os.Stat(dataDir); err == nil {
-		if err := tarGz(dataDir, filepath.Join(backupDir, "data.tar.gz")); err != nil {
-			return "", fmt.Errorf("backup data: %w", err)
-		}
-		manifest.HasData = true
+	if scope != "" {
+		manifest.Scope = string(scope)
 	}
 
-	// Sauvegarder app-config/<app>/
-	fmt.Println("  [3/4] Sauvegarde de la configuration...")
-	configDir := filepath.Join(m.baseDir, "app-config", appID)
-	if _, err := os.Stat(configDir); err == nil {
-		if err := tarGz(configDir, filepath.Join(backupDir, "config.tar.gz")); err != nil {
-			return "", fmt.Errorf("backup config: %w", err)
+	if scope == types.BackupScopeAll || scope == types.BackupScopeData {
+		fmt.Printf("  [%d/%d] Sauvegarde des données...\n", step, steps)
+		step++
+		dataDir := filepath.Join(m.baseDir, "app-data", appID)
+		if _, err := os.Stat(dataDir); err == nil {
+			if err := tarGz(dataDir, filepath.Join(backupDir, "data.tar.gz")); err != nil {
+				return "", fmt.Errorf("backup data: %w", err)
+			}
+			manifest.HasData = true
 		}
-		manifest.HasConfig = true
 	}
 
-	// Écrire le manifest
-	fmt.Println("  [4/4] Écriture du manifest...")
+	if scope == types.BackupScopeAll || scope == types.BackupScopeConfig {
+		fmt.Printf("  [%d/%d] Sauvegarde de la configuration...\n", step, steps)
+		step++
+		configDir := filepath.Join(m.baseDir, "app-config", appID)
+		if _, err := os.Stat(configDir); err == nil {
+			if err := tarGz(configDir, filepath.Join(backupDir, "config.tar.gz")); err != nil {
+				return "", fmt.Errorf("backup config: %w", err)
+			}
+			manifest.HasConfig = true
+		}
+	}
+
+	fmt.Printf("  [%d/%d] Écriture du manifest...\n", step, steps)
 	manifestData, _ := json.MarshalIndent(manifest, "", "  ")
 	if err := os.WriteFile(filepath.Join(backupDir, "manifest.json"), manifestData, 0644); err != nil {
 		return "", fmt.Errorf("écriture manifest: %w", err)
 	}
 
 	return backupDir, nil
+}
+
+// BackupAll sauvegarde toutes les applications installées avec le scope donné.
+// Retourne la liste des apps sauvegardées et les erreurs éventuelles.
+func (m *Manager) BackupAll(scope types.BackupScope) ([]string, []error) {
+	apps, err := m.rt.ListApps()
+	if err != nil {
+		return nil, []error{fmt.Errorf("liste apps : %w", err)}
+	}
+	var done []string
+	var errs []error
+	for _, app := range apps {
+		if _, err := m.BackupWithScope(app.ID, scope); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", app.ID, err))
+		} else {
+			done = append(done, app.ID)
+		}
+	}
+	return done, errs
 }
 
 // ─────────────────────────────────────────────
