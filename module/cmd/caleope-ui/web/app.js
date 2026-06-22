@@ -551,7 +551,7 @@ function catalogCard(app) {
         <div class="app-icon" style="width:32px;height:32px;font-size:15px">${icon(app.id)}</div>
         <div>
           <div class="cat-name">${app.name || app.id}</div>
-          <div class="cat-tag">${(app.categories || []).join(' · ').toUpperCase() || 'APP'}</div>
+          <div class="cat-tag">${app.category?.toUpperCase() || 'APP'}</div>
         </div>
       </div>
       <div class="cat-desc">${app.description || ''}</div>
@@ -1746,6 +1746,10 @@ function goSection(id) {
   document.querySelectorAll('.section-content').forEach(el => el.classList.add('hidden'));
   const target = document.getElementById(sec?.content);
   if (target) target.classList.remove('hidden');
+
+  // Scroll en haut à chaque changement de section
+  const contentEl = document.querySelector('.content');
+  if (contentEl) contentEl.scrollTop = 0;
 
   // Load data
   if (sec?.load) sec.load();
