@@ -891,6 +891,45 @@ EOF
 }
 
 # =============================================================================
+# APPS PAR DÉFAUT (CrowdSec + Authentik)
+# =============================================================================
+
+install_default_apps() {
+    log_section "Applications de sécurité par défaut"
+
+    # Attendre que le daemon soit opérationnel (max 30s)
+    local max=15 waited=0
+    log_step "Attente du daemon caleoped..."
+    until caleope list &>/dev/null 2>&1; do
+        sleep 2; waited=$((waited + 2))
+        if [[ ${waited} -ge ${max} ]]; then
+            log_warning "Daemon non joignable — skip installation par défaut"
+            return 0
+        fi
+    done
+
+    # CrowdSec — IDS/IPS réseau (pas de params requis, disponible sur canal alpha)
+    if caleope store 2>/dev/null | grep -q "crowdsec"; then
+        log_step "Installation de CrowdSec (IDS/IPS)..."
+        if caleope install crowdsec 2>/dev/null; then
+            log_success "CrowdSec installé"
+        else
+            log_warning "CrowdSec non installé (sera disponible via 'caleope install crowdsec')"
+        fi
+    else
+        log_warning "CrowdSec non disponible dans ce canal — à installer via 'caleope install crowdsec' (canal alpha)"
+    fi
+
+    # Authentik — Identity Provider SSO (secrets générés automatiquement)
+    log_step "Installation d'Authentik (SSO/Identity Provider)..."
+    if caleope install authentik 2>/dev/null; then
+        log_success "Authentik installé"
+    else
+        log_warning "Authentik non installé (sera disponible via 'caleope install authentik')"
+    fi
+}
+
+# =============================================================================
 # COCKPIT
 # =============================================================================
 
@@ -1281,6 +1320,7 @@ main() {
     install_caleope_ui_service
     deploy_traefik
     deploy_portainer
+    install_default_apps
     install_cockpit
     generate_links_file
     print_summary

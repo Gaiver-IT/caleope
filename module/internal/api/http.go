@@ -114,6 +114,20 @@ func (s *Server) StartHTTP(port int) error {
 		s.httpStore(w, r)
 	})))
 
+	// GET /api/v1/store/{id} — params d'une app spécifique
+	mux.Handle("/api/v1/store/", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/store/")
+		if id == "" {
+			s.httpError(w, "id application manquant", http.StatusBadRequest)
+			return
+		}
+		s.httpStoreApp(w, r, id)
+	})))
+
 	// POST /api/v1/upgrade
 	mux.Handle("/api/v1/upgrade", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -373,6 +387,15 @@ func (s *Server) httpStore(w http.ResponseWriter, r *http.Request) {
 	data, err := s.handleSearch(map[string]string{"term": r.URL.Query().Get("q")})
 	if err != nil {
 		s.httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.httpOK(w, data)
+}
+
+func (s *Server) httpStoreApp(w http.ResponseWriter, r *http.Request, id string) {
+	data, err := s.handleStoreParams(map[string]string{"app": id})
+	if err != nil {
+		s.httpError(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	s.httpOK(w, data)
