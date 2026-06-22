@@ -1340,7 +1340,16 @@ WantedBy=multi-user.target
     caleope-ui:
       rule: "Host(` + "`%s`" + `)"
       entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+      service: caleope-ui
+    caleope-ui-http:
+      rule: "Host(` + "`%s`" + `)"
+      entryPoints:
         - web
+      middlewares:
+        - redirect-to-https
       service: caleope-ui
 
   services:
@@ -1348,7 +1357,13 @@ WantedBy=multi-user.target
       loadBalancer:
         servers:
           - url: "http://%s:8766"
-`, domain, hostIP)
+
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+`, domain, domain, hostIP)
 	_ = os.WriteFile(filepath.Join(traefikDir, "caleope-ui.yml"), []byte(traefikConf), 0644)
 }
 
