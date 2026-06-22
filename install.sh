@@ -47,6 +47,7 @@ PORT_TRAEFIK_HTTPS=443
 PORT_TRAEFIK_DASHBOARD=8080
 PORT_PORTAINER=8010
 PORT_COCKPIT=8020
+PORT_UI=8766
 
 # Réseaux Docker
 DOCKER_NET_PUBLIC="caleope-public"
@@ -65,6 +66,8 @@ CALEOPE_SMTP_PASS="${CALEOPE_SMTP_PASS:-}"
 CALEOPE_SMTP_FROM="${CALEOPE_SMTP_FROM:-}"
 # Mot de passe chiffrement secrets (utilisé une seule fois au démarrage du daemon)
 CALEOPE_SECRETS_PASSWORD="${CALEOPE_SECRETS_PASSWORD:-}"
+# Mot de passe interface web
+CALEOPE_UI_PASSWORD="${CALEOPE_UI_PASSWORD:-}"
 
 # Couleurs
 RED='\033[0;31m'
@@ -209,6 +212,28 @@ ask_config() {
         echo -e "  ${RED}Les mots de passe ne correspondent pas${NC}"
     done
     unset secrets_pass secrets_pass2
+
+    # ── Mot de passe interface web ──
+    if [[ -z "${CALEOPE_UI_PASSWORD}" ]]; then
+        echo ""
+        echo -e "${BLUE}  Mot de passe de l'interface web Caleope${NC}"
+        echo -e "  ${GRAY}Protège l'accès à l'UI sur le port ${PORT_UI}.${NC}"
+        local ui_pass ui_pass2
+        while true; do
+            read -rsp "    Mot de passe UI : " ui_pass </dev/tty; echo ""
+            if [[ -z "${ui_pass}" ]]; then
+                echo -e "  ${RED}Le mot de passe ne peut pas être vide${NC}"
+                continue
+            fi
+            read -rsp "    Confirmer : " ui_pass2 </dev/tty; echo ""
+            if [[ "${ui_pass}" == "${ui_pass2}" ]]; then
+                CALEOPE_UI_PASSWORD="${ui_pass}"
+                break
+            fi
+            echo -e "  ${RED}Les mots de passe ne correspondent pas${NC}"
+        done
+        unset ui_pass ui_pass2
+    fi
 
     # ── Résumé ──
     echo ""
@@ -383,9 +408,10 @@ download_binaries_from_release() {
     fi
 
     # Extraire les URLs des binaires (jq parse le JSON)
-    local daemon_url cli_url
+    local daemon_url cli_url ui_url
     daemon_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleoped-linux-amd64") | .browser_download_url' 2>/dev/null)
     cli_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleope-linux-amd64") | .browser_download_url' 2>/dev/null)
+    ui_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleope-ui-linux-amd64") | .browser_download_url' 2>/dev/null)
 
     if [[ -z "${daemon_url}" || -z "${cli_url}" ]]; then
         log_debug "Binaires non trouvés dans la release"
@@ -398,6 +424,14 @@ download_binaries_from_release() {
 
     wget -q "${daemon_url}" -O /usr/local/bin/caleoped
     wget -q "${cli_url}"    -O /usr/local/bin/caleope
+
+    if [[ -n "${ui_url}" ]]; then
+        wget -q "${ui_url}" -O /usr/local/bin/caleope-ui
+        chmod 755 /usr/local/bin/caleope-ui
+        log_debug "Binaire caleope-ui téléchargé"
+    else
+        log_warning "Binaire caleope-ui absent de la release — interface web non disponible"
+    fi
 
     chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope
     ln -sf /usr/local/bin/caleope /usr/local/bin/caleope-store
@@ -524,6 +558,54 @@ EOF
         log_success "Daemon caleoped actif"
     else
         log_warning "Daemon démarré mais socket non détecté — vérifier : journalctl -u caleoped"
+    fi
+}
+
+# =============================================================================
+# SERVICE SYSTEMD CALEOPE-UI
+# =============================================================================
+
+install_caleope_ui_service() {
+    log_section "Service caleope-ui (interface web)"
+
+    if ! command -v caleope-ui &>/dev/null; then
+        log_warning "Binaire caleope-ui absent — interface web non installée"
+        return 0
+    fi
+
+    log_step "Installation du fichier service caleope-ui..."
+    cat > /etc/systemd/system/caleope-ui.service << EOF
+[Unit]
+Description=Caleope UI Server
+After=network.target caleoped.service
+Requires=caleoped.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/caleope-ui \\
+    --base-dir ${CALEOPE_ROOT} \\
+    --daemon   http://127.0.0.1:8765 \\
+    --port     ${PORT_UI}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable caleope-ui
+    systemctl start caleope-ui || true
+
+    sleep 2
+
+    if systemctl is-active --quiet caleope-ui; then
+        local IP
+        IP=$(hostname -I | awk '{print $1}')
+        log_success "Interface web active → http://${IP}:${PORT_UI}"
+    else
+        log_warning "caleope-ui démarré — vérifier : journalctl -u caleope-ui"
     fi
 }
 
@@ -924,6 +1006,15 @@ EOF
     chmod 640 "${CALEOPE_ROOT}/caleope.conf"
     chown "${CALEOPE_USER}:${CALEOPE_GROUP}" "${CALEOPE_ROOT}/caleope.conf"
 
+    # Mot de passe interface web
+    if [[ -n "${CALEOPE_UI_PASSWORD}" ]]; then
+        mkdir -p "${CALEOPE_ROOT}/core/daemon"
+        echo -n "${CALEOPE_UI_PASSWORD}" > "${CALEOPE_ROOT}/core/daemon/ui-password"
+        chmod 600 "${CALEOPE_ROOT}/core/daemon/ui-password"
+        CALEOPE_UI_PASSWORD=""
+        log_success "Mot de passe UI enregistré"
+    fi
+
     log_success "Config sauvegardée dans ${CALEOPE_ROOT}/caleope.conf"
     log_debug "  CALEOPE_DOMAIN=${CALEOPE_DOMAIN}"
     log_debug "  CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}"
@@ -1048,6 +1139,7 @@ generate_links_file() {
 
 | Service            | URL                                         |
 |--------------------|---------------------------------------------|
+| Caleope UI         | http://${IP}:${PORT_UI}                     |
 | Traefik dashboard  | http://${IP}:${PORT_TRAEFIK_DASHBOARD}      |
 | Portainer          | https://${IP}:${PORT_PORTAINER}             |
 | Cockpit            | https://${IP}:${PORT_COCKPIT}               |
@@ -1110,15 +1202,21 @@ print_summary() {
     echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║                   Services actifs                    ║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
+    # Test statut UI
+    local ui_status="❌ inactif"
+    systemctl is-active --quiet caleope-ui 2>/dev/null && ui_status="✅ actif"
+
+    echo -e "${CYAN}║${NC}  🌐 Caleope UI  → ${YELLOW}http://${IP}:${PORT_UI}${NC}"
     echo -e "${CYAN}║${NC}  🔀 Traefik     → ${YELLOW}http://${IP}:${PORT_TRAEFIK_DASHBOARD}${NC}"
     echo -e "${CYAN}║${NC}  🐳 Portainer   → ${YELLOW}https://${IP}:${PORT_PORTAINER}${NC}"
     echo -e "${CYAN}║${NC}  🖥️  Cockpit     → ${YELLOW}https://${IP}:${PORT_COCKPIT}${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║                   Caleope Daemon                     ║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
-    echo -e "${CYAN}║${NC}  Statut : ${daemon_status}"
+    echo -e "${CYAN}║${NC}  Daemon : ${daemon_status}  |  UI : ${ui_status}"
     echo -e "${CYAN}║${NC}  Socket : ${SOCKET_PATH}"
     echo -e "${CYAN}║${NC}  Logs   : ${YELLOW}journalctl -u caleoped -f${NC}"
+    echo -e "${CYAN}║${NC}  UI     : ${YELLOW}journalctl -u caleope-ui -f${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║                   Prochaines étapes                  ║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
@@ -1180,6 +1278,7 @@ main() {
     init_secrets_encryption    # Transmettre mot de passe chiffrement au daemon
     sync_store                 # git clone du store officiel
     install_caleoped_service
+    install_caleope_ui_service
     deploy_traefik
     deploy_portainer
     install_cockpit
