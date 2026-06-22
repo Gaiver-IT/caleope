@@ -178,7 +178,9 @@
         <div class="log-wrap">
           <div class="log-toolbar">
             <select class="log-select" id="log-select" onchange="changeLogApp()"></select>
-            <span style="font-size:9px;color:var(--text3);letter-spacing:.5px">— TAIL 100</span>
+            <span id="log-live-badge" class="badge badge-ok" style="display:none;font-size:8px;animation:pulse 1.5s infinite">
+              <i class="ti ti-radio" style="font-size:9px"></i>&nbsp;LIVE
+            </span>
             <button class="btn-sm" style="margin-left:auto" onclick="loadLogs()">
               <i class="ti ti-refresh"></i>REFRESH
             </button>
@@ -186,6 +188,9 @@
           <div class="log-body" id="log-body"></div>
         </div>
       </div>
+
+      <!-- TASKS -->
+      <div id="content-tasks" class="section-content hidden"></div>
 
       <!-- BACKUPS -->
       <div id="content-backups" class="section-content hidden"></div>
@@ -258,6 +263,66 @@
 </div>
 
 <!-- ── MODAL BACKUP ──────────────────────────────────────────────────────────── -->
+<!-- ── MODAL TASK ──────────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="task-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-title">NOUVELLE TÂCHE PLANIFIÉE</span>
+      <button class="modal-close" onclick="closeTaskModal()" aria-label="Fermer"><i class="ti ti-x"></i></button>
+    </div>
+    <form id="task-form" onsubmit="event.preventDefault(); submitTaskForm()">
+      <div class="modal-body">
+
+        <div class="field full">
+          <div class="field-label">TYPE</div>
+          <select class="field-input" id="task-type" onchange="onTaskTypeChange()">
+            <option value="backup">Sauvegarde automatique</option>
+            <option value="upgrade">Mise à jour Caleope</option>
+            <option value="update">Synchronisation du store</option>
+          </select>
+        </div>
+
+        <div class="field full" id="task-app-row">
+          <div class="field-label">APPLICATION <span style="color:var(--text3)">(vide = toutes)</span></div>
+          <input class="field-input" id="task-app" type="text" placeholder="jellyfin, nextcloud… ou vide pour toutes">
+        </div>
+
+        <div class="field full" id="task-scope-row">
+          <div class="field-label">PÉRIMÈTRE</div>
+          <select class="field-input" id="task-scope">
+            <option value="all">Tout (data + config)</option>
+            <option value="config">Config uniquement</option>
+            <option value="data">Data uniquement</option>
+          </select>
+        </div>
+
+        <div class="field full">
+          <div class="field-label">HEURE D'EXÉCUTION</div>
+          <input class="field-input" id="task-time" type="time" value="02:00">
+        </div>
+
+        <div class="field full">
+          <div class="field-label">JOURS <span style="color:var(--text3)">(aucun = chaque jour)</span></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="0" style="accent-color:var(--accent)"> Dim</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="1" style="accent-color:var(--accent)"> Lun</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="2" style="accent-color:var(--accent)"> Mar</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="3" style="accent-color:var(--accent)"> Mer</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="4" style="accent-color:var(--accent)"> Jeu</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="5" style="accent-color:var(--accent)"> Ven</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="6" style="accent-color:var(--accent)"> Sam</label>
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeTaskModal()">ANNULER</button>
+        <button type="submit" class="btn btn-vio"><i class="ti ti-plus"></i>CRÉER</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="modal-overlay" id="backup-modal" role="dialog" aria-modal="true">
   <div class="modal" style="max-width:440px">
     <div class="modal-title">

@@ -14,6 +14,7 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -66,6 +67,47 @@ func (c *Client) Pull(composeDir string) error {
 }
 
 // Logs retourne les logs d'une stack (les 100 dernières lignes).
+// LogsStream lance docker compose logs --follow et envoie chaque ligne dans ch.
+// Ferme ch quand le process se termine ou quand done est fermé.
+func (c *Client) LogsStream(composeDir string, tail int, ch chan<- string, done <-chan struct{}) {
+	tailStr := fmt.Sprintf("%d", tail)
+	cmd := exec.Command("docker", "compose",
+		"--file", filepath.Join(composeDir, "compose.yml"),
+		"--env-file", filepath.Join(composeDir, "app.env"),
+		"logs", "--follow", "--tail", tailStr,
+	)
+	cmd.Dir = composeDir
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		close(ch)
+		return
+	}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		close(ch)
+		return
+	}
+
+	go func() {
+		<-done
+		_ = cmd.Process.Kill()
+	}()
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		select {
+		case ch <- scanner.Text():
+		case <-done:
+			_ = cmd.Process.Kill()
+			close(ch)
+			return
+		}
+	}
+	close(ch)
+	_ = cmd.Wait()
+}
+
 func (c *Client) Logs(composeDir string, tail int) (string, error) {
 	tailStr := fmt.Sprintf("%d", tail)
 	cmd := exec.Command("docker", "compose",
