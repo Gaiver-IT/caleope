@@ -192,6 +192,16 @@ func (i *Installer) Install(opts InstallOptions) error {
 			return err
 		}
 
+		// ── Étape 7.5 : Reconstruction app.env après setup.sh ──
+		// setup.sh écrit secrets.env (COMPOSE_PROFILES, clés API, etc.) APRÈS que
+		// generateCompose() a créé app.env à l'étape 6. Sans cette reconstruction,
+		// docker compose up ignore COMPOSE_PROFILES et les profils (jellyfin, vpn…)
+		// ne sont jamais activés lors de l'installation initiale.
+		{
+			refreshed := i.buildEnvFile(manifest, opts)
+			_ = os.WriteFile(filepath.Join(composeDir, "app.env"), []byte(refreshed), 0600)
+		}
+
 		// ── Étape 8 : Réseaux Docker ──
 		fmt.Println("  [8/12] Vérification des réseaux Docker...")
 		if err := i.docker.EnsureNetworks(); err != nil {
