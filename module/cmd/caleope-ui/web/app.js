@@ -940,10 +940,22 @@ function changeBackupApp() {
 
 // ── File de tâches (style Proxmox) ────────────────────────────────────────────
 
+let _taskTimer = null;
 function taskAdd(type, appId, label) {
   const id = ++S.taskSeq;
   S.tasks.unshift({ id, type, appId, label, status: 'running', detail: '', startedAt: Date.now() });
   renderTaskQueue();
+  // Rafraîchit le timer chaque seconde tant qu'une tâche tourne
+  if (!_taskTimer) {
+    _taskTimer = setInterval(() => {
+      if (S.tasks.some(t => t.status === 'running')) {
+        renderTaskQueue();
+      } else {
+        clearInterval(_taskTimer);
+        _taskTimer = null;
+      }
+    }, 1000);
+  }
   return id;
 }
 
@@ -1041,7 +1053,9 @@ async function loadSecrets() {
           style="width:100%;background:none;border:none;cursor:pointer;padding:10px 12px;display:flex;align-items:center;gap:6px;color:inherit;text-align:left">
           ${icon(a.app_id)} <span style="font-size:10px;font-weight:700;letter-spacing:1px">${escapeHtml(a.app_name || a.app_id)}</span>
           <span style="margin-left:auto;font-size:9px;color:var(--text3)">${a.key_count} VARIABLE${a.key_count > 1 ? 'S' : ''}</span>
-          ${a.encrypted ? '<span class="badge badge-warn" style="font-size:8px;margin-left:4px"><i class="ti ti-lock" style="font-size:9px"></i>&nbsp;CHIFFRÉ</span>' : ''}
+          ${a.encrypted ? (effectivelyUnlocked
+            ? '<span class="badge badge-ok"  style="font-size:8px;margin-left:4px"><i class="ti ti-lock-open"  style="font-size:9px"></i>&nbsp;EN CLAIR</span>'
+            : '<span class="badge badge-warn" style="font-size:8px;margin-left:4px"><i class="ti ti-lock"       style="font-size:9px"></i>&nbsp;CHIFFRÉ</span>') : ''}
           <i class="ti ti-chevron-right" id="secret-chevron-${escapeHtml(a.app_id)}" style="font-size:10px;margin-left:4px;transition:transform .15s;color:var(--text3)"></i>
         </button>
         <div id="${bodyId}" style="display:none;padding:0 12px 10px">${varsHtml}</div>

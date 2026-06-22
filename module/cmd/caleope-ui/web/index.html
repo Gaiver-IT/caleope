@@ -301,12 +301,14 @@ function loadCurrentSection() { if (SECTIONS[S.section]?.load) SECTIONS[S.sectio
 
 // Récup infos daemon pour sidebar dès auth OK
 async function updateSidebarInfo() {
-  const data = await api.get('/api/v1/ping');
-  if (!data) return;
-  const host = data.domain?.split('.')[0]?.toUpperCase() || 'CALEOPE';
+  const resp = await api.get('/api/v1/ping');
+  if (!resp) return;
+  // L'API enveloppe la réponse dans {data: {...}, success: true}
+  const d = resp.data ?? resp;
+  const host = d.domain?.split('.')[0]?.toUpperCase() || 'CALEOPE';
   document.getElementById('chip-host').textContent = host;
-  document.getElementById('chip-ip').textContent   = data.version ? 'v' + data.version : '—';
-  document.getElementById('sb-version').textContent = data.version ? 'V' + data.version.toUpperCase() : 'V—';
+  document.getElementById('chip-ip').textContent   = d.version ? 'v' + d.version : '—';
+  document.getElementById('sb-version').textContent = d.version ? 'V' + d.version.toUpperCase() : 'V—';
 }
 
 const _showApp = showApp;
