@@ -1040,6 +1040,11 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		fmt.Println("✅ Dépôts synchronisés")
 	}
 
+	// Installer les composants essentiels s'ils sont absents.
+	// Ces apps font partie de l'infrastructure Caleope et doivent être présentes
+	// sur toute installation complète.
+	s.ensureCoreApps()
+
 	fmt.Println("→ Redémarrage du daemon dans 2 secondes...")
 
 	// Redémarrer le daemon via systemd (en arrière-plan)
@@ -1318,4 +1323,42 @@ WantedBy=multi-user.target
 	_ = os.WriteFile(servicePath, []byte(serviceContent), 0644)
 	_ = exec.Command("systemctl", "daemon-reload").Run()
 	_ = exec.Command("systemctl", "enable", "caleope-ui").Run()
+}
+
+// coreApps liste les composants essentiels installés automatiquement sur toute instance Caleope.
+// Chaque entrée contient l'ID de l'app et son domaine (vide = auto-dérivé depuis la config).
+var coreApps = []struct {
+	id     string
+	domain string // vide = s.rt.AppDomain(id)
+}{
+	{"crowdsec", ""},
+	{"authentik", ""},
+}
+
+// ensureCoreApps installe silencieusement les composants core manquants.
+// Appelé à chaque upgrade — idempotent si l'app est déjà installée.
+func (s *Server) ensureCoreApps() {
+	for _, app := range coreApps {
+		if _, err := s.rt.GetApp(app.id); err == nil {
+			continue // déjà installée
+		}
+		domain := app.domain
+		if domain == "" {
+			if m := s.peekManifest(app.id); m != nil && m.UseBaseDomain {
+				domain = s.rt.BaseDomain()
+			} else {
+				domain = s.rt.AppDomain(app.id)
+			}
+		}
+		fmt.Printf("→ Installation du composant core : %s...\n", app.id)
+		if err := s.installer.Install(install.InstallOptions{
+			AppID:   app.id,
+			Domain:  domain,
+			Channel: "stable",
+		}); err != nil {
+			fmt.Printf("⚠️  %s : installation échouée : %v\n", app.id, err)
+		} else {
+			fmt.Printf("✅ %s installé\n", app.id)
+		}
+	}
 }
