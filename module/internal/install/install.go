@@ -15,19 +15,19 @@ package install
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"text/template"
 	"time"
 
+	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
 	"github.com/gaiver-it/caleope/internal/runtime"
 	"github.com/gaiver-it/caleope/internal/store"
+	"github.com/gaiver-it/caleope/internal/ufw"
 	"github.com/gaiver-it/caleope/pkg/types"
 )
 
@@ -38,7 +38,6 @@ type Installer struct {
 	docker  *docker.Client
 	emitter *events.Emitter
 	baseDir string
-	out     io.Writer
 }
 
 func NewInstaller(
@@ -54,16 +53,7 @@ func NewInstaller(
 		docker:  dc,
 		emitter: em,
 		baseDir: baseDir,
-		out:     os.Stdout,
 	}
-}
-
-// WithWriter retourne une copie de l'installeur avec un writer personnalisé.
-// Utilisé pour les installations asynchrones (capture des logs dans une session).
-func (i *Installer) WithWriter(w io.Writer) *Installer {
-	clone := *i
-	clone.out = w
-	return &clone
 }
 
 // InstallOptions contient les paramètres passés par l'utilisateur.
@@ -75,7 +65,7 @@ type InstallOptions struct {
 	Force           bool              // forcer la réinstallation si déjà installé
 	StorageLocation string            // nom de la location NAS pour stocker app-data (vide = local)
 	StorageDataDir  string            // chemin absolu résolu (rempli par l'installeur)
-	Async           bool              // true = pas de stdin interactif, output vers i.out
+	GPU             bool              // activer le passthrough GPU (NVIDIA/Intel) si l'app le supporte
 }
 
 // ─────────────────────────────────────────────
@@ -128,19 +118,6 @@ func (i *Installer) Install(opts InstallOptions) error {
 		if _, err := i.rt.GetApp(opts.AppID); err == nil {
 			return fmt.Errorf("'%s' est déjà installée (utilisez --force pour réinstaller)", opts.AppID)
 		}
-	} else {
-		// Réinstallation forcée : arrêter et supprimer les containers existants
-		// avant de recommencer, pour éviter les conflits de noms de containers.
-		fmt.Println("  [*] Arrêt de la stack existante (--force)...")
-		existingComposeDir := filepath.Join(i.baseDir, "apps-installed", opts.AppID)
-		if _, statErr := os.Stat(existingComposeDir); statErr == nil {
-			// compose.yml présent → down propre via Docker Compose
-			i.docker.DownAllProfiles(existingComposeDir, "vpn,novpn,jellyfin")
-		}
-		// Fallback : supprimer de force tous les containers du projet par label
-		// (couvre le cas où compose.yml est absent après un rollback précédent)
-		i.docker.ForceRemoveProjectContainers(opts.AppID)
-		fmt.Println("  ✓ Stack arrêtée")
 	}
 
 	// Marquer l'app comme "en cours d'installation" dans le runtime
@@ -166,7 +143,8 @@ func (i *Installer) Install(opts InstallOptions) error {
 
 	// ── Étape 3 : Vérification sécurité ──
 	fmt.Println("  [3/12] Vérification des permissions...")
-	if err := i.checkSecurity(manifest); err != nil {
+	if err := i.checkSecurity(manifest, repo.Trust); err != nil {
+		audit.Log(audit.ActionInstall, opts.AppID, "DENIED:security_check")
 		return err
 	}
 
@@ -176,10 +154,13 @@ func (i *Installer) Install(opts InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	// Afficher chaque port alloué (allocatePorts met déjà à jour manifest.Ports[j].Host)
-	for _, port := range manifest.Ports {
-		if port.Dynamic && port.Host > 0 {
-			fmt.Printf("         ✓ Port %d → container:%d (%s)\n", port.Host, port.Container, port.Name)
+	if len(manifest.Ports) > 0 {
+		fmt.Printf("         ✓ Port %d → container:%d\n", hostPort, manifest.Ports[0].Container)
+	}
+	// Mettre à jour les ports dans le manifest pour le compose
+	for j := range manifest.Ports {
+		if manifest.Ports[j].Dynamic {
+			manifest.Ports[j].Host = hostPort
 		}
 	}
 
@@ -190,54 +171,53 @@ func (i *Installer) Install(opts InstallOptions) error {
 		return err
 	}
 
-	// ── Étape 6 : Exécution setup.sh ──
-	fmt.Println("  [6/12] Exécution setup.sh...")
-	if err := i.runSetup(ctx, appDir, composeDir, manifest, opts); err != nil {
-		return err
-	}
+	// ── Étapes 6-10 : Docker (skippées pour les apps no_container) ──
+	if manifest.NoContainer {
+		fmt.Println("  [6-10/12] Skipping Docker (outil système sans container)...")
+		// setup.sh tourne quand même pour les outils système (config, clés…)
+		fmt.Println("  [6/12] Exécution setup.sh...")
+		if err := i.runSetup(ctx, appDir, composeDir, manifest, opts); err != nil {
+			return err
+		}
+	} else {
+		// ── Étape 6 : Génération compose (avant setup.sh pour que setup.sh puisse le patcher) ──
+		fmt.Println("  [6/12] Génération du compose...")
+		if err := i.generateCompose(appDir, composeDir, manifest, opts); err != nil {
+			return err
+		}
 
-	// ── Étape 7 : Génération compose final ──
-	fmt.Println("  [7/12] Génération du compose...")
-	if err := i.generateCompose(appDir, composeDir, manifest, opts); err != nil {
-		return err
-	}
+		// ── Étape 7 : Exécution setup.sh (peut modifier le compose généré) ──
+		fmt.Println("  [7/12] Exécution setup.sh...")
+		if err := i.runSetup(ctx, appDir, composeDir, manifest, opts); err != nil {
+			return err
+		}
 
-	// ── Étape 8 : Réseaux Docker ──
-	fmt.Println("  [8/12] Vérification des réseaux Docker...")
-	if err := i.docker.EnsureNetworks(); err != nil {
-		return err
-	}
+		// ── Étape 7.5 : Reconstruction app.env après setup.sh ──
+		// setup.sh écrit secrets.env (COMPOSE_PROFILES, clés API, etc.) APRÈS que
+		// generateCompose() a créé app.env à l'étape 6. Sans cette reconstruction,
+		// docker compose up ignore COMPOSE_PROFILES et les profils (jellyfin, vpn…)
+		// ne sont jamais activés lors de l'installation initiale.
+		{
+			refreshed := i.buildEnvFile(manifest, opts)
+			_ = os.WriteFile(filepath.Join(composeDir, "app.env"), []byte(refreshed), 0600)
+		}
 
-	// ── Étape 9 : docker compose up ──
-	fmt.Println("  [9/12] Démarrage des containers...")
-	if err := i.docker.Up(composeDir); err != nil {
-		return err
-	}
+		// ── Étape 8 : Réseaux Docker ──
+		fmt.Println("  [8/12] Vérification des réseaux Docker...")
+		if err := i.docker.EnsureNetworks(); err != nil {
+			return err
+		}
 
-	// ── Étape 10 : Attente démarrage ──
-	fmt.Println("  [10/12] Vérification du démarrage...")
-	if err := i.waitForStart(ctx, composeDir); err != nil {
-		return err
-	}
+		// ── Étape 9 : docker compose up ──
+		fmt.Println("  [9/12] Démarrage des containers...")
+		if err := i.docker.Up(composeDir); err != nil {
+			return err
+		}
 
-	// ── Étape 10.5 : Bootstrap post-démarrage ──
-	// Si setup.sh a écrit un fichier .bootstrap_service dans app-config/<app>/,
-	// on exécute ce service one-shot (docker compose run --rm) avant d'afficher
-	// les notes post-install. Cela garantit que les connexions inter-services
-	// (Prowlarr→Radarr, Jellyfin wizard, etc.) sont prêtes quand l'utilisateur
-	// voit ses identifiants.
-	configDir := filepath.Join(i.baseDir, "app-config", opts.AppID)
-	bsServicePath := filepath.Join(configDir, ".bootstrap_service")
-	if bsData, bsErr := os.ReadFile(bsServicePath); bsErr == nil {
-		bsService := strings.TrimSpace(string(bsData))
-		if bsService != "" {
-			fmt.Printf("  [*] Bootstrap inter-services (%s)...\n", bsService)
-			if runErr := i.docker.RunOneOff(composeDir, bsService); runErr != nil {
-				// Non-fatal : l'utilisateur peut relancer via caleope configure
-				fmt.Printf("  ⚠ Bootstrap incomplet: %v\n", runErr)
-			} else {
-				fmt.Println("  ✓ Bootstrap terminé — connexions inter-services configurées")
-			}
+		// ── Étape 10 : Attente démarrage ──
+		fmt.Println("  [10/12] Vérification du démarrage...")
+		if err := i.waitForStart(ctx, composeDir); err != nil {
+			return err
 		}
 	}
 
@@ -251,17 +231,30 @@ func (i *Installer) Install(opts InstallOptions) error {
 		return err
 	}
 
-	// ── Étape 12 : Événement ──
+	// Ouvrir les ports UFW marqués firewall:true
+	if ufwPorts := manifestToUFWPorts(manifest); len(ufwPorts) > 0 {
+		fmt.Println("         → Ouverture des ports UFW...")
+		for _, e := range ufw.OpenPorts(ufwPorts) {
+			fmt.Printf("         ⚠ %v\n", e)
+		}
+	}
+
+	// ── Étape 12 : Événement + audit ──
 	fmt.Println("  [12/12] Émission de l'événement...")
 	_ = i.emitter.AppInstalled(opts.AppID)
+	audit.Log(audit.ActionInstall, opts.AppID, "OK")
 
 	success = true
 	fmt.Printf("\n✅ %s installé avec succès !\n", manifest.Name)
-	if len(manifest.Ports) > 0 {
-		fmt.Printf("   🌐 Accessible sur le port %d\n", hostPort)
-	}
-	if opts.Domain != "" {
-		fmt.Printf("   🔗 Domaine : https://%s\n", opts.Domain)
+	if manifest.NoContainer {
+		fmt.Printf("   🔧 Outil système installé (pas de container)\n")
+	} else {
+		if len(manifest.Ports) > 0 {
+			fmt.Printf("   🌐 Accessible sur le port %d\n", hostPort)
+		}
+		if opts.Domain != "" {
+			fmt.Printf("   🔗 Domaine : https://%s\n", opts.Domain)
+		}
 	}
 
 	return nil
@@ -296,7 +289,8 @@ func (i *Installer) checkTrust(trust types.TrustLevel, appID string) error {
 }
 
 // checkSecurity vérifie les permissions dangereuses du manifest.
-func (i *Installer) checkSecurity(manifest *types.AppManifest) error {
+// Les apps officielles sont auto-acceptées ; community/untrusted demandent confirmation.
+func (i *Installer) checkSecurity(manifest *types.AppManifest, trust types.TrustLevel) error {
 	caps := manifest.Capabilities
 
 	warnings := []string{}
@@ -307,36 +301,40 @@ func (i *Installer) checkSecurity(manifest *types.AppManifest) error {
 		warnings = append(warnings, "accès au socket Docker (contrôle total de Docker)")
 	}
 
-	if len(warnings) > 0 {
-		fmt.Printf("⚠️  Cette application demande des permissions élevées :\n")
-		for _, w := range warnings {
-			fmt.Printf("   - %s\n", w)
-		}
-		fmt.Print("   Continuer ? [o/N] ")
-		var resp string
-		fmt.Scanln(&resp)
-		if strings.ToLower(resp) != "o" {
-			return fmt.Errorf("installation annulée")
-		}
+	if len(warnings) == 0 {
+		return nil
 	}
 
+	// Apps officielles : auto-acceptées (validées par l'équipe Caleope)
+	if trust == types.TrustOfficial {
+		for _, w := range warnings {
+			fmt.Printf("         ℹ  %s (auto-accepté — dépôt officiel)\n", w)
+		}
+		return nil
+	}
+
+	fmt.Printf("⚠️  Cette application demande des permissions élevées :\n")
+	for _, w := range warnings {
+		fmt.Printf("   - %s\n", w)
+	}
+	fmt.Print("   Continuer ? [o/N] ")
+	var resp string
+	fmt.Scanln(&resp)
+	if strings.ToLower(resp) != "o" {
+		return fmt.Errorf("installation annulée")
+	}
 	return nil
 }
 
 // allocatePorts alloue les ports dynamiques nécessaires à l'application.
-// Chaque port dynamique reçoit une valeur indépendante (stockée sous "appID-portName"
-// dans ports.json) et le champ Host de manifest.Ports[j] est mis à jour directement.
-// Retourne le premier port alloué (pour affichage/rollback).
 func (i *Installer) allocatePorts(manifest *types.AppManifest) (int, error) {
 	var firstPort int
-	for j := range manifest.Ports {
-		if manifest.Ports[j].Dynamic {
-			key := manifest.ID + "-" + manifest.Ports[j].Name
-			allocated, err := i.rt.AllocatePort(key, 8000, 9999)
+	for _, port := range manifest.Ports {
+		if port.Dynamic {
+			allocated, err := i.rt.AllocatePort(manifest.ID+"-"+port.Name, 8000, 9999)
 			if err != nil {
-				return firstPort, err
+				return 0, err
 			}
-			manifest.Ports[j].Host = allocated // chaque port a sa propre valeur
 			if firstPort == 0 {
 				firstPort = allocated
 			}
@@ -355,13 +353,16 @@ func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string, o
 	}
 
 	// Créer les dossiers de volumes (bind mounts)
-	// Les volumes marqués "nas: true" dans app.json auront un symlink vers le NAS ;
-	// les autres sont créés localement normalement.
+	// Si stockage NAS : app-data/<app> sera un symlink, pas un dossier réel
 	for _, vol := range manifest.Volumes {
-		if opts.StorageLocation != "" && vol.NAS {
-			continue // sera géré par le symlink NAS ci-dessous
+		// Ignorer les volumes sous app-data/<app> si on utilise le NAS
+		// (ils seront créés sur le NAS via symlink)
+		volPath := filepath.Join(i.baseDir, vol.Source)
+		appDataPrefix := filepath.Join(i.baseDir, "app-data", manifest.ID)
+		if opts.StorageLocation != "" && strings.HasPrefix(volPath, appDataPrefix) {
+			continue // sera géré par le symlink NAS
 		}
-		dirs = append(dirs, filepath.Join(i.baseDir, vol.Source))
+		dirs = append(dirs, volPath)
 	}
 
 	for _, dir := range dirs {
@@ -370,36 +371,25 @@ func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string, o
 		}
 	}
 
-	// ── Stockage NAS : symlink par volume (seulement les volumes NAS=true) ──
-	// Avantage vs symlink app-level : les dossiers config (SQLite) restent locaux,
-	// seul le dossier data (médias, téléchargements) va sur le NAS.
+	// ── Stockage NAS : créer dossier sur NAS + symlink local ──
 	if opts.StorageLocation != "" && opts.StorageDataDir != "" {
-		// S'assurer que le dossier local parent app-data/<app>/ existe (pour accueillir les symlinks)
-		localAppDir := filepath.Join(i.baseDir, "app-data", manifest.ID)
-		if err := os.MkdirAll(localAppDir, 0755); err != nil {
+		// Créer le dossier sur le NAS
+		if err := os.MkdirAll(opts.StorageDataDir, 0755); err != nil {
+			return fmt.Errorf("impossible de créer le dossier NAS: %w", err)
+		}
+		// Créer le dossier parent local (app-data/) si besoin
+		localParent := filepath.Join(i.baseDir, "app-data")
+		if err := os.MkdirAll(localParent, 0755); err != nil {
 			return err
 		}
-		appDataPrefix := filepath.Join("app-data", manifest.ID) + string(filepath.Separator)
-		for _, vol := range manifest.Volumes {
-			if !vol.NAS {
-				continue
-			}
-			// Calculer le chemin relatif du volume dans app-data/<app>/
-			// ex: "app-data/arr-stack/data" → relPath="data"
-			relPath := strings.TrimPrefix(vol.Source, appDataPrefix)
-			nasTarget := filepath.Join(opts.StorageDataDir, relPath)
-			localLink := filepath.Join(i.baseDir, vol.Source)
-
-			if err := os.MkdirAll(nasTarget, 0755); err != nil {
-				return fmt.Errorf("impossible de créer le dossier NAS %s: %w", nasTarget, err)
-			}
-			// Supprimer le symlink/dossier existant si présent
-			_ = os.Remove(localLink)
-			if err := os.Symlink(nasTarget, localLink); err != nil {
-				return fmt.Errorf("impossible de créer le symlink NAS pour %s: %w", vol.Source, err)
-			}
-			fmt.Printf("         ✓ %s → NAS\n", vol.Source)
+		// Créer le symlink : app-data/<app> → <nas>/caleope/app-data/<app>
+		localLink := filepath.Join(i.baseDir, "app-data", manifest.ID)
+		// Supprimer le symlink/dossier existant si présent
+		_ = os.Remove(localLink)
+		if err := os.Symlink(opts.StorageDataDir, localLink); err != nil {
+			return fmt.Errorf("impossible de créer le symlink NAS: %w", err)
 		}
+		fmt.Printf("         ✓ Données liées au NAS : %s → %s\n", localLink, opts.StorageDataDir)
 	}
 
 	return nil
@@ -425,16 +415,18 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 		"CALEOPE_DOMAIN="+opts.Domain,
 		"CALEOPE_APP_DATA_DIR="+appDataDir,
 	)
-	// Exposer les ports alloués (statiques et dynamiques) sous CALEOPE_PORT_<NOM>=<valeur>
-	// afin que setup.sh puisse les écrire dans secrets.env (ex: CALEOPE_PORT_ICECAST=8743).
-	for _, port := range manifest.Ports {
-		if port.Host > 0 {
-			env = append(env, fmt.Sprintf("CALEOPE_PORT_%s=%d",
-				strings.ToUpper(port.Name), port.Host))
-		}
-	}
 	for k, v := range opts.Params {
 		env = append(env, "CALEOPE_PARAM_"+strings.ToUpper(k)+"="+v)
+	}
+	// Injecter la config SMTP globale si configurée
+	if cfg, err := i.rt.GetConfig(); err == nil && cfg.SMTPHost != "" {
+		env = append(env,
+			"CALEOPE_SMTP_HOST="+cfg.SMTPHost,
+			"CALEOPE_SMTP_PORT="+cfg.SMTPPort,
+			"CALEOPE_SMTP_USER="+cfg.SMTPUser,
+			"CALEOPE_SMTP_PASS="+cfg.SMTPPass,
+			"CALEOPE_SMTP_FROM="+cfg.SMTPFrom,
+		)
 	}
 
 	// exec.CommandContext = comme exec.Command mais avec support d'annulation
@@ -442,13 +434,9 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 	cmd := exec.CommandContext(ctx, "bash", setupScript)
 	cmd.Dir = composeDir
 	cmd.Env = env
-	if opts.Async {
-		cmd.Stdin = nil // pas de stdin interactif en mode async
-	} else {
-		cmd.Stdin = os.Stdin // permet les prompts interactifs dans setup.sh
-	}
-	cmd.Stdout = i.out
-	cmd.Stderr = i.out
+	cmd.Stdin = os.Stdin // permet les prompts interactifs dans setup.sh
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("setup.sh échoué: %w", err)
@@ -461,17 +449,8 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.AppManifest, opts InstallOptions) error {
 	// ── Générer app.env ──
 	envContent := i.buildEnvFile(manifest, opts)
-	appEnvPath := filepath.Join(composeDir, "app.env")
-	if err := os.WriteFile(appEnvPath, []byte(envContent), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(composeDir, "app.env"), []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("impossible d'écrire app.env: %w", err)
-	}
-	// Créer .env → app.env : docker compose lit .env pour la substitution YAML (${VAR}).
-	// Sans ce symlink, les variables comme ${ARR_VPN_TYPE} arrivent vides dans le compose.yml.
-	dotEnvPath := filepath.Join(composeDir, ".env")
-	_ = os.Remove(dotEnvPath) // supprimer l'éventuel ancien .env
-	if err := os.Symlink(appEnvPath, dotEnvPath); err != nil {
-		// Fallback : copie si symlink impossible (ex: filesystem ne supporte pas les symlinks)
-		_ = os.WriteFile(dotEnvPath, []byte(envContent), 0600)
 	}
 
 	// ── Copier et traiter le compose template ──
@@ -511,7 +490,92 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 	}
 	defer outFile.Close()
 
-	return tmpl.Execute(outFile, data)
+	if err := tmpl.Execute(outFile, data); err != nil {
+		return err
+	}
+
+	// GPU override : si demandé ET supporté par l'app, écrire compose.override.yml
+	if opts.GPU && manifest.Capabilities.GPU {
+		if err := writeGPUOverride(composeDir, manifest.ID); err != nil {
+			fmt.Printf("  ⚠ GPU override: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// writeGPUOverride génère un compose.override.yml pour le passthrough GPU.
+// Supporte NVIDIA (via nvidia-smi) et Intel/AMD (via /dev/dri).
+func writeGPUOverride(composeDir, serviceID string) error {
+	gpuType := detectGPUType()
+	if gpuType == "" {
+		return fmt.Errorf("aucun GPU détecté (nvidia-smi absent, /dev/dri absent)")
+	}
+
+	var content string
+	switch gpuType {
+	case "nvidia":
+		content = fmt.Sprintf(`services:
+  %s:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+`, serviceID)
+	case "intel":
+		// Lire les GIDs de video et render sur l'hôte pour les injecter comme nombres
+		// (les noms de groupes peuvent ne pas exister dans le container)
+		videoGID := groupGID("video", "44")
+		renderGID := groupGID("render", "109")
+		content = fmt.Sprintf(`services:
+  %s:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "%s"
+      - "%s"
+`, serviceID, videoGID, renderGID)
+	}
+
+	overridePath := filepath.Join(composeDir, "compose.override.yml")
+	if err := os.WriteFile(overridePath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("écriture compose.override.yml: %w", err)
+	}
+	fmt.Printf("  ✓ GPU override (%s) → %s\n", gpuType, overridePath)
+	return nil
+}
+
+// groupGID retourne le GID numérique d'un groupe système, ou fallback si absent.
+func groupGID(name, fallback string) string {
+	out, err := exec.Command("getent", "group", name).Output()
+	if err != nil {
+		return fallback
+	}
+	// format: name:x:GID:members
+	parts := strings.SplitN(strings.TrimSpace(string(out)), ":", 4)
+	if len(parts) >= 3 && parts[2] != "" {
+		return parts[2]
+	}
+	return fallback
+}
+
+// detectGPUType détecte le type de GPU disponible sur le système.
+func detectGPUType() string {
+	if path, err := exec.LookPath("nvidia-smi"); err == nil {
+		if err := exec.Command(path).Run(); err == nil {
+			return "nvidia"
+		}
+	}
+	if _, err := os.Stat("/dev/dri"); err == nil {
+		return "intel"
+	}
+	return ""
 }
 
 // buildEnvFile construit le contenu du fichier .env.
@@ -590,7 +654,7 @@ func (i *Installer) rollback(appID, composeDir string, hostPort int) {
 	}
 
 	fmt.Println("  → Libération du port...")
-	_ = i.rt.ReleaseAllPorts(appID)
+	_ = i.rt.ReleasePort(appID)
 
 	fmt.Println("  → Nettoyage du runtime...")
 	_ = i.rt.RemoveApp(appID)
@@ -638,9 +702,17 @@ func (i *Installer) Remove(appID string, keepData bool) error {
 
 	// Libérer les ressources
 	fmt.Println("  [4/4] Libération des ressources...")
-	_ = i.rt.ReleaseAllPorts(appID)
+	// Fermer les ports UFW des ports marqués firewall:true
+	if ufwPorts := runtimeToUFWPorts(app.Ports); len(ufwPorts) > 0 {
+		fmt.Println("         → Fermeture des ports UFW...")
+		for _, e := range ufw.ClosePorts(ufwPorts) {
+			fmt.Printf("         ⚠ %v\n", e)
+		}
+	}
+	_ = i.rt.ReleasePort(appID)
 	_ = i.rt.RemoveApp(appID)
 	_ = i.emitter.AppRemoved(appID)
+	audit.Log(audit.ActionRemove, appID, "OK")
 
 	fmt.Printf("\n✅ %s supprimé\n", appID)
 	return nil
@@ -662,37 +734,6 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 	raw, err := os.ReadFile(secretsPath)
 	if err != nil {
 		return fmt.Errorf("secrets.env introuvable pour '%s': %w", appID, err)
-	}
-
-	// Merger COMPOSE_PROFILES : préserver les profils non-VPN (ex: "jellyfin")
-	// de l'ancien secrets.env, remplacer uniquement le profil VPN (novpn/vpn).
-	// Évite que reconfigure VPN n'active ou ne désactive le profil "jellyfin".
-	if newVPN, ok := updates["COMPOSE_PROFILES"]; ok {
-		vpnOnly := map[string]bool{"vpn": true, "novpn": true}
-		oldProfileStr := ""
-		for _, line := range strings.Split(string(raw), "\n") {
-			if strings.HasPrefix(line, "COMPOSE_PROFILES=") {
-				oldProfileStr = strings.TrimPrefix(line, "COMPOSE_PROFILES=")
-				break
-			}
-		}
-		merged := make(map[string]bool)
-		for _, p := range strings.Split(oldProfileStr, ",") {
-			if p != "" && !vpnOnly[p] {
-				merged[p] = true
-			}
-		}
-		for _, p := range strings.Split(newVPN, ",") {
-			if p != "" {
-				merged[p] = true
-			}
-		}
-		var mergedList []string
-		for p := range merged {
-			mergedList = append(mergedList, p)
-		}
-		sort.Strings(mergedList)
-		updates["COMPOSE_PROFILES"] = strings.Join(mergedList, ",")
 	}
 
 	lines := strings.Split(string(raw), "\n")
@@ -737,29 +778,6 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 		return fmt.Errorf("écriture app.env: %w", err)
 	}
 
-	// ── 2.5. Patcher bootstrap.sh si ARR_QBT_HOST change ──
-	// Quand le VPN est activé/désactivé, l'hôte qBittorrent change
-	// (qbittorrent ↔ arr-gluetun). bootstrap.sh est ré-exécuté au redémarrage
-	// → on met à jour bootstrap.sh avec le nouvel hôte avant restart.
-	if newHost, ok := updates["ARR_QBT_HOST"]; ok && newHost != "" {
-		bootstrapPath := filepath.Join(configDir, "bootstrap.sh")
-		if bsData, err := os.ReadFile(bootstrapPath); err == nil {
-			bsStr := string(bsData)
-			for _, oldHost := range []string{"qbittorrent", "arr-gluetun"} {
-				if oldHost != newHost {
-					bsStr = strings.ReplaceAll(bsStr,
-						`"value":"`+oldHost+`"`,
-						`"value":"`+newHost+`"`)
-					bsStr = strings.ReplaceAll(bsStr,
-						`:-`+oldHost+`}`,
-						`:-`+newHost+`}`)
-				}
-			}
-			_ = os.WriteFile(bootstrapPath, []byte(bsStr), 0755)
-			fmt.Printf("→ bootstrap.sh mis à jour (ARR_QBT_HOST=%s)\n", newHost)
-		}
-	}
-
 	// ── 3. Redémarrer la stack ──
 	// Avant de redémarrer, on collecte l'union des profils ancien+nouveau
 	// et on force un down avec tous ces profils activés.
@@ -793,8 +811,6 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 
 	fmt.Printf("→ Arrêt propre de la stack '%s' (profils: %s)...\n", appID, allProfilesStr)
 	i.docker.DownAllProfiles(composeDir, allProfilesStr)
-	// Fallback : supprimer les containers orphelins par label (container_name conflit)
-	i.docker.ForceRemoveProjectContainers(appID)
 
 	fmt.Printf("→ Démarrage de la stack '%s'...\n", appID)
 	if err := i.docker.Up(composeDir); err != nil {
@@ -839,4 +855,40 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 	}
 
 	return nil
+}
+
+// ─────────────────────────────────────────────
+// UFW HELPERS
+// ─────────────────────────────────────────────
+
+// manifestToUFWPorts convertit les ports du manifest en PortSpec pour ufw.
+func manifestToUFWPorts(manifest *types.AppManifest) []ufw.PortSpec {
+	var specs []ufw.PortSpec
+	for _, p := range manifest.Ports {
+		if p.Firewall && p.Host > 0 {
+			specs = append(specs, ufw.PortSpec{
+				Name:     p.Name,
+				Host:     p.Host,
+				Protocol: p.Protocol,
+				Firewall: true,
+			})
+		}
+	}
+	return specs
+}
+
+// runtimeToUFWPorts convertit les ports runtime (app installée) en PortSpec pour ufw.
+func runtimeToUFWPorts(ports []types.AppPort) []ufw.PortSpec {
+	var specs []ufw.PortSpec
+	for _, p := range ports {
+		if p.Firewall && p.Host > 0 {
+			specs = append(specs, ufw.PortSpec{
+				Name:     p.Name,
+				Host:     p.Host,
+				Protocol: p.Protocol,
+				Firewall: true,
+			})
+		}
+	}
+	return specs
 }

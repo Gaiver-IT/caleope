@@ -354,7 +354,7 @@ if [[ -z "${UPLOAD_URL}" ]]; then
     exit 1
 fi
 
-for BINARY in "caleoped-linux-amd64" "caleope-linux-amd64"; do
+for BINARY in "caleoped-linux-amd64" "caleope-linux-amd64" "caleope-ui-linux-amd64"; do
     echo -e "  → Upload ${BINARY}..."
     curl -fsSL         -X POST         -H "Authorization: token ${GITHUB_TOKEN}"         -H "Accept: application/vnd.github+json"         -H "Content-Type: application/octet-stream"         "${UPLOAD_URL}?name=${BINARY}"         --data-binary "@build/release/${BINARY}" > /dev/null
     echo -e "  ${GREEN}✔ ${BINARY} uploadé${NC}"

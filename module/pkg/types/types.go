@@ -29,7 +29,10 @@ type AppManifest struct {
 	Ports         []AppPort       `json:"ports"`
 	Volumes       []AppVolume     `json:"volumes"`
 	Backup        AppBackup       `json:"backup"`
-	UseBaseDomain bool            `json:"use_base_domain"` // true = domaine racine (pas appID.domain)
+	UseBaseDomain bool            `json:"use_base_domain"`            // true = domaine racine (pas appID.domain)
+	SecureHeaders bool            `json:"secure_headers,omitempty"`   // Traefik secure headers opt-in
+	AuthMiddleware bool           `json:"auth_middleware,omitempty"`  // Authentik forward auth opt-in
+	NoContainer   bool            `json:"no_container,omitempty"`     // true = outil système, pas de container Docker
 }
 
 type AppCapabilities struct {
@@ -46,15 +49,16 @@ type AppNetwork struct {
 
 type AppPort struct {
 	Name      string `json:"name"`
-	Container int    `json:"container"` // port dans le container
-	Host      int    `json:"host"`      // port alloué dynamiquement sur l'hôte
-	Dynamic   bool   `json:"dynamic"`   // true = Caleope choisit le port hôte
+	Container int    `json:"container"`           // port dans le container
+	Host      int    `json:"host"`                // port alloué dynamiquement sur l'hôte
+	Dynamic   bool   `json:"dynamic"`             // true = Caleope choisit le port hôte
+	Protocol  string `json:"protocol,omitempty"` // "tcp", "udp", "any" — pour UFW
+	Firewall  bool   `json:"firewall,omitempty"` // true = ouvrir dans UFW
 }
 
 type AppVolume struct {
-	Source string `json:"source"`          // chemin relatif sur l'hôte (ex: app-data/jellyfin)
-	Target string `json:"target"`          // chemin dans le container (ex: /config)
-	NAS    bool   `json:"nas,omitempty"`   // true = ce volume va sur NAS si --storage est spécifié
+	Source string `json:"source"` // chemin relatif sur l'hôte (ex: app-data/jellyfin)
+	Target string `json:"target"` // chemin dans le container (ex: /config)
 }
 
 type AppBackup struct {
@@ -68,27 +72,13 @@ type AppBackup struct {
 
 // ParamDef décrit un paramètre interactif demandé lors de l'installation.
 // Le champ ID (en majuscules) devient la variable CALEOPE_PARAM_<ID> dans setup.sh.
-// Types supportés : "string", "secret" (masqué), "path", "bool", "select".
 type ParamDef struct {
-	ID          string   `json:"id"`                    // nom de la variable (→ CALEOPE_PARAM_<ID>)
-	Label       string   `json:"label"`                 // texte affiché à l'utilisateur
-	Description string   `json:"description"`           // aide contextuelle (affiché en gris sous le label)
-	Type        string   `json:"type"`                  // "string", "secret", "path", "bool", "select"
-	Options     []string `json:"options,omitempty"`     // pour type "select" : liste des choix possibles
-	Required    bool     `json:"required"`              // true = obligatoire, boucle jusqu'à saisie valide
-	Default     string   `json:"default"`               // valeur par défaut si l'utilisateur laisse vide
-	When        string   `json:"when,omitempty"`        // condition d'affichage (ex: "VPN_ENABLED=true")
-}
-
-// InstallSessionStatus est retourné par la commande "install-status".
-type InstallSessionStatus struct {
-	SessionID string    `json:"session_id"`
-	AppID     string    `json:"app_id"`
-	Status    string    `json:"status"`          // "running", "done", "error"
-	Lines     []string  `json:"lines"`           // logs accumulés
-	Error     string    `json:"error,omitempty"`
-	Notes     string    `json:"notes,omitempty"` // post-install.txt si done
-	StartAt   time.Time `json:"started_at"`
+	ID          string `json:"id"`          // nom de la variable (→ CALEOPE_PARAM_<ID>)
+	Label       string `json:"label"`       // texte affiché à l'utilisateur
+	Description string `json:"description"` // aide contextuelle (affiché en gris sous le label)
+	Type        string `json:"type"`        // "string", "secret" (masqué), "path"
+	Required    bool   `json:"required"`    // true = obligatoire, boucle jusqu'à saisie valide
+	Default     string `json:"default"`     // valeur par défaut si l'utilisateur laisse vide
 }
 
 // ─────────────────────────────────────────────
@@ -132,6 +122,7 @@ type BackupManifest struct {
 	CaleopeVersion string    `json:"caleope_version"`
 	HasData        bool      `json:"has_data"`
 	HasConfig      bool      `json:"has_config"`
+	Dir            string    `json:"dir,omitempty"` // nom du répertoire sur disque (non stocké dans manifest.json)
 }
 
 // ─────────────────────────────────────────────
@@ -162,6 +153,7 @@ type RuntimeApp struct {
 	Version     string     `json:"version"`
 	Channel     string     `json:"channel"`
 	Repository  string     `json:"repository"`
+	Domain          string     `json:"domain,omitempty"`            // domaine public de l'app (depuis app.env)
 	Ports           []AppPort  `json:"ports"`                      // avec les ports hôtes alloués
 	ComposeDir      string     `json:"compose_dir"`                 // chemin vers apps-installed/<id>/
 	StorageLocation string     `json:"storage_location,omitempty"` // nom de la location NAS (vide = stockage local)
@@ -191,10 +183,10 @@ type Event struct {
 type NetworkLocationType string
 
 const (
-	LocationSMB  NetworkLocationType = "smb"
-	LocationCIFS NetworkLocationType = "cifs" // alias smb
-	LocationSFTP NetworkLocationType = "sftp"
-	LocationNFS  NetworkLocationType = "nfs"
+	LocationSMB   NetworkLocationType = "smb"
+	LocationCIFS  NetworkLocationType = "cifs"  // alias smb
+	LocationSFTP  NetworkLocationType = "sftp"
+	LocationLocal NetworkLocationType = "local" // disque local (interne ou externe)
 )
 
 // NetworkLocation représente un emplacement réseau monté ou montable.
@@ -252,4 +244,5 @@ type Repo struct {
 	Trust    TrustLevel `json:"trust"`
 	LocalDir string     `json:"local_dir"` // chemin du cache local
 	LastSync time.Time  `json:"last_sync"`
+	Branch   string     `json:"branch,omitempty"` // branche git (défaut : "main")
 }

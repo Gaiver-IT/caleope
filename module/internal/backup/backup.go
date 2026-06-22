@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gaiver-it/caleope/internal/docker"
@@ -104,6 +105,73 @@ func (m *Manager) Backup(appID string) (string, error) {
 	}
 
 	return backupDir, nil
+}
+
+// ─────────────────────────────────────────────
+// RESTIC BACKUP
+// ─────────────────────────────────────────────
+
+// ResticBackup sauvegarde une application via Restic vers un dépôt distant ou local.
+// password est le mot de passe Restic (RESTIC_PASSWORD) ; peut être vide si déjà
+// défini dans l'environnement du processus appelant ou dans un RESTIC_PASSWORD_FILE.
+func (m *Manager) ResticBackup(appID, repo, password string) (string, error) {
+	if repo == "" {
+		return "", fmt.Errorf("repo Restic requis (ex: sftp:user@host:/path ou /chemin/local)")
+	}
+
+	app, err := m.rt.GetApp(appID)
+	if err != nil {
+		return "", fmt.Errorf("application '%s' non trouvée: %w", appID, err)
+	}
+
+	// Construire l'environnement pour restic : hériter de l'environnement courant
+	// et injecter RESTIC_PASSWORD si fourni
+	resticEnv := os.Environ()
+	if password != "" {
+		resticEnv = append(resticEnv, "RESTIC_PASSWORD="+password)
+	}
+
+	runRestic := func(args ...string) *exec.Cmd {
+		cmd := exec.Command("restic", args...)
+		cmd.Env = resticEnv
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd
+	}
+
+	fmt.Println("  [1/3] Arrêt des containers...")
+	if err := m.docker.Stop(app.ComposeDir); err != nil {
+		return "", fmt.Errorf("arrêt containers: %w", err)
+	}
+	defer func() {
+		fmt.Println("  → Redémarrage des containers...")
+		_ = m.docker.Start(app.ComposeDir)
+	}()
+
+	// Initialiser le dépôt si nécessaire (idempotent si déjà initialisé)
+	fmt.Printf("  [2/3] Initialisation du dépôt Restic (%s)...\n", repo)
+	_ = runRestic("-r", repo, "init").Run() // ignore exit code 1 si déjà initialisé
+
+	dataDir := filepath.Join(m.baseDir, "app-data", appID)
+	configDir := filepath.Join(m.baseDir, "app-config", appID)
+
+	fmt.Println("  [3/3] Sauvegarde via Restic...")
+	resticArgs := []string{"-r", repo, "backup", "--tag", "caleope", "--tag", appID}
+	if _, err := os.Stat(dataDir); err == nil {
+		resticArgs = append(resticArgs, dataDir)
+	}
+	if _, err := os.Stat(configDir); err == nil {
+		resticArgs = append(resticArgs, configDir)
+	}
+	if len(resticArgs) == 7 { // seulement les flags, pas de chemin à sauvegarder
+		return "", fmt.Errorf("aucun répertoire app-data ou app-config trouvé pour '%s'", appID)
+	}
+
+	if err := runRestic(resticArgs...).Run(); err != nil {
+		return "", fmt.Errorf("restic backup: %w", err)
+	}
+
+	return repo, nil
 }
 
 // ─────────────────────────────────────────────
@@ -212,6 +280,7 @@ func (m *Manager) ListBackups(appID string) ([]types.BackupManifest, error) {
 		}
 		var bm types.BackupManifest
 		if err := json.Unmarshal(data, &bm); err == nil {
+			bm.Dir = entry.Name() // nom réel du répertoire, utilisé pour restore/delete
 			manifests = append(manifests, bm)
 		}
 	}
@@ -222,6 +291,22 @@ func (m *Manager) ListBackups(appID string) ([]types.BackupManifest, error) {
 	})
 
 	return manifests, nil
+}
+
+// DeleteBackup supprime un backup par son nom de répertoire (dir).
+func (m *Manager) DeleteBackup(appID, dir string) error {
+	if appID == "" || dir == "" {
+		return fmt.Errorf("app et dir requis")
+	}
+	// Sécurité : dir ne doit pas contenir de séparateur de chemin
+	if strings.ContainsAny(dir, "/\\") {
+		return fmt.Errorf("nom de backup invalide")
+	}
+	backupDir := filepath.Join(m.baseDir, "backups", appID, dir)
+	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
+		return fmt.Errorf("backup '%s' introuvable", dir)
+	}
+	return os.RemoveAll(backupDir)
 }
 
 // ─────────────────────────────────────────────

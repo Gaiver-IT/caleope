@@ -17,13 +17,26 @@ export PATH="/usr/sbin:/sbin:/usr/bin:/bin:/usr/local/bin:${PATH}"
 # =============================================================================
 
 LOG_MODE="classic"
+OFFLINE_MODE=false
+OFFLINE_BUNDLE_PATH=""
 
 parse_args() {
-    for arg in "$@"; do
+    local i=1
+    while [[ $i -le $# ]]; do
+        local arg="${!i}"
         case $arg in
             --debug)   LOG_MODE="debug"   ;;
             --classic) LOG_MODE="classic" ;;
+            --offline)
+                OFFLINE_MODE=true
+                i=$((i + 1))
+                [[ $i -le $# ]] && OFFLINE_BUNDLE_PATH="${!i}" || {
+                    echo "Erreur : --offline requiert un chemin vers le bundle" >&2
+                    exit 1
+                }
+                ;;
         esac
+        i=$((i + 1))
     done
 }
 
@@ -46,17 +59,28 @@ PORT_TRAEFIK_HTTP=80
 PORT_TRAEFIK_HTTPS=443
 PORT_TRAEFIK_DASHBOARD=8080
 PORT_PORTAINER=8010
-PORT_COCKPIT=8020
+PORT_COCKPIT=8020  # conservé pour rétro-compat. éventuelle
+PORT_UI=8766
 
 # Réseaux Docker
 DOCKER_NET_PUBLIC="caleope-public"
 DOCKER_NET_INTERNAL="caleope-internal"
 
-# Config interactive (remplie par ask_config)
-CALEOPE_DOMAIN=""
-CALEOPE_EMAIL=""
-CALEOPE_PROXY_MODE=""   # "npm" = NPM en amont, "traefik" = Traefik gère les certs
-CALEOPE_CHANNEL=""      # "stable" = releases officielles, "alpha" = pré-releases
+# Config interactive (remplie par ask_config, ou pré-définie via variables d'environnement)
+CALEOPE_DOMAIN="${CALEOPE_DOMAIN:-}"
+CALEOPE_EMAIL="${CALEOPE_EMAIL:-}"
+CALEOPE_PROXY_MODE="${CALEOPE_PROXY_MODE:-}"   # "npm" = NPM en amont, "traefik" = Traefik gère les certs
+CALEOPE_CHANNEL="${CALEOPE_CHANNEL:-}"          # "stable" = releases officielles, "alpha" = pré-releases
+# SMTP externe (optionnel — pour les notifications des apps)
+CALEOPE_SMTP_HOST="${CALEOPE_SMTP_HOST:-}"
+CALEOPE_SMTP_PORT="${CALEOPE_SMTP_PORT:-587}"
+CALEOPE_SMTP_USER="${CALEOPE_SMTP_USER:-}"
+CALEOPE_SMTP_PASS="${CALEOPE_SMTP_PASS:-}"
+CALEOPE_SMTP_FROM="${CALEOPE_SMTP_FROM:-}"
+# Mot de passe chiffrement secrets (utilisé une seule fois au démarrage du daemon)
+CALEOPE_SECRETS_PASSWORD="${CALEOPE_SECRETS_PASSWORD:-}"
+# Mot de passe interface web
+CALEOPE_UI_PASSWORD="${CALEOPE_UI_PASSWORD:-}"
 
 # Couleurs
 RED='\033[0;31m'
@@ -94,11 +118,77 @@ run_cmd() {
 }
 
 # =============================================================================
+# MODE SUBMARINE (OFFLINE)
+# =============================================================================
+
+check_offline_bundle() {
+    [[ "${OFFLINE_MODE}" != "true" ]] && return 0
+
+    log_section "Mode submarine — vérification du bundle"
+
+    [[ -z "${OFFLINE_BUNDLE_PATH}" ]] && log_error "--offline requiert un chemin vers le bundle"
+    [[ ! -d "${OFFLINE_BUNDLE_PATH}" ]] && log_error "Bundle introuvable : ${OFFLINE_BUNDLE_PATH}"
+
+    local required=("binaries/caleoped" "binaries/caleope" "store.tar.gz")
+    for f in "${required[@]}"; do
+        [[ -f "${OFFLINE_BUNDLE_PATH}/${f}" ]] || log_error "Fichier manquant dans le bundle : ${f}"
+    done
+
+    # Lire et afficher les métadonnées du bundle
+    if [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]]; then
+        local pack_version pack_date
+        pack_version=$(jq -r '.caleope_version // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        pack_date=$(jq -r '.packed_at // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        log_success "Bundle valide — version ${pack_version} (empaqueté le ${pack_date})"
+    else
+        log_warning "pack-info.json absent — bundle non versionné"
+    fi
+}
+
+load_docker_images_from_bundle() {
+    [[ "${OFFLINE_MODE}" != "true" ]] && return 0
+
+    local images_dir="${OFFLINE_BUNDLE_PATH}/images"
+    [[ ! -d "${images_dir}" ]] && { log_warning "Aucun répertoire images/ dans le bundle — images ignorées"; return 0; }
+
+    local tars
+    tars=$(find "${images_dir}" -maxdepth 1 -name "*.tar" 2>/dev/null)
+    [[ -z "${tars}" ]] && { log_warning "Aucune image Docker dans le bundle"; return 0; }
+
+    log_section "Chargement des images Docker (mode submarine)"
+    local count=0
+    while IFS= read -r tar_file; do
+        local name
+        name=$(basename "${tar_file}" .tar)
+        log_step "Chargement de ${name}..."
+        if docker load -i "${tar_file}" &>/dev/null; then
+            log_success "${name} chargée"
+            count=$((count + 1))
+        else
+            log_warning "Échec du chargement de ${name}"
+        fi
+    done <<< "${tars}"
+    log_success "${count} image(s) Docker chargée(s) depuis le bundle"
+}
+
+# =============================================================================
 # CONFIGURATION INTERACTIVE
 # =============================================================================
 
 ask_config() {
     log_section "Configuration de Caleope"
+
+    # Mode non-interactif : si les variables essentielles sont déjà définies en
+    # variables d'environnement, on les utilise directement sans prompts.
+    # Usage : CALEOPE_DOMAIN=... CALEOPE_PROXY_MODE=traefik CALEOPE_CHANNEL=alpha bash install.sh
+    if [[ -n "${CALEOPE_DOMAIN:-}" && -n "${CALEOPE_PROXY_MODE:-}" && -n "${CALEOPE_CHANNEL:-}" ]]; then
+        log_step "Mode non-interactif détecté (variables d'environnement)"
+        echo -e "  Domaine    : ${YELLOW}${CALEOPE_DOMAIN}${NC}"
+        echo -e "  Proxy mode : ${YELLOW}${CALEOPE_PROXY_MODE}${NC}"
+        echo -e "  Canal      : ${YELLOW}${CALEOPE_CHANNEL}${NC}"
+        [[ -n "${CALEOPE_EMAIL:-}" ]] && echo -e "  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"
+        return
+    fi
 
     echo ""
     echo -e "${CYAN}  Quelques questions pour configurer ton installation.${NC}"
@@ -117,12 +207,14 @@ ask_config() {
     echo -e "${BLUE}  Mode reverse proxy${NC}"
     echo -e "  ${GRAY}1) NPM/Caddy/autre en amont  — Traefik reçoit du HTTP, pas de gestion des certs${NC}"
     echo -e "  ${GRAY}2) Traefik natif             — Traefik gère HTTPS et Let's Encrypt directement${NC}"
-    while [[ "${CALEOPE_PROXY_MODE}" != "npm" && "${CALEOPE_PROXY_MODE}" != "traefik" ]]; do
-        read -rp "  → Choix [1/2] : " proxy_choice </dev/tty
+    echo -e "  ${GRAY}3) Standalone                — HTTP seul, sans certificat (LAN/offline/air-gap)${NC}"
+    while [[ "${CALEOPE_PROXY_MODE}" != "npm" && "${CALEOPE_PROXY_MODE}" != "traefik" && "${CALEOPE_PROXY_MODE}" != "standalone" ]]; do
+        read -rp "  → Choix [1/2/3] : " proxy_choice </dev/tty
         case "${proxy_choice}" in
             1) CALEOPE_PROXY_MODE="npm" ;;
             2) CALEOPE_PROXY_MODE="traefik" ;;
-            *) echo -e "  ${RED}Choix invalide, entre 1 ou 2${NC}" ;;
+            3) CALEOPE_PROXY_MODE="standalone" ;;
+            *) echo -e "  ${RED}Choix invalide, entre 1, 2 ou 3${NC}" ;;
         esac
     done
 
@@ -148,6 +240,66 @@ ask_config() {
         while [[ -z "${CALEOPE_EMAIL}" ]]; do
             read -rp "  → Email : " CALEOPE_EMAIL </dev/tty
         done
+    fi
+
+    # ── SMTP externe (optionnel) ──
+    echo ""
+    echo -e "${BLUE}  Relai SMTP (optionnel)${NC}"
+    echo -e "  ${GRAY}Permet aux apps d'envoyer des emails (notifications, réinitialisation mdp...).${NC}"
+    echo -e "  ${GRAY}Compatible Orange, Gmail (app password), Proton…${NC}"
+    read -rp "  → Configurer le SMTP maintenant ? [o/N] : " smtp_choice </dev/tty
+    if [[ "${smtp_choice,,}" == "o" ]]; then
+        read -rp "    Serveur SMTP (ex: smtp.gmail.com) : " CALEOPE_SMTP_HOST </dev/tty
+        read -rp "    Port (ex: 587) : " CALEOPE_SMTP_PORT </dev/tty
+        CALEOPE_SMTP_PORT="${CALEOPE_SMTP_PORT:-587}"
+        read -rp "    Utilisateur SMTP (email) : " CALEOPE_SMTP_USER </dev/tty
+        read -rsp "    Mot de passe SMTP : " CALEOPE_SMTP_PASS </dev/tty; echo ""
+        read -rp "    Adresse expéditeur (ex: noreply@mondomaine.com) : " CALEOPE_SMTP_FROM </dev/tty
+        CALEOPE_SMTP_FROM="${CALEOPE_SMTP_FROM:-noreply@${CALEOPE_DOMAIN}}"
+    fi
+
+    # ── Mot de passe chiffrement des secrets ──
+    echo ""
+    echo -e "${BLUE}  Chiffrement des secrets${NC}"
+    echo -e "  ${GRAY}Choisir un mot de passe pour protéger les secrets des apps (mots de passe BDD,${NC}"
+    echo -e "  ${GRAY}tokens API...). Requis pour 'caleope secrets show <app>'.${NC}"
+    echo -e "  ${YELLOW}  ⚠ Notez ce mot de passe — il ne peut pas être récupéré si perdu.${NC}"
+    local secrets_pass secrets_pass2
+    while true; do
+        read -rsp "    Mot de passe : " secrets_pass </dev/tty; echo ""
+        if [[ -z "${secrets_pass}" ]]; then
+            echo -e "  ${RED}Le mot de passe ne peut pas être vide${NC}"
+            continue
+        fi
+        read -rsp "    Confirmer : " secrets_pass2 </dev/tty; echo ""
+        if [[ "${secrets_pass}" == "${secrets_pass2}" ]]; then
+            CALEOPE_SECRETS_PASSWORD="${secrets_pass}"
+            break
+        fi
+        echo -e "  ${RED}Les mots de passe ne correspondent pas${NC}"
+    done
+    unset secrets_pass secrets_pass2
+
+    # ── Mot de passe interface web ──
+    if [[ -z "${CALEOPE_UI_PASSWORD}" ]]; then
+        echo ""
+        echo -e "${BLUE}  Mot de passe de l'interface web Caleope${NC}"
+        echo -e "  ${GRAY}Protège l'accès à l'UI sur le port ${PORT_UI}.${NC}"
+        local ui_pass ui_pass2
+        while true; do
+            read -rsp "    Mot de passe UI : " ui_pass </dev/tty; echo ""
+            if [[ -z "${ui_pass}" ]]; then
+                echo -e "  ${RED}Le mot de passe ne peut pas être vide${NC}"
+                continue
+            fi
+            read -rsp "    Confirmer : " ui_pass2 </dev/tty; echo ""
+            if [[ "${ui_pass}" == "${ui_pass2}" ]]; then
+                CALEOPE_UI_PASSWORD="${ui_pass}"
+                break
+            fi
+            echo -e "  ${RED}Les mots de passe ne correspondent pas${NC}"
+        done
+        unset ui_pass ui_pass2
     fi
 
     # ── Résumé ──
@@ -214,8 +366,13 @@ check_user() {
 
 install_prerequisites() {
     log_section "Prérequis système"
-    log_step "Mise à jour des paquets..."
-    run_cmd apt-get update
+
+    if [[ "${OFFLINE_MODE}" != "true" ]]; then
+        log_step "Mise à jour des paquets..."
+        run_cmd apt-get update
+    else
+        log_warning "Mode submarine : apt-get update ignoré (pas d'accès réseau)"
+    fi
 
     log_step "Installation des outils de base..."
     run_cmd apt-get install -y \
@@ -241,7 +398,12 @@ install_docker() {
 
     if command -v docker &>/dev/null; then
         log_warning "Docker déjà installé : $(docker --version)"
+        usermod -aG docker "${CALEOPE_USER}" 2>/dev/null || true
         return 0
+    fi
+
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        log_error "Mode submarine : Docker n'est pas installé. Installe Docker avant de lancer l'installation offline (apt-get install docker-ce depuis un dépôt local ou via dpkg)."
     fi
 
     log_step "Suppression des anciennes versions..."
@@ -298,7 +460,35 @@ create_docker_networks() {
 install_caleope_binaries() {
     log_section "Binaires Caleope (caleoped + caleope)"
 
-    download_binaries_from_release || log_error "Impossible de télécharger les binaires Caleope depuis GitHub. Vérifie ta connexion ou https://github.com/${GITHUB_REPO}/releases"
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        install_binaries_from_bundle
+    else
+        download_binaries_from_release || log_error "Impossible de télécharger les binaires Caleope depuis GitHub. Vérifie ta connexion ou https://github.com/${GITHUB_REPO}/releases"
+    fi
+}
+
+install_binaries_from_bundle() {
+    local bin_dir="${OFFLINE_BUNDLE_PATH}/binaries"
+    log_step "Copie des binaires depuis le bundle..."
+
+    cp "${bin_dir}/caleoped" /usr/local/bin/caleoped
+    cp "${bin_dir}/caleope"  /usr/local/bin/caleope
+    chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope
+
+    if [[ -f "${bin_dir}/caleope-ui" ]]; then
+        cp "${bin_dir}/caleope-ui" /usr/local/bin/caleope-ui
+        chmod 755 /usr/local/bin/caleope-ui
+        log_debug "Binaire caleope-ui copié"
+    else
+        log_warning "caleope-ui absent du bundle — interface web non disponible"
+    fi
+
+    ln -sf /usr/local/bin/caleope /usr/local/bin/caleope-store
+
+    local pack_ver="?"
+    [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]] && \
+        pack_ver=$(jq -r '.caleope_version // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+    log_success "Binaires installés depuis le bundle (version ${pack_ver})"
 }
 
 download_binaries_from_release() {
@@ -323,9 +513,10 @@ download_binaries_from_release() {
     fi
 
     # Extraire les URLs des binaires (jq parse le JSON)
-    local daemon_url cli_url
+    local daemon_url cli_url ui_url
     daemon_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleoped-linux-amd64") | .browser_download_url' 2>/dev/null)
     cli_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleope-linux-amd64") | .browser_download_url' 2>/dev/null)
+    ui_url=$(echo "${release_info}" | jq -r '.assets[] | select(.name == "caleope-ui-linux-amd64") | .browser_download_url' 2>/dev/null)
 
     if [[ -z "${daemon_url}" || -z "${cli_url}" ]]; then
         log_debug "Binaires non trouvés dans la release"
@@ -338,6 +529,14 @@ download_binaries_from_release() {
 
     wget -q "${daemon_url}" -O /usr/local/bin/caleoped
     wget -q "${cli_url}"    -O /usr/local/bin/caleope
+
+    if [[ -n "${ui_url}" ]]; then
+        wget -q "${ui_url}" -O /usr/local/bin/caleope-ui
+        chmod 755 /usr/local/bin/caleope-ui
+        log_debug "Binaire caleope-ui téléchargé"
+    else
+        log_warning "Binaire caleope-ui absent de la release — interface web non disponible"
+    fi
 
     chmod 755 /usr/local/bin/caleoped /usr/local/bin/caleope
     ln -sf /usr/local/bin/caleope /usr/local/bin/caleope-store
@@ -353,11 +552,21 @@ download_binaries_from_release() {
 install_bash_completion() {
     log_section "Autocomplétion bash"
 
-    local completion_url="${GITHUB_RAW}/module/scripts/caleope-completion.bash"
     local completion_dest="/etc/bash_completion.d/caleope"
-
     log_step "Installation du script d'autocomplétion..."
 
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        if [[ -f "${OFFLINE_BUNDLE_PATH}/caleope-completion.bash" ]]; then
+            cp "${OFFLINE_BUNDLE_PATH}/caleope-completion.bash" "${completion_dest}"
+            chmod 644 "${completion_dest}"
+            log_success "Autocomplétion installée depuis le bundle"
+        else
+            log_warning "Script d'autocomplétion absent du bundle — ignoré"
+        fi
+        return 0
+    fi
+
+    local completion_url="${GITHUB_RAW}/module/scripts/caleope-completion.bash"
     if wget -q "${completion_url}" -O "${completion_dest}" 2>/dev/null; then
         chmod 644 "${completion_dest}"
         log_success "Autocomplétion installée → ${completion_dest}"
@@ -468,6 +677,54 @@ EOF
 }
 
 # =============================================================================
+# SERVICE SYSTEMD CALEOPE-UI
+# =============================================================================
+
+install_caleope_ui_service() {
+    log_section "Service caleope-ui (interface web)"
+
+    if ! command -v caleope-ui &>/dev/null; then
+        log_warning "Binaire caleope-ui absent — interface web non installée"
+        return 0
+    fi
+
+    log_step "Installation du fichier service caleope-ui..."
+    cat > /etc/systemd/system/caleope-ui.service << EOF
+[Unit]
+Description=Caleope UI Server
+After=network.target caleoped.service
+Requires=caleoped.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/caleope-ui \\
+    --base-dir ${CALEOPE_ROOT} \\
+    --daemon   http://127.0.0.1:8765 \\
+    --port     ${PORT_UI}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable caleope-ui
+    systemctl start caleope-ui || true
+
+    sleep 2
+
+    if systemctl is-active --quiet caleope-ui; then
+        local IP
+        IP=$(hostname -I | awk '{print $1}')
+        log_success "Interface web active → http://${IP}:${PORT_UI}"
+    else
+        log_warning "caleope-ui démarré — vérifier : journalctl -u caleope-ui"
+    fi
+}
+
+# =============================================================================
 # TRAEFIK
 # =============================================================================
 
@@ -488,7 +745,7 @@ deploy_traefik() {
     touch "${CALEOPE_ROOT}/data/traefik/certs/acme.json"
     chmod 600 "${CALEOPE_ROOT}/data/traefik/certs/acme.json"
 
-    # traefik.yml — deux modes selon config
+    # traefik.yml — trois modes selon config
     if [[ "${CALEOPE_PROXY_MODE}" == "npm" ]]; then
         # Mode NPM : Traefik reçoit HTTP depuis NPM, pas de gestion des certs
         cat > "${CALEOPE_ROOT}/data/traefik/traefik.yml" << EOF
@@ -503,8 +760,41 @@ api:
 entryPoints:
   web:
     address: ":${PORT_TRAEFIK_HTTP}"
+    http:
+      middlewares:
+        - secure-headers@file
   websecure:
     address: ":${PORT_TRAEFIK_HTTPS}"
+    http:
+      middlewares:
+        - secure-headers@file
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: ${DOCKER_NET_PUBLIC}
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+EOF
+    elif [[ "${CALEOPE_PROXY_MODE}" == "standalone" ]]; then
+        # Mode standalone : HTTP seul, sans Let's Encrypt — pour LAN/offline/air-gap
+        cat > "${CALEOPE_ROOT}/data/traefik/traefik.yml" << EOF
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":${PORT_TRAEFIK_HTTP}"
+    http:
+      middlewares:
+        - secure-headers@file
 
 providers:
   docker:
@@ -537,6 +827,9 @@ entryPoints:
           permanent: true
   websecure:
     address: ":${PORT_TRAEFIK_HTTPS}"
+    http:
+      middlewares:
+        - secure-headers@file
 
 providers:
   docker:
@@ -556,6 +849,23 @@ certificatesResolvers:
         entryPoint: web
 EOF
     fi
+
+    # secure-headers.yml — middleware de sécurité HTTP commun à tous les modes
+    cat > "${CALEOPE_ROOT}/data/traefik/dynamic/secure-headers.yml" << 'EOF'
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        customResponseHeaders:
+          X-Powered-By: ""
+          Server: ""
+EOF
 
     # compose.yml Traefik (commun aux deux modes)
     cat > "${CALEOPE_ROOT}/core/traefik/compose.yml" << EOF
@@ -659,20 +969,83 @@ EOF
         IP=$(hostname -I | awk '{print $1}')
         log_success "Portainer actif"
 
-        echo ""
-        echo -e "${RED}╔══════════════════════════════════════════════════════╗${NC}"
-        echo -e "${RED}║  ⚠️  ACTION REQUISE DANS LES 5 PROCHAINES MINUTES  ║${NC}"
-        echo -e "${RED}║                                                      ║${NC}"
-        echo -e "${RED}║  Connecte-toi sur Portainer et crée ton compte admin ║${NC}"
-        echo -e "${RED}║  avant que le timer de sécurité expire               ║${NC}"
-        echo -e "${RED}║                                                      ║${NC}"
-        echo -e "${RED}║  → https://${IP}:${PORT_PORTAINER}                       ║${NC}"
-        echo -e "${RED}╚══════════════════════════════════════════════════════╝${NC}"
-        echo ""
-        echo -e "${YELLOW}Appuie sur [Entrée] une fois ton compte Portainer créé...${NC}"
-        read -r </dev/tty
+        # Mode non-interactif : création automatique du compte admin Portainer via API
+        if [[ -n "${CALEOPE_DOMAIN:-}" && -n "${CALEOPE_PROXY_MODE:-}" ]]; then
+            local portainer_pass="${PORTAINER_ADMIN_PASSWORD:-CaleoportAdmin!$(openssl rand -hex 4)}"
+            local portainer_resp
+            portainer_resp=$(curl -sk -X POST "https://${IP}:${PORT_PORTAINER}/api/users/admin/init" \
+                -H "Content-Type: application/json" \
+                -d "{\"Username\":\"admin\",\"Password\":\"${portainer_pass}\"}" 2>/dev/null || echo "{}")
+            if echo "${portainer_resp}" | grep -q '"Id"'; then
+                log_success "Compte admin Portainer créé automatiquement"
+                # Sauvegarder le mot de passe dans les secrets
+                mkdir -p "${CALEOPE_ROOT}/app-config/portainer"
+                echo "PORTAINER_ADMIN_PASSWORD=${portainer_pass}" > "${CALEOPE_ROOT}/app-config/portainer/secrets.env"
+                chmod 600 "${CALEOPE_ROOT}/app-config/portainer/secrets.env"
+                log_step "Portainer → https://${IP}:${PORT_PORTAINER}  |  admin / ${portainer_pass}"
+            else
+                log_warning "Portainer admin auto-création échouée (timer expiré ?) — créer manuellement sur https://${IP}:${PORT_PORTAINER}"
+            fi
+        else
+            echo ""
+            echo -e "${RED}╔══════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║  ⚠️  ACTION REQUISE DANS LES 5 PROCHAINES MINUTES  ║${NC}"
+            echo -e "${RED}║                                                      ║${NC}"
+            echo -e "${RED}║  Connecte-toi sur Portainer et crée ton compte admin ║${NC}"
+            echo -e "${RED}║  avant que le timer de sécurité expire               ║${NC}"
+            echo -e "${RED}║                                                      ║${NC}"
+            echo -e "${RED}║  → https://${IP}:${PORT_PORTAINER}                       ║${NC}"
+            echo -e "${RED}╚══════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "${YELLOW}Appuie sur [Entrée] une fois ton compte Portainer créé...${NC}"
+            read -r </dev/tty
+        fi
     else
         log_warning "Portainer ne semble pas démarré — vérifier : docker logs portainer"
+    fi
+}
+
+# =============================================================================
+# APPS PAR DÉFAUT (CrowdSec + Authentik)
+# =============================================================================
+
+install_default_apps() {
+    log_section "Applications de sécurité par défaut"
+
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        log_warning "Mode submarine : installation des apps par défaut ignorée (images déjà chargées — installer via 'caleope install' après le démarrage)"
+        return 0
+    fi
+
+    # Attendre que le daemon soit opérationnel (max 30s)
+    local max=15 waited=0
+    log_step "Attente du daemon caleoped..."
+    until caleope list &>/dev/null 2>&1; do
+        sleep 2; waited=$((waited + 2))
+        if [[ ${waited} -ge ${max} ]]; then
+            log_warning "Daemon non joignable — skip installation par défaut"
+            return 0
+        fi
+    done
+
+    # CrowdSec — IDS/IPS réseau (pas de params requis, disponible sur canal alpha)
+    if caleope store 2>/dev/null | grep -q "crowdsec"; then
+        log_step "Installation de CrowdSec (IDS/IPS)..."
+        if caleope install crowdsec 2>/dev/null; then
+            log_success "CrowdSec installé"
+        else
+            log_warning "CrowdSec non installé (sera disponible via 'caleope install crowdsec')"
+        fi
+    else
+        log_warning "CrowdSec non disponible dans ce canal — à installer via 'caleope install crowdsec' (canal alpha)"
+    fi
+
+    # Authentik — Identity Provider SSO (secrets générés automatiquement)
+    log_step "Installation d'Authentik (SSO/Identity Provider)..."
+    if caleope install authentik 2>/dev/null; then
+        log_success "Authentik installé"
+    else
+        log_warning "Authentik non installé (sera disponible via 'caleope install authentik')"
     fi
 }
 
@@ -680,48 +1053,7 @@ EOF
 # COCKPIT
 # =============================================================================
 
-install_cockpit() {
-    log_section "Cockpit"
-
-    if ss -tlnp | grep -q ":${PORT_COCKPIT}"; then
-        log_warning "Cockpit déjà actif sur le port ${PORT_COCKPIT}"
-        return 0
-    fi
-
-    log_step "Installation de Cockpit..."
-    run_cmd apt-get install -y cockpit
-
-    log_step "Configuration du port ${PORT_COCKPIT}..."
-    systemctl stop cockpit.service 2>/dev/null || true
-    systemctl stop cockpit.socket  2>/dev/null || true
-
-    mkdir -p /etc/cockpit
-    cat > /etc/cockpit/cockpit.conf << EOF
-[WebService]
-ListenStream=${PORT_COCKPIT}
-EOF
-
-    mkdir -p /etc/systemd/system/cockpit.socket.d/
-    cat > /etc/systemd/system/cockpit.socket.d/listen.conf << EOF
-[Socket]
-ListenStream=
-ListenStream=${PORT_COCKPIT}
-EOF
-
-    log_step "Activation de Cockpit..."
-    systemctl daemon-reload
-    systemctl enable cockpit.socket
-    systemctl restart cockpit.socket
-    systemctl restart cockpit.service 2>/dev/null || true
-
-    sleep 3
-
-    if ss -tlnp | grep -q ":${PORT_COCKPIT}"; then
-        log_success "Cockpit actif sur le port ${PORT_COCKPIT}"
-    else
-        log_warning "Cockpit démarré — port ${PORT_COCKPIT} non encore détecté"
-    fi
-}
+# Cockpit remplacé par le terminal intégré dans Caleope UI (section SERVEUR)
 
 # =============================================================================
 # SUDO
@@ -780,14 +1112,96 @@ CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}
 CALEOPE_EMAIL=${CALEOPE_EMAIL}
 CALEOPE_CHANNEL=${CALEOPE_CHANNEL}
 CALEOPE_VERSION=0.1.0
+
+# SMTP externe (relai pour les notifications des apps)
+CALEOPE_SMTP_HOST=${CALEOPE_SMTP_HOST}
+CALEOPE_SMTP_PORT=${CALEOPE_SMTP_PORT}
+CALEOPE_SMTP_USER=${CALEOPE_SMTP_USER}
+CALEOPE_SMTP_PASS=${CALEOPE_SMTP_PASS}
+CALEOPE_SMTP_FROM=${CALEOPE_SMTP_FROM}
 EOF
 
-    chmod 644 "${CALEOPE_ROOT}/caleope.conf"
-    chown "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}/caleope.conf"
+    chmod 640 "${CALEOPE_ROOT}/caleope.conf"
+    chown "${CALEOPE_USER}:${CALEOPE_GROUP}" "${CALEOPE_ROOT}/caleope.conf"
+
+    # Mot de passe interface web
+    if [[ -n "${CALEOPE_UI_PASSWORD}" ]]; then
+        mkdir -p "${CALEOPE_ROOT}/core/daemon"
+        echo -n "${CALEOPE_UI_PASSWORD}" > "${CALEOPE_ROOT}/core/daemon/ui-password"
+        chmod 600 "${CALEOPE_ROOT}/core/daemon/ui-password"
+        CALEOPE_UI_PASSWORD=""
+        log_success "Mot de passe UI enregistré"
+    fi
 
     log_success "Config sauvegardée dans ${CALEOPE_ROOT}/caleope.conf"
     log_debug "  CALEOPE_DOMAIN=${CALEOPE_DOMAIN}"
     log_debug "  CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}"
+}
+
+# =============================================================================
+# SÉCURITÉ SYSTÈME (UFW, fail2ban, unattended-upgrades)
+# =============================================================================
+
+setup_security() {
+    log_section "Sécurité système"
+
+    # ── UFW ──
+    log_step "Configuration du pare-feu UFW..."
+    run_cmd apt-get install -y ufw
+    ufw --force reset >/dev/null 2>&1 || true
+    ufw default deny incoming >/dev/null 2>&1
+    ufw default allow outgoing >/dev/null 2>&1
+    ufw allow 22/tcp comment "SSH" >/dev/null 2>&1
+    ufw allow 80/tcp comment "HTTP" >/dev/null 2>&1
+    ufw allow 443/tcp comment "HTTPS" >/dev/null 2>&1
+    echo "y" | ufw enable >/dev/null 2>&1 || true
+    log_success "UFW actif (22/80/443 ouverts)"
+
+    # ── fail2ban ──
+    log_step "Installation de fail2ban..."
+    run_cmd apt-get install -y fail2ban
+    run_cmd systemctl enable fail2ban
+    run_cmd systemctl start fail2ban
+    log_success "fail2ban actif"
+
+    # ── unattended-upgrades ──
+    log_step "Mises à jour automatiques de sécurité..."
+    run_cmd apt-get install -y unattended-upgrades
+    echo 'Unattended-Upgrade::Automatic-Reboot "false";' \
+        > /etc/apt/apt.conf.d/51caleope-no-reboot 2>/dev/null || true
+    run_cmd systemctl enable unattended-upgrades
+    run_cmd systemctl start unattended-upgrades
+    log_success "unattended-upgrades actif"
+
+    # ── Répertoire journal audit ──
+    mkdir -p /var/log/caleope
+    chmod 750 /var/log/caleope
+    chown "${CALEOPE_USER}:${CALEOPE_GROUP}" /var/log/caleope 2>/dev/null || true
+    log_success "Répertoire /var/log/caleope créé"
+}
+
+# =============================================================================
+# INIT CHIFFREMENT SECRETS
+# =============================================================================
+
+init_secrets_encryption() {
+    log_section "Initialisation du chiffrement des secrets"
+
+    if [[ -z "${CALEOPE_SECRETS_PASSWORD}" ]]; then
+        log_warning "Pas de mot de passe fourni — chiffrement ignoré"
+        return 0
+    fi
+
+    local init_file="${CALEOPE_ROOT}/core/daemon/secrets-init-password"
+    mkdir -p "$(dirname "${init_file}")"
+    echo -n "${CALEOPE_SECRETS_PASSWORD}" > "${init_file}"
+    chmod 600 "${init_file}"
+    chown "${CALEOPE_USER}:${CALEOPE_USER}" "${init_file}" 2>/dev/null || true
+    # Effacer le mot de passe de la mémoire
+    CALEOPE_SECRETS_PASSWORD=""
+
+    log_success "Mot de passe transmis au daemon (sera supprimé au premier démarrage)"
+    log_warning "Conservez ce mot de passe en lieu sûr — il ne peut pas être récupéré !"
 }
 
 # =============================================================================
@@ -798,6 +1212,17 @@ sync_store() {
     log_section "Synchronisation du store Caleope"
 
     local store_dir="${CALEOPE_ROOT}/core/cache/official"
+
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        local store_archive="${OFFLINE_BUNDLE_PATH}/store.tar.gz"
+        log_step "Extraction du store depuis le bundle..."
+        mkdir -p "${store_dir}"
+        tar -xzf "${store_archive}" -C "${store_dir}" --strip-components=1
+        chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${store_dir}"
+        log_success "Store extrait — $(find "${store_dir}/apps" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l) application(s) disponible(s)"
+        return 0
+    fi
+
     local store_url="https://github.com/${GITHUB_REPO}-store"
 
     # Supprimer le dossier s'il existe déjà mais est vide (créé par mkdir -p)
@@ -809,13 +1234,17 @@ sync_store() {
 
     git config --global --add safe.directory "${store_dir}"
 
+    # La branche du store suit le canal : alpha → origin/alpha, stable → origin/main
+    local store_branch="main"
+    [[ "${CALEOPE_CHANNEL:-stable}" == "alpha" ]] && store_branch="alpha"
+
     if [[ -d "${store_dir}/.git" ]]; then
-        log_step "Mise à jour du store..."
-        git -C "${store_dir}" fetch origin
-        git -C "${store_dir}" reset --hard origin/main
+        log_step "Mise à jour du store (branche ${store_branch})..."
+        git -C "${store_dir}" fetch origin "${store_branch}"
+        git -C "${store_dir}" reset --hard FETCH_HEAD
     else
-        log_step "Téléchargement du store depuis GitHub..."
-        git clone --depth=1 "${store_url}" "${store_dir}"
+        log_step "Téléchargement du store depuis GitHub (branche ${store_branch})..."
+        git clone --depth=1 --branch "${store_branch}" "${store_url}" "${store_dir}"
     fi
 
     chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${store_dir}"
@@ -837,9 +1266,10 @@ generate_links_file() {
 
 | Service            | URL                                         |
 |--------------------|---------------------------------------------|
+| Caleope UI         | http://${IP}:${PORT_UI}                     |
 | Traefik dashboard  | http://${IP}:${PORT_TRAEFIK_DASHBOARD}      |
 | Portainer          | https://${IP}:${PORT_PORTAINER}             |
-| Cockpit            | https://${IP}:${PORT_COCKPIT}               |
+| Terminal           | Intégré dans Caleope UI → section SERVEUR   |
 
 ---
 
@@ -899,15 +1329,21 @@ print_summary() {
     echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║                   Services actifs                    ║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
+    # Test statut UI
+    local ui_status="❌ inactif"
+    systemctl is-active --quiet caleope-ui 2>/dev/null && ui_status="✅ actif"
+
+    echo -e "${CYAN}║${NC}  🌐 Caleope UI  → ${YELLOW}http://${IP}:${PORT_UI}${NC}"
     echo -e "${CYAN}║${NC}  🔀 Traefik     → ${YELLOW}http://${IP}:${PORT_TRAEFIK_DASHBOARD}${NC}"
     echo -e "${CYAN}║${NC}  🐳 Portainer   → ${YELLOW}https://${IP}:${PORT_PORTAINER}${NC}"
-    echo -e "${CYAN}║${NC}  🖥️  Cockpit     → ${YELLOW}https://${IP}:${PORT_COCKPIT}${NC}"
+    echo -e "${CYAN}║${NC}  🖥️  Terminal    → ${YELLOW}Caleope UI → section SERVEUR${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║                   Caleope Daemon                     ║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
-    echo -e "${CYAN}║${NC}  Statut : ${daemon_status}"
+    echo -e "${CYAN}║${NC}  Daemon : ${daemon_status}  |  UI : ${ui_status}"
     echo -e "${CYAN}║${NC}  Socket : ${SOCKET_PATH}"
     echo -e "${CYAN}║${NC}  Logs   : ${YELLOW}journalctl -u caleoped -f${NC}"
+    echo -e "${CYAN}║${NC}  UI     : ${YELLOW}journalctl -u caleope-ui -f${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║                   Prochaines étapes                  ║${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
@@ -939,7 +1375,9 @@ main() {
     echo "╚══════════════════════════════════════════╝"
     echo -e "${NC}"
 
-    if [[ "${LOG_MODE}" == "debug" ]]; then
+    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+        echo -e "${YELLOW}Mode : SUBMARINE (offline) — bundle : ${OFFLINE_BUNDLE_PATH}${NC}\n"
+    elif [[ "${LOG_MODE}" == "debug" ]]; then
         echo -e "${GRAY}Mode : DEBUG${NC}\n"
     else
         echo -e "${GRAY}Mode : CLASSIC  |  --debug pour plus de détails${NC}\n"
@@ -950,6 +1388,7 @@ main() {
     check_debian
     check_debian_codename
     check_user
+    check_offline_bundle       # Valide le bundle si --offline
 
     # Configuration interactive (domaine, mode proxy, email)
     ask_config
@@ -958,18 +1397,22 @@ main() {
     configure_sudo             # En premier — nécessaire pour la suite
     install_prerequisites
     install_docker
+    setup_security             # UFW + fail2ban + unattended-upgrades
     create_docker_networks
+    load_docker_images_from_bundle  # Mode submarine : charge les images .tar
     create_structure
     setup_caleope_group
-    install_caleope_binaries   # release GitHub → fallback compile
+    install_caleope_binaries   # release GitHub → bundle (mode submarine)
     install_bash_completion    # tab completion pour caleope
     init_caleope_runtime
-    save_config                # Sauvegarder domaine + mode proxy dans caleope.conf
-    sync_store                 # git clone du store officiel
+    save_config                # Sauvegarder domaine + mode proxy + SMTP dans caleope.conf
+    init_secrets_encryption    # Transmettre mot de passe chiffrement au daemon
+    sync_store                 # git clone officiel → extract bundle (mode submarine)
     install_caleoped_service
+    install_caleope_ui_service
     deploy_traefik
     deploy_portainer
-    install_cockpit
+    install_default_apps
     generate_links_file
     print_summary
 }

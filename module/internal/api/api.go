@@ -20,15 +20,14 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
@@ -36,6 +35,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
@@ -43,28 +43,6 @@ import (
 
 // SOCKET_PATH est le chemin du fichier socket UNIX.
 const SOCKET_PATH = "/run/caleoped.sock"
-
-// installSession capture les logs d'une installation asynchrone.
-type installSession struct {
-	mu      sync.Mutex
-	lines   []string
-	done    bool
-	err     error
-	notes   string
-	appID   string
-	startAt time.Time
-}
-
-// Write implémente io.Writer — chaque écriture ajoute des lignes à la session.
-func (s *installSession) Write(p []byte) (n int, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	text := strings.TrimRight(string(p), "\n")
-	for _, line := range strings.Split(text, "\n") {
-		s.lines = append(s.lines, line)
-	}
-	return len(p), nil
-}
 
 // Server est le serveur API du daemon.
 type Server struct {
@@ -79,8 +57,6 @@ type Server struct {
 	net        *network.Manager
 	baseDir    string
 	token      string
-	sessmu     sync.RWMutex
-	sessions   map[string]*installSession
 }
 
 func NewServer(
@@ -107,7 +83,6 @@ func NewServer(
 		net:        net,
 		baseDir:    baseDir,
 		token:      loadOrCreateToken(baseDir),
-		sessions:   make(map[string]*installSession),
 	}
 }
 
@@ -221,8 +196,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleLocationUnmount(req.Args)
 	case "location-storage":
 		data, err = s.handleLocationStorage(req.Args)
-	case "install-status":
-		data, err = s.handleInstallStatus(req.Args)
 	case "configure":
 		data, err = s.handleConfigure(req.Args)
 	case "ping":
@@ -241,6 +214,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	case "token":
 		data = map[string]string{"token": s.token}
+	case "secrets-show":
+		data, err = s.handleSecretsShow(req.Args)
+	case "audit-list":
+		data, err = s.handleAuditList(req.Args)
 	default:
 		err = fmt.Errorf("commande inconnue: %s", req.Command)
 	}
@@ -303,7 +280,6 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	opts := install.InstallOptions{
 		AppID:  appID,
 		Domain: domain,
-		Force:  args["force"] == "true",
 		Channel: func() string {
 			if c := args["channel"]; c != "" {
 				return c
@@ -311,49 +287,14 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 			return "stable"
 		}(),
 		Params: params,
-		Async:  args["async"] == "true",
+		Force:  args["force"] == "true",
+		GPU:    args["gpu"] == "true",
 	}
 
 	// Stockage NAS : résoudre le chemin de données avant l'installation
 	if storageLocation := args["storage"]; storageLocation != "" {
 		opts.StorageLocation = storageLocation
 		opts.StorageDataDir = s.net.AppDataDir(storageLocation, appID)
-	}
-
-	// Mode asynchrone : lancer l'installation en arrière-plan et retourner immédiatement
-	if opts.Async {
-		sessionID := fmt.Sprintf("%s-%d", appID, time.Now().UnixMilli())
-		session := &installSession{
-			appID:   appID,
-			startAt: time.Now(),
-		}
-		s.sessmu.Lock()
-		s.sessions[sessionID] = session
-		s.sessmu.Unlock()
-
-		multiWriter := io.MultiWriter(os.Stdout, session)
-		installer := s.installer.WithWriter(multiWriter)
-
-		go func() {
-			installErr := installer.Install(opts)
-			session.mu.Lock()
-			defer session.mu.Unlock()
-			session.done = true
-			session.err = installErr
-			// Lire post-install.txt si l'installation a réussi
-			if installErr == nil {
-				notesPath := filepath.Join(s.baseDir, "app-config", appID, "post-install.txt")
-				if notes, readErr := os.ReadFile(notesPath); readErr == nil {
-					session.notes = string(notes)
-				}
-			}
-		}()
-
-		return map[string]string{
-			"session_id": sessionID,
-			"status":     "started",
-			"app":        appID,
-		}, nil
 	}
 
 	if err := s.installer.Install(opts); err != nil {
@@ -368,40 +309,6 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	}
 
 	return nil, nil
-}
-
-func (s *Server) handleInstallStatus(args map[string]string) (interface{}, error) {
-	sessionID := args["session"]
-	if sessionID == "" {
-		return nil, fmt.Errorf("argument 'session' manquant")
-	}
-	s.sessmu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.sessmu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("session '%s' introuvable", sessionID)
-	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	status := "running"
-	errMsg := ""
-	if session.done {
-		if session.err != nil {
-			status = "error"
-			errMsg = session.err.Error()
-		} else {
-			status = "done"
-		}
-	}
-	return types.InstallSessionStatus{
-		SessionID: sessionID,
-		AppID:     session.appID,
-		Status:    status,
-		Lines:     append([]string{}, session.lines...),
-		Error:     errMsg,
-		Notes:     session.notes,
-		StartAt:   session.startAt,
-	}, nil
 }
 
 // handleStoreParams retourne la liste des params interactifs d'une app (params.json).
@@ -589,6 +496,22 @@ func (s *Server) handleBackup(args map[string]string) (interface{}, error) {
 		return nil, fmt.Errorf("argument 'app' manquant")
 	}
 
+	// Backend Restic si demandé
+	if args["restic"] == "true" {
+		repo := args["repo"]
+		if repo == "" {
+			return nil, fmt.Errorf("--repo requis avec --restic (ex: sftp:user@host:/path)")
+		}
+		repoURL, err := s.bkp.ResticBackup(appID, repo, args["restic_password"])
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"repo":    repoURL,
+			"message": fmt.Sprintf("Backup Restic de '%s' → %s", appID, repoURL),
+		}, nil
+	}
+
 	backupDir, err := s.bkp.Backup(appID)
 	if err != nil {
 		return nil, err
@@ -618,15 +541,46 @@ func (s *Server) handleBackupList(args map[string]string) (interface{}, error) {
 	return s.bkp.ListBackups(appID)
 }
 
+func (s *Server) handleBackupDelete(args map[string]string) error {
+	appID := args["app"]
+	dir := args["dir"]
+	if appID == "" || dir == "" {
+		return fmt.Errorf("arguments 'app' et 'dir' requis")
+	}
+	return s.bkp.DeleteBackup(appID, dir)
+}
+
 func (s *Server) handleUpdate(args map[string]string) error {
 	repos, err := s.rt.GetRepos()
 	if err != nil {
 		return err
 	}
+
+	// Si channel=alpha est explicitement demandé, forcer la branche alpha sur tous les repos officiels.
+	// Sinon lire le canal depuis caleope.conf pour les repos sans branche explicite.
+	channel := ""
+	if args != nil {
+		channel = args["channel"]
+	}
+	if channel == "" {
+		if cfg, err := s.rt.GetConfig(); err == nil {
+			channel = cfg.Channel
+		}
+	}
+
 	var syncErr error
 	for i := range repos {
-		if err := s.st.SyncRepo(&repos[i]); err != nil {
-			fmt.Printf("⚠️  Erreur sync repo %s: %v\n", repos[i].Name, err)
+		r := &repos[i]
+		if r.Branch == "" {
+			switch channel {
+			case "alpha":
+				r.Branch = "alpha"
+			default:
+				r.Branch = "main"
+			}
+		}
+		if err := s.st.SyncRepo(r); err != nil {
+			fmt.Printf("⚠️  Erreur sync repo %s: %v\n", r.Name, err)
 			syncErr = err
 		}
 	}
@@ -663,13 +617,20 @@ func (s *Server) handleLocationAdd(args map[string]string) (interface{}, error) 
 	}
 	locType := types.NetworkLocationType(args["type"])
 	if locType == "" {
-		return nil, fmt.Errorf("argument 'type' manquant (smb, cifs, sftp)")
+		return nil, fmt.Errorf("argument 'type' manquant (smb, cifs, sftp, local)")
+	}
+
+	// Pour le type local, le champ "device" indique le périphérique (/dev/sdb1).
+	// On le stocke dans Host pour réutiliser la structure NetworkLocation.
+	host := args["host"]
+	if locType == types.LocationLocal && args["device"] != "" {
+		host = args["device"]
 	}
 
 	loc := types.NetworkLocation{
 		Name:     name,
 		Type:     locType,
-		Host:     args["host"],
+		Host:     host,
 		Share:    args["share"],
 		Username: args["username"],
 		Options:  args["options"],
@@ -889,19 +850,22 @@ func isClosedError(err error) bool {
 }
 
 func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
-	// Déterminer le canal (stable ou alpha) depuis caleope.conf
-	cfg, _ := s.rt.GetConfig()
-	channel := cfg.Channel
+	// Canal : arg explicite > caleope.conf > stable
+	channel := args["channel"]
+	if channel == "" {
+		cfg, _ := s.rt.GetConfig()
+		channel = cfg.Channel
+	}
 	if channel == "" {
 		channel = "stable"
 	}
 
 	// Choisir l'endpoint GitHub selon le canal
 	// stable → /releases/latest (ignore les pré-releases)
-	// alpha  → /releases?per_page=1 (inclut les pré-releases, plus récent en premier)
+	// alpha  → /releases?per_page=20, filtré sur prerelease:true
 	var apiURL string
 	if channel == "alpha" {
-		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases?per_page=1"
+		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases?per_page=20"
 	} else {
 		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases/latest"
 	}
@@ -914,14 +878,31 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	// Parser le JSON de la release (format différent selon le canal)
 	type releaseInfo struct {
-		TagName string `json:"tag_name"`
-		HTMLURL string `json:"html_url"`
+		TagName    string `json:"tag_name"`
+		HTMLURL    string `json:"html_url"`
+		Prerelease bool   `json:"prerelease"`
 	}
 	var release releaseInfo
 	if channel == "alpha" {
 		var releases []releaseInfo
-		if err := json.Unmarshal(out, &releases); err != nil || len(releases) == 0 {
+		if err := json.Unmarshal(out, &releases); err != nil {
 			return nil, fmt.Errorf("réponse GitHub invalide (canal alpha): %w", err)
+		}
+		// Prendre uniquement la première pre-release — évite de rétrogader vers une release stable
+		found := false
+		for _, r := range releases {
+			if r.Prerelease {
+				release = r
+				found = true
+				break
+			}
+		}
+		if !found {
+			return map[string]string{
+				"status":  "up_to_date",
+				"version": version.Version,
+				"message": "Aucune pré-release alpha disponible sur GitHub",
+			}, nil
 		}
 		release = releases[0]
 	} else {
@@ -1022,4 +1003,177 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		"to":      latest,
 		"message": fmt.Sprintf("Mis à jour %s → %s, redémarrage en cours...", current, latest),
 	}, nil
+}
+
+// ─────────────────────────────────────────────
+// SECRETS — liste et déverrouillage HTTP
+// ─────────────────────────────────────────────
+
+// handleSecretsList retourne les métadonnées (sans valeurs) de toutes les apps qui ont des secrets.
+func (s *Server) handleSecretsList() (interface{}, error) {
+	apps, err := s.rt.ListApps()
+	if err != nil {
+		return nil, err
+	}
+	type appSecretInfo struct {
+		AppID     string `json:"app_id"`
+		AppName   string `json:"app_name"`
+		KeyCount  int    `json:"key_count"`
+		Encrypted bool   `json:"encrypted"`
+	}
+	var result []appSecretInfo
+	enc := secrets.IsSetup(s.baseDir)
+	for _, app := range apps {
+		configDir := filepath.Join(s.baseDir, "app-config", app.ID)
+		data, err := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+		if err != nil {
+			continue
+		}
+		count := 0
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") && strings.Contains(line, "=") {
+				count++
+			}
+		}
+		if count > 0 {
+			result = append(result, appSecretInfo{
+				AppID:    app.ID,
+				AppName:  app.Name,
+				KeyCount: count,
+				Encrypted: enc,
+			})
+		}
+	}
+	if result == nil {
+		result = []appSecretInfo{}
+	}
+	return result, nil
+}
+
+// handleSecretsReveal déchiffre et retourne les secrets d'une ou toutes les apps.
+// args["app"] peut être vide (toutes les apps) ou préciser une app.
+// args["password"] est obligatoire.
+func (s *Server) handleSecretsReveal(args map[string]string) (interface{}, error) {
+	password := args["password"]
+	if password == "" {
+		return nil, fmt.Errorf("argument 'password' manquant")
+	}
+
+	var dek []byte
+	var unlockErr error
+	if secrets.IsSetup(s.baseDir) {
+		dek, unlockErr = secrets.UnlockDEK(s.baseDir, password)
+		if unlockErr != nil {
+			audit.Log(audit.ActionSecretsShow, args["app"], "DENIED:wrong-password")
+			return nil, fmt.Errorf("mot de passe incorrect")
+		}
+	}
+
+	apps, err := s.rt.ListApps()
+	if err != nil {
+		return nil, err
+	}
+
+	type appSecrets struct {
+		AppID   string            `json:"app_id"`
+		AppName string            `json:"app_name"`
+		Vars    map[string]string `json:"vars"`
+	}
+	var result []appSecrets
+
+	for _, app := range apps {
+		// Si une app spécifique est demandée, ignorer les autres
+		if target := args["app"]; target != "" && target != app.ID {
+			continue
+		}
+		configDir := filepath.Join(s.baseDir, "app-config", app.ID)
+		var plaintext string
+		if secrets.IsSetup(s.baseDir) {
+			plaintext, err = secrets.ShowSecrets(configDir, dek)
+			if err != nil {
+				continue
+			}
+		} else {
+			data, readErr := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+			if readErr != nil {
+				continue
+			}
+			plaintext = string(data)
+		}
+		vars := map[string]string{}
+		for _, line := range strings.Split(plaintext, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+				vars[parts[0]] = parts[1]
+			}
+		}
+		if len(vars) > 0 {
+			result = append(result, appSecrets{AppID: app.ID, AppName: app.Name, Vars: vars})
+			audit.Log(audit.ActionSecretsShow, app.ID, "OK:http")
+		}
+	}
+	if result == nil {
+		result = []appSecrets{}
+	}
+	return result, nil
+}
+
+// handleSecretsShow déchiffre et retourne les secrets d'une app.
+// Le mot de passe est demandé à chaque appel (pas de cache de session).
+func (s *Server) handleSecretsShow(args map[string]string) (interface{}, error) {
+	appID := args["app"]
+	if appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	password := args["password"]
+	if password == "" {
+		return nil, fmt.Errorf("argument 'password' manquant")
+	}
+
+	if !secrets.IsSetup(s.baseDir) {
+		// Pas de chiffrement configuré : lire secrets.env directement
+		configDir := filepath.Join(s.baseDir, "app-config", appID)
+		plain, err := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+		if err != nil {
+			return nil, fmt.Errorf("secrets.env introuvable pour '%s'", appID)
+		}
+		audit.Log(audit.ActionSecretsShow, appID, "OK:no-encryption")
+		return map[string]string{"secrets": string(plain), "encrypted": "false"}, nil
+	}
+
+	dek, err := secrets.UnlockDEK(s.baseDir, password)
+	if err != nil {
+		audit.Log(audit.ActionSecretsShow, appID, "DENIED:wrong-password")
+		return nil, fmt.Errorf("mot de passe incorrect")
+	}
+
+	configDir := filepath.Join(s.baseDir, "app-config", appID)
+	plaintext, err := secrets.ShowSecrets(configDir, dek)
+	if err != nil {
+		return nil, fmt.Errorf("déchiffrement secrets '%s': %w", appID, err)
+	}
+
+	audit.Log(audit.ActionSecretsShow, appID, "OK")
+	return map[string]string{"secrets": plaintext, "encrypted": "true"}, nil
+}
+
+// ─────────────────────────────────────────────
+// AUDIT — lecture du journal
+// ─────────────────────────────────────────────
+
+// handleAuditList retourne les dernières lignes du journal d'audit.
+func (s *Server) handleAuditList(args map[string]string) (interface{}, error) {
+	n := 50 // défaut : 50 dernières lignes
+	if nStr, ok := args["n"]; ok && nStr != "" {
+		fmt.Sscanf(nStr, "%d", &n)
+	}
+	lines, err := audit.Read(n)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"lines": lines, "count": len(lines)}, nil
 }

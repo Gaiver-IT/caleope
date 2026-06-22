@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <radialGradient id="bgG" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#130828"/>
+      <stop offset="100%" stop-color="#05050A"/>
+    </radialGradient>
+    <linearGradient id="hairG" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E040FB"/>
+      <stop offset="50%" stop-color="#C026D3"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="faceG" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5B3AED"/>
+      <stop offset="100%" stop-color="#00BFFF"/>
+    </linearGradient>
+    <linearGradient id="armorG" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#2060CC"/>
+    </linearGradient>
+    <clipPath id="circ"><circle cx="100" cy="100" r="97"/></clipPath>
+  </defs>
+
+  <!-- Background -->
+  <circle cx="100" cy="100" r="100" fill="url(#bgG)"/>
+
+  <g clip-path="url(#circ)">
+    <!-- ── Cheveux / cape (arcs superposés allant vers la gauche) ── -->
+    <path d="M 118 42 C 95 15, 45 18, 12 58 C 2 72, 5 90, 8 105"
+          fill="none" stroke="#F050FF" stroke-width="10" stroke-linecap="round" opacity="0.95"/>
+    <path d="M 122 47 C 100 22, 55 22, 24 60 C 12 75, 12 92, 14 108"
+          fill="none" stroke="#D030E8" stroke-width="7.5" stroke-linecap="round" opacity="0.85"/>
+    <path d="M 124 54 C 106 30, 68 30, 40 65 C 28 78, 26 94, 28 110"
+          fill="none" stroke="#B020D0" stroke-width="5.5" stroke-linecap="round" opacity="0.75"/>
+    <path d="M 123 62 C 108 40, 78 40, 56 70 C 46 82, 43 96, 44 112"
+          fill="none" stroke="#9020B8" stroke-width="4" stroke-linecap="round" opacity="0.65"/>
+    <path d="M 120 70 C 108 52, 88 52, 72 74 C 63 86, 60 98, 61 113"
+          fill="none" stroke="#7030A0" stroke-width="2.5" stroke-linecap="round" opacity="0.55"/>
+
+    <!-- ── Corps / cape (zone gauche-bas) ── -->
+    <path d="M 95 150 C 65 138, 28 142, 5 165 L 5 200 L 100 200 L 100 158 Z"
+          fill="url(#hairG)" opacity="0.35"/>
+    <path d="M 95 150 C 62 136, 25 140, 4 162"
+          fill="none" stroke="#C026D3" stroke-width="2" opacity="0.6"/>
+
+    <!-- ── Profil du visage (droite) ── -->
+    <!-- Contour du crâne et du visage -->
+    <path d="M 118 42 C 150 46, 162 68, 162 92 C 162 115, 150 132, 138 142 C 128 150, 118 153, 112 150"
+          fill="url(#faceG)" opacity="0.75"/>
+    <path d="M 118 44 C 150 48, 164 70, 164 94 C 164 118, 151 136, 139 145 C 129 152, 119 155, 113 152"
+          fill="none" stroke="#00D4FF" stroke-width="2.5" opacity="0.9"/>
+
+    <!-- Mâchoire / menton -->
+    <path d="M 113 152 C 106 156, 100 153, 97 147 C 94 141, 97 134, 103 130"
+          fill="none" stroke="#0090E0" stroke-width="2" opacity="0.8"/>
+
+    <!-- Nez (profil droit) -->
+    <path d="M 162 96 L 167 108 L 162 111" fill="none" stroke="#00BFFF" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
+
+    <!-- Œil -->
+    <ellipse cx="150" cy="82" rx="7" ry="4.5" fill="#00D4FF" opacity="0.9"/>
+    <ellipse cx="151" cy="82" rx="3.5" ry="3.5" fill="#0060C0" opacity="1"/>
+    <ellipse cx="152" cy="81" rx="1.2" ry="1.2" fill="#80E8FF" opacity="0.8"/>
+
+    <!-- Sourcil (ligne angulaire) -->
+    <line x1="143" y1="75" x2="158" y2="74" stroke="#00BFFF" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
+
+    <!-- ── Armure épaule (formes géométriques) ── -->
+    <path d="M 88 155 L 125 142 L 142 158 L 132 175 L 90 172 Z"
+          fill="url(#armorG)" opacity="0.7"/>
+    <path d="M 88 155 L 125 142 L 142 158"
+          fill="none" stroke="#A078F0" stroke-width="2" opacity="0.9"/>
+    <line x1="96" y1="157" x2="128" y2="146" stroke="#C0A0FF" stroke-width="1" opacity="0.5"/>
+    <line x1="103" y1="163" x2="135" y2="153" stroke="#C0A0FF" stroke-width="0.8" opacity="0.4"/>
+    <!-- Détail angulaire épaulière -->
+    <path d="M 125 142 L 138 138 L 148 148 L 142 158"
+          fill="#4020A0" opacity="0.6"/>
+    <path d="M 125 142 L 138 138 L 148 148" fill="none" stroke="#8060D0" stroke-width="1.5" opacity="0.8"/>
+
+    <!-- ── Arme / avant-bras ── -->
+    <path d="M 82 108 L 88 175" fill="none" stroke="#3010A0" stroke-width="6" stroke-linecap="round" opacity="0.8"/>
+    <path d="M 82 108 C 100 135, 95 158, 88 175"
+          fill="none" stroke="#6040C0" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
+    <!-- Poignée arme -->
+    <rect x="78" y="100" width="9" height="16" rx="1" fill="#5030B0" opacity="0.8"/>
+    <line x1="74" y1="108" x2="96" y2="108" stroke="#8060D0" stroke-width="2" opacity="0.7"/>
+
+    <!-- ── Lignes accent néon ── -->
+    <line x1="10" y1="118" x2="76" y2="118" stroke="#E040FB" stroke-width="0.8" opacity="0.35"/>
+    <line x1="15" y1="123" x2="82" y2="123" stroke="#9020C0" stroke-width="0.6" opacity="0.25"/>
+  </g>
+
+  <!-- Rings décoratifs -->
+  <circle cx="100" cy="100" r="97" fill="none" stroke="url(#hairG)" stroke-width="1" opacity="0.5"/>
+  <circle cx="100" cy="100" r="91" fill="none" stroke="#00D4FF" stroke-width="0.5" opacity="0.15"/>
+</svg>

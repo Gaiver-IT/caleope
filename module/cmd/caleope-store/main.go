@@ -125,18 +125,44 @@ func cmdInstall(args []string) {
 	// Si l'app n'en a pas, fetchStoreParams retourne nil et on passe directement à l'install.
 	paramDefs := fetchStoreParams(args[0])
 	if len(paramDefs) > 0 {
-		fmt.Printf("\n⚙️  Configuration de '%s'\n", args[0])
-		fmt.Printf("   (les champs marqués * sont obligatoires)\n\n")
+		needHeader := true
 		for _, p := range paramDefs {
+			// 1. Lire CALEOPE_PARAM_<ID> depuis l'environnement (installs non-interactives)
+			envKey := "CALEOPE_PARAM_" + strings.ToUpper(p.ID)
+			if envVal := os.Getenv(envKey); envVal != "" {
+				apiArgs["param_"+p.ID] = envVal
+				continue
+			}
+			// 2. Vérifier qu'un terminal est disponible avant de prompter
+			tty, ttyErr := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+			if ttyErr == nil {
+				tty.Close()
+			}
+			if ttyErr != nil {
+				if p.Required {
+					die(fmt.Sprintf("Param requis '%s' manquant. Utiliser CALEOPE_PARAM_%s=<val> ou --param %s=<val>", p.ID, strings.ToUpper(p.ID), p.ID))
+				}
+				continue
+			}
+			// 3. Prompt interactif
+			if needHeader {
+				fmt.Printf("\n⚙️  Configuration de '%s'\n", args[0])
+				fmt.Printf("   (les champs marqués * sont obligatoires)\n\n")
+				needHeader = false
+			}
 			val := promptParam(p)
 			// Boucle jusqu'à saisie valide pour les champs requis
 			for p.Required && val == "" {
 				fmt.Printf("  ⚠  Ce champ est requis.\n")
 				val = promptParam(p)
 			}
-			apiArgs["param_"+p.ID] = val
+			if val != "" {
+				apiArgs["param_"+p.ID] = val
+			}
 		}
-		fmt.Println()
+		if !needHeader {
+			fmt.Println()
+		}
 	}
 
 	fmt.Printf("📦 Installation de '%s'...\n", args[0])
