@@ -1017,6 +1017,9 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// Symlink de compatibilité : caleope-store → caleope
 	_ = exec.Command("ln", "-sf", "/usr/local/bin/caleope", "/usr/local/bin/caleope-store").Run()
 
+	// S'assurer que caleope-ui.service est installé et activé
+	ensureUIService()
+
 	// Mettre à jour caleope.conf
 	confPath := fmt.Sprintf("%s/caleope.conf", s.baseDir)
 	confData, _ := os.ReadFile(confPath)
@@ -1288,4 +1291,31 @@ func (s *Server) handleTaskToggle(args map[string]string) error {
 	}
 	enabled := args["enabled"] == "true"
 	return s.sched.Toggle(id, enabled)
+}
+
+// ensureUIService installe le service systemd caleope-ui s'il n'existe pas encore,
+// puis l'active. Appelé à chaque upgrade pour garantir la présence du service.
+func ensureUIService() {
+	const servicePath = "/etc/systemd/system/caleope-ui.service"
+	const serviceContent = `[Unit]
+Description=Caleope UI Server
+After=network.target caleoped.service
+Requires=caleoped.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/caleope-ui \
+    --base-dir /opt/gaiver-it/caleope \
+    --daemon   http://127.0.0.1:8765 \
+    --port     8766
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`
+	_ = os.WriteFile(servicePath, []byte(serviceContent), 0644)
+	_ = exec.Command("systemctl", "daemon-reload").Run()
+	_ = exec.Command("systemctl", "enable", "caleope-ui").Run()
 }
