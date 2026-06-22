@@ -2,7 +2,7 @@
 title: Jellyfin
 description: Serveur multimédia libre
 published: true
-date: 2026-06-07
+date: 2026-05-25
 ---
 
 # Jellyfin
@@ -12,57 +12,39 @@ Serveur multimédia libre et open-source. Diffuse films, séries, musique et pho
 ## Installation
 
 ```bash
-caleope install jellyfin
+caleope install jellyfin --domain media.monserveur.fr
 ```
 
-L'installation est **entièrement automatique** :
-- Compte admin créé automatiquement (identifiants affichés et sauvegardés)
-- Wizard de démarrage complété sans interaction
-- Langue française configurée (métadonnées + interface)
+Jellyfin ne génère pas d'identifiants à l'installation — un wizard de premier démarrage te guide pour créer le compte admin.
 
-Les identifiants sont affichés à la fin de l'installation et sauvegardés dans :
-```
-/opt/gaiver-it/caleope/app-config/jellyfin/secrets.env
-```
+## Première configuration
 
-## Avec l'arr-stack (recommandé)
+1. Ouvre `https://media.monserveur.fr` → wizard de démarrage
+2. Crée ton compte administrateur
+3. Ajoute tes bibliothèques médias (si Jellyfin standalone)
 
-Installer Jellyfin **séparément** avant l'arr-stack est la configuration recommandée :
-
-```bash
-caleope install jellyfin    # 1. Jellyfin standalone
-caleope install arr-stack   # 2. arr-stack détecte Jellyfin automatiquement
-```
-
-L'arr-stack :
-- Détecte Jellyfin via le runtime Caleope
-- Lit les credentials depuis `app-config/jellyfin/secrets.env`
-- Monte le dossier de médias de l'arr-stack dans Jellyfin (`/arr-media`)
-- Crée les bibliothèques Films, Séries, Musique automatiquement
-- Configure Jellyseerr pour se connecter à Jellyfin sans aucune action manuelle
-
-## Bibliothèques médias
-
-Si Jellyfin est installé avec l'arr-stack, les bibliothèques sont créées automatiquement et pointent vers les médias téléchargés par l'arr-stack :
-
-| Bibliothèque | Chemin dans le container |
-|-------------|--------------------------|
-| Films | `/arr-media/movies` |
-| Séries | `/arr-media/tv` |
-| Musique | `/arr-media/music` |
-
-Pour un Jellyfin standalone (sans arr-stack), ajoute tes bibliothèques manuellement dans :
-`Tableau de bord → Bibliothèques → Ajouter une bibliothèque`
+> **Avec l'arr-stack** : pas besoin de configurer manuellement. Le bootstrap de l'arr-stack ajoute automatiquement les bibliothèques Films, Séries et Musique — que Jellyfin soit inclus dans la stack ou installé séparément.
 
 ## Intégrations
 
 | Intégration | Description |
 |-------------|-------------|
-| **arr-stack** | Jellyseerr, Radarr, Sonarr — gestion et téléchargement automatique |
-| **Jellyfin Vue** | Interface de lecture alternative épurée (incluse dans arr-stack) |
+| **Jellyseerr** | Interface de demande de contenu (arr-stack) |
+| **Jellyfin Vue** | Interface de lecture alternative épurée (arr-stack) |
 | **Prometheus + Grafana** | Supervision des ressources |
 | **Bazarr** | Sous-titres automatiques |
-| **Authentik** | SSO OIDC — connexion unique avec tes autres apps |
+
+## Accélération GPU (transcodage matériel)
+
+Jellyfin supporte le transcodage matériel via le GPU de l'hôte. Passer `--gpu` à l'installation :
+
+```bash
+caleope install jellyfin --gpu
+```
+
+Caleope détecte automatiquement le GPU (NVIDIA ou Intel/AMD) et génère la configuration Docker nécessaire. Dans Jellyfin, activer ensuite le transcodage matériel dans **Tableau de bord → Transcodage**.
+
+> GPU supportés : NVIDIA (via nvidia-container-toolkit), Intel Quick Sync, AMD VA-API
 
 ## Commandes utiles
 
@@ -70,6 +52,7 @@ Pour un Jellyfin standalone (sans arr-stack), ajoute tes bibliothèques manuelle
 caleope logs jellyfin        # Voir les logs
 caleope restart jellyfin     # Redémarrer
 caleope backup jellyfin      # Sauvegarder la config
+caleope backup jellyfin --restic --repo /mnt/backup --password <pass>
 ```
 
 ## Accès mobile
@@ -82,13 +65,7 @@ caleope backup jellyfin      # Sauvegarder la config
 
 ```
 app-data/jellyfin/
-├── config/   ← configuration, base de données, system.xml
+├── config/   ← configuration, base de données
 ├── cache/    ← miniatures, cache de transcodage
-└── media/    ← point de montage bibliothèque locale (optionnel)
+└── media/    ← point de montage bibliothèque (optionnel)
 ```
-
-Les données de l'arr-stack (films, séries téléchargés) sont dans :
-```
-app-data/arr-stack/data/media/
-```
-et montées en lecture seule dans Jellyfin sous `/arr-media`.

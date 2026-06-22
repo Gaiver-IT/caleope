@@ -35,6 +35,7 @@ caleope install jellyfin --domain media.mon-serveur.fr
 | 🗄️ **Stockage NAS** | Données directement sur ton NAS (SMB/SFTP) |
 | 🌐 **API REST** | Intégration avec tes scripts ou interfaces |
 | ⬆️ **Mises à jour** | `caleope upgrade` — un seul binaire à mettre à jour |
+| 🔌 **Mode submarine** | Installation et mises à jour sans internet (air-gap) |
 
 ---
 
@@ -53,5 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/Gaiver-IT/caleope/main/install.sh |
 
 - [Installation](/installation) — Prérequis, installation, première vérification
 - [Guide utilisateur](/guide) — Toutes les commandes avec exemples
+- [Canal Alpha](/alpha) — Fonctionnalités Brownberry, GPU, Restic, mode standalone
+- [Mode submarine](/submarine) — Installation hors-ligne depuis un support amovible
 - [API REST](/api) — Référence complète des routes
-- [Applications disponibles](/apps) — Le catalogue du store
+- [Applications disponibles](/apps) — Le catalogue du store (19 apps)
