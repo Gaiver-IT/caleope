@@ -508,7 +508,7 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", *port)
 	fmt.Printf("╔══════════════════════════════════════╗\n")
-	fmt.Printf("║       Caleope UI  — v0.4.18          ║\n")
+	fmt.Printf("║       Caleope UI  — v0.4.19          ║\n")
 	fmt.Printf("╚══════════════════════════════════════╝\n")
 	fmt.Printf("  Interface : http://0.0.0.0%s\n", addr)
 	fmt.Printf("  Daemon    : %s\n\n", *daemon)
