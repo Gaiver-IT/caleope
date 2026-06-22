@@ -28,10 +28,26 @@ caleope offline-pack /media/usb/    →    bash install.sh --offline /media/usb/
 ## Créer un bundle (sur une machine connectée)
 
 ```bash
+# Bundle complet (binaires + store + images Docker)
 caleope offline-pack /media/usb/
+
+# Bundle sans images Docker (binaires + store uniquement, ~30 Mo)
+caleope offline-pack /media/usb/ --no-images
 ```
 
 Crée automatiquement un répertoire `caleope-bundle-YYYY-MM-DD/` à l'emplacement spécifié.
+
+### Espace disque requis
+
+L'espace nécessaire dépend du nombre d'applications installées sur la machine source. Caleope affiche une estimation avant de commencer :
+
+```
+ℹ  39 image(s) — taille estimée : 8.2 GiB
+```
+
+Si l'espace disponible est insuffisant, Caleope avertit et suggère `--no-images`.
+
+> **Important** — évite de pointer vers `/tmp` si c'est un tmpfs (taille limitée à 2 GiB sur la plupart des systèmes). Utilise un répertoire sur la partition principale, une clé USB ou un disque externe.
 
 ### Structure du bundle
 
@@ -41,12 +57,12 @@ caleope-bundle-2026-06-22/
 │   ├── caleoped              # daemon
 │   ├── caleope               # CLI
 │   └── caleope-ui            # interface web
-├── store.tar.gz              # catalogue complet des apps (sans .git)
+├── store.tar.gz              # catalogue complet des apps (~100 Ko)
 ├── images/
-│   ├── traefik_v3.0.tar      # images Docker sauvegardées
-│   ├── portainer_ce.tar
-│   ├── jellyfin_latest.tar
-│   └── ...
+│   ├── traefik_v2.11.tar
+│   ├── portainer_portainer-ce_latest.tar
+│   ├── jellyfin_jellyfin_latest.tar
+│   └── ...                   # une image par app installée
 ├── caleope-completion.bash   # autocomplétion bash (si présent)
 └── pack-info.json            # métadonnées (version, date, architecture)
 ```
@@ -55,13 +71,16 @@ caleope-bundle-2026-06-22/
 
 ```json
 {
-  "caleope_version": "v0.4.18",
+  "caleope_version": "v0.4.19",
   "packed_at": "2026-06-22 14:30:00",
   "arch": "x86_64",
   "hostname": "serveur-principal",
-  "bundle_dir": "/media/usb/caleope-bundle-2026-06-22"
+  "bundle_dir": "/media/usb/caleope-bundle-2026-06-22",
+  "includes": "binaries,store,images"
 }
 ```
+
+Le champ `includes` vaut `binaries,store,images` ou `binaries,store` si `--no-images` a été utilisé.
 
 > Le bundle contient toutes les images Docker actuellement présentes sur la machine source. Assure-toi que les apps que tu veux déployer hors-ligne sont bien installées sur la machine source avant de créer le bundle.
 
@@ -196,6 +215,7 @@ caleope offline-pack /media/usb/
 | Commande | Description |
 |----------|-------------|
 | `caleope offline-pack <dest>` | Créer un bundle dans `<dest>/caleope-bundle-YYYY-MM-DD/` |
+| `caleope offline-pack <dest> --no-images` | Bundle sans images Docker (binaires + store uniquement) |
 | `caleope offline-update <bundle>` | Appliquer un bundle sur une installation existante |
 | `bash install.sh --offline <bundle>` | Installer Caleope depuis un bundle (sans internet) |
 | `bash install.sh --offline <bundle> --debug` | Même chose avec logs détaillés |

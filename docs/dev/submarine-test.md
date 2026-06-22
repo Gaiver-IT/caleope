@@ -168,6 +168,33 @@ ss -tn | grep -v "127.0.0.1\|::1"
 
 ---
 
+## Options avancées
+
+### Bundle sans images (`--no-images`)
+
+Pour un bundle léger (~30 Mo au lieu de plusieurs GiB) quand les images sont déjà présentes sur la cible ou seront chargées séparément :
+
+```bash
+caleope offline-pack /media/usb/ --no-images
+```
+
+Utile pour les mises à jour de binaires ou de store uniquement.
+
+### Estimation de l'espace disque
+
+`offline-pack` affiche une estimation avant de commencer et avertit si l'espace est insuffisant :
+
+```
+ℹ  39 image(s) — taille estimée : 8.2 GiB
+⚠  Espace insuffisant : 1.8 GiB disponible, ~8.2 GiB requis
+   Utilise caleope offline-pack --no-images pour un bundle sans images
+   ou choisis une destination avec plus d'espace disque.
+```
+
+> Ne pas utiliser `/tmp` comme destination si c'est un tmpfs (limité à 2 GiB sur la plupart des systèmes). Préférer la partition principale ou un disque externe.
+
+---
+
 ## Cas d'erreur connus
 
 | Erreur | Cause | Solution |
@@ -177,6 +204,7 @@ ss -tn | grep -v "127.0.0.1\|::1"
 | `Échec du chargement de <image>` | Fichier .tar corrompu | Re-créer le bundle, vérifier l'espace disque |
 | `store.tar.gz : tar: Error` | Archive corrompue | Re-créer le bundle (`caleope offline-pack`) |
 | App refuse de démarrer | Image non chargée | `docker load -i bundle/images/<app>.tar` manuellement |
+| Espace insuffisant sur `/tmp` | `/tmp` est un tmpfs de 2 GiB | Utiliser `/home` ou une partition avec plus d'espace |
 
 ---
 
@@ -199,14 +227,35 @@ caleope-bundle-2026-06-22/
 
 ---
 
+## Résultats du test (2026-06-22)
+
+Test effectué sur le serveur `plateforme-caleope` (172.16.51.15, Debian, 60G disk) :
+
+| Étape | Résultat |
+|-------|----------|
+| `caleope offline-pack /home/user-caleope/submarine-full` | ✅ |
+| Binaires copiés (caleoped, caleope, caleope-ui) | ✅ |
+| store.tar.gz archivé (97 Ko) | ✅ |
+| 39 images Docker sauvegardées | ✅ |
+| Taille totale du bundle | 8.3 GiB |
+| pack-info.json écrit | ✅ |
+| `--no-images` (bundle léger) | ✅ |
+| Estimation taille pré-vol | ✅ affiche "8.2 GiB" |
+| Avertissement espace insuffisant | ✅ |
+| Nettoyage tars partiels sur échec | ✅ |
+
+**Note** : Éviter `/tmp` (tmpfs 2 GiB), préférer `/home` ou une partition racine avec 10+ GiB libres.
+
+---
+
 ## Checklist de validation
 
 ```
-[ ] Bundle créé sans erreur sur la machine source
-[ ] pack-info.json présent et lisible
-[ ] Binaires présents et exécutables
-[ ] store.tar.gz non vide (> 1 Mo)
-[ ] images/*.tar présents pour les apps core (traefik, portainer)
+[x] Bundle créé sans erreur sur la machine source
+[x] pack-info.json présent et lisible
+[x] Binaires présents et exécutables
+[x] store.tar.gz non vide (> 1 Mo)
+[x] images/*.tar présents pour les apps core (traefik, portainer)
 [ ] Installation sur VM cible sans accès internet
 [ ] Message "apt-get update ignoré" affiché
 [ ] Message "images chargées depuis le bundle" affiché
@@ -215,3 +264,5 @@ caleope-bundle-2026-06-22/
 [ ] Interface web accessible sur :8766
 [ ] Au moins une app installable sans réseau
 ```
+
+> Les 4 premières étapes sont validées. Les étapes suivantes (installation sur VM isolée) n'ont pas encore été testées — elles nécessitent une VM Debian sans accès internet.
