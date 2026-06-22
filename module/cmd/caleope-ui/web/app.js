@@ -598,10 +598,16 @@ async function removeApp(id) {
 // ── Install modal ─────────────────────────────────────────────────────────────
 async function openInstallModal(appId) {
   S.installTarget = appId;
-  // Lookup in already-loaded catalog (individual endpoint returns 404)
   const info = S.catalog.find(a => a.id === appId) || {};
-  S.installParams = info.params || info.parameters || info.install_params
-    || HARDCODED_PARAMS[appId] || [];
+
+  // Charger les params depuis le store (endpoint individuel)
+  try {
+    const paramsData = await api.get(`/api/v1/store/${appId}`);
+    S.installParams = Array.isArray(paramsData?.data) ? paramsData.data : [];
+  } catch (_) {
+    S.installParams = info.params || info.parameters || info.install_params
+      || HARDCODED_PARAMS[appId] || [];
+  }
 
   // Précharger les emplacements pour le type 'location'
   if (S.installParams.some(p => p.type === 'location') && S.locations.length === 0) {
