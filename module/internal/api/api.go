@@ -1017,8 +1017,8 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// Symlink de compatibilité : caleope-store → caleope
 	_ = exec.Command("ln", "-sf", "/usr/local/bin/caleope", "/usr/local/bin/caleope-store").Run()
 
-	// S'assurer que caleope-ui.service est installé et activé
-	ensureUIService()
+	// S'assurer que caleope-ui.service et sa config Traefik sont en place
+	s.ensureUISetup()
 
 	// Mettre à jour caleope.conf
 	confPath := fmt.Sprintf("%s/caleope.conf", s.baseDir)
@@ -1298,9 +1298,10 @@ func (s *Server) handleTaskToggle(args map[string]string) error {
 	return s.sched.Toggle(id, enabled)
 }
 
-// ensureUIService installe le service systemd caleope-ui s'il n'existe pas encore,
-// puis l'active. Appelé à chaque upgrade pour garantir la présence du service.
-func ensureUIService() {
+// ensureUISetup garantit que caleope-ui est correctement configuré :
+// service systemd + config Traefik dynamic. Idempotent.
+func (s *Server) ensureUISetup() {
+	// 1. Service systemd
 	const servicePath = "/etc/systemd/system/caleope-ui.service"
 	const serviceContent = `[Unit]
 Description=Caleope UI Server
@@ -1323,6 +1324,42 @@ WantedBy=multi-user.target
 	_ = os.WriteFile(servicePath, []byte(serviceContent), 0644)
 	_ = exec.Command("systemctl", "daemon-reload").Run()
 	_ = exec.Command("systemctl", "enable", "caleope-ui").Run()
+
+	// 2. Config Traefik dynamic — route ui.<domain> → localhost:8766
+	domain := s.rt.AppDomain("ui")
+	if domain == "" {
+		return // pas de domaine configuré, on skip
+	}
+	hostIP := getHostIP()
+	traefikDir := filepath.Join(s.baseDir, "data", "traefik", "dynamic")
+	if err := os.MkdirAll(traefikDir, 0755); err != nil {
+		return
+	}
+	traefikConf := fmt.Sprintf(`http:
+  routers:
+    caleope-ui:
+      rule: "Host(` + "`%s`" + `)"
+      entryPoints:
+        - web
+      service: caleope-ui
+
+  services:
+    caleope-ui:
+      loadBalancer:
+        servers:
+          - url: "http://%s:8766"
+`, domain, hostIP)
+	_ = os.WriteFile(filepath.Join(traefikDir, "caleope-ui.yml"), []byte(traefikConf), 0644)
+}
+
+// getHostIP retourne l'IP principale de l'hôte (interface sortante).
+func getHostIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
 // coreApps liste les composants essentiels installés automatiquement sur toute instance Caleope.
