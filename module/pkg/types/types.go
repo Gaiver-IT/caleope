@@ -183,9 +183,10 @@ type Event struct {
 type NetworkLocationType string
 
 const (
-	LocationSMB  NetworkLocationType = "smb"
-	LocationCIFS NetworkLocationType = "cifs" // alias smb
-	LocationSFTP NetworkLocationType = "sftp"
+	LocationSMB   NetworkLocationType = "smb"
+	LocationCIFS  NetworkLocationType = "cifs"  // alias smb
+	LocationSFTP  NetworkLocationType = "sftp"
+	LocationLocal NetworkLocationType = "local" // disque local (interne ou externe)
 )
 
 // NetworkLocation représente un emplacement réseau monté ou montable.

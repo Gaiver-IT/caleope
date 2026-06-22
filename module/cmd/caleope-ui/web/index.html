@@ -340,6 +340,37 @@
   </div>
 </div>
 
+<!-- ── MODAL DISQUE LOCAL ────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="disk-mount-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">
+      MONTER UN DISQUE LOCAL
+      <button class="modal-close" onclick="document.getElementById('disk-mount-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="secret-alert" style="font-size:9px">
+        <i class="ti ti-info-circle" style="font-size:12px;flex-shrink:0"></i>
+        <span id="disk-mount-label">Périphérique sélectionné</span>
+      </div>
+      <input type="hidden" id="disk-mount-device">
+      <div class="field full">
+        <div class="field-label">NOM DE L'EMPLACEMENT *</div>
+        <input class="field-input" id="disk-mount-name" placeholder="backup-usb" autocomplete="off"
+          onkeydown="if(event.key==='Enter') confirmDiskMount()">
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">
+          Utilisé avec <code style="color:var(--blue)">caleope install &lt;app&gt; --storage &lt;nom&gt;</code>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('disk-mount-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="confirmDiskMount()"><i class="ti ti-plug-connected"></i>MONTER</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── NOTIFICATIONS ────────────────────────────────────────────────────────── -->
 <div class="notif-stack" id="notif-stack" aria-live="polite"></div>
 

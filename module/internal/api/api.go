@@ -617,13 +617,20 @@ func (s *Server) handleLocationAdd(args map[string]string) (interface{}, error) 
 	}
 	locType := types.NetworkLocationType(args["type"])
 	if locType == "" {
-		return nil, fmt.Errorf("argument 'type' manquant (smb, cifs, sftp)")
+		return nil, fmt.Errorf("argument 'type' manquant (smb, cifs, sftp, local)")
+	}
+
+	// Pour le type local, le champ "device" indique le périphérique (/dev/sdb1).
+	// On le stocke dans Host pour réutiliser la structure NetworkLocation.
+	host := args["host"]
+	if locType == types.LocationLocal && args["device"] != "" {
+		host = args["device"]
 	}
 
 	loc := types.NetworkLocation{
 		Name:     name,
 		Type:     locType,
-		Host:     args["host"],
+		Host:     host,
 		Share:    args["share"],
 		Username: args["username"],
 		Options:  args["options"],

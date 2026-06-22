@@ -2006,38 +2006,38 @@ async function loadNetwork() {
   const data = await fetch('/sys/network').then(r => r.json()).catch(() => null);
   if (!data?.interfaces) { el.innerHTML = '<div class="empty-msg">Impossible de charger les infos réseau</div>'; return; }
 
+  // Le serveur filtre déjà les interfaces virtuelles, on affiche directement
   const ifaces = Array.isArray(data.interfaces) ? data.interfaces : [];
-  const ifaceCards = ifaces
-    .filter(i => i.link_type !== 'loopback')
-    .map(i => {
-      const addrs = (i.addr_info || []).map(a =>
-        `<div class="net-addr"><span class="net-ip">${escapeHtml(a.local)}</span><span class="net-prefix">/${a.prefixlen}</span><span class="net-scope">${escapeHtml(a.scope || '')}</span></div>`
-      ).join('');
-      const up = (i.flags || []).includes('UP');
-      return `<div class="net-card">
-        <div class="net-header">
-          <div class="svc-dot" style="background:${up ? 'var(--ok)' : 'var(--text3)'}"></div>
-          <div class="net-ifname">${escapeHtml(i.ifname)}</div>
-          <div class="net-mac">${escapeHtml(i.address || '')}</div>
-          <span class="badge" style="color:${up ? 'var(--ok)' : 'var(--text3)'}">${up ? 'UP' : 'DOWN'}</span>
-        </div>
-        ${addrs || '<div class="net-addr" style="color:var(--text3)">aucune adresse</div>'}
-      </div>`;
-    }).join('');
+  const ifaceCards = ifaces.map(i => {
+    const addrs = (i.addr_info || []).map(a =>
+      `<div class="net-addr"><span class="net-ip">${escapeHtml(a.local)}</span><span class="net-prefix">/${a.prefixlen}</span><span class="net-scope">${escapeHtml(a.scope || '')}</span></div>`
+    ).join('');
+    const up = (i.flags || []).includes('UP');
+    const speed = i.linkinfo?.info_data?.speed ? `${i.linkinfo.info_data.speed} Mb/s` : '';
+    return `<div class="net-card">
+      <div class="net-header">
+        <div class="svc-dot" style="background:${up ? 'var(--ok)' : 'var(--text3)'}"></div>
+        <div class="net-ifname">${escapeHtml(i.ifname)}</div>
+        <div class="net-mac">${escapeHtml(i.address || '')}${speed ? `<span style="margin-left:8px;opacity:.6">${speed}</span>` : ''}</div>
+        <span class="badge" style="color:${up ? 'var(--ok)' : 'var(--text3)'}">${up ? 'UP' : 'DOWN'}</span>
+      </div>
+      ${addrs || '<div class="net-addr" style="color:var(--text3)">aucune adresse</div>'}
+    </div>`;
+  }).join('');
 
   const routes = Array.isArray(data.routes) ? data.routes : [];
-  const routeRows = routes.slice(0, 20).map(r =>
+  const routeRows = routes.map(r =>
     `<tr><td>${escapeHtml(r.dst || 'default')}</td><td>${escapeHtml(r.gateway || '—')}</td><td>${escapeHtml(r.dev || '—')}</td><td>${escapeHtml(String(r.metric ?? ''))}</td></tr>`
   ).join('');
 
   el.innerHTML = `
-    <div class="net-section-title">// INTERFACES</div>
-    <div class="net-grid">${ifaceCards || '<div class="empty-msg">Aucune interface</div>'}</div>
-    <div class="net-section-title" style="margin-top:24px">// ROUTES</div>
+    <div class="net-section-title">// INTERFACES PHYSIQUES</div>
+    <div class="net-grid">${ifaceCards || '<div class="empty-msg">Aucune interface physique détectée</div>'}</div>
+    ${routeRows ? `<div class="net-section-title" style="margin-top:24px">// ROUTES</div>
     <div class="table-wrap">
       <table class="sys-table"><thead><tr><th>DESTINATION</th><th>PASSERELLE</th><th>INTERFACE</th><th>MÉTRIQUE</th></tr></thead>
       <tbody>${routeRows}</tbody></table>
-    </div>`;
+    </div>` : ''}`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2062,28 +2062,75 @@ async function loadStorage() {
       </div>
       <div class="disk-bar-wrap">
         <div class="disk-bar"><div class="disk-bar-fill" style="width:${pct}%;background:${barColor}"></div></div>
-        <div class="disk-stats">${escapeHtml(d.used)} / ${escapeHtml(d.size)} — <span style="color:${barColor}">${escapeHtml(d.use_pct)}</span></div>
+        <div class="disk-stats">
+          <span style="color:var(--text1);font-weight:600">${escapeHtml(d.avail)} libre</span>
+          <span style="color:var(--text3)"> · ${escapeHtml(d.used)} utilisé / ${escapeHtml(d.size)}</span>
+          <span style="color:${barColor};margin-left:6px">${escapeHtml(d.use_pct)}</span>
+        </div>
       </div>
     </div>`;
   }).join('');
 
-  // Blocs (lsblk)
-  const blkDevices = data.lsblk?.blockdevices || [];
-  const blkRows = blkDevices.map(d => renderBlkDevice(d, 0)).join('');
+  // Disques disponibles pour montage
+  const available = data.available || [];
+  const availCards = available.map(d =>
+    `<div class="disk-avail-row">
+      <div class="disk-info">
+        <div class="disk-target">${escapeHtml(d.model || d.name)}</div>
+        <div class="disk-source">${escapeHtml(d.path)} · ${escapeHtml(d.size)} · ${escapeHtml(d.fstype || 'inconnu')}</div>
+      </div>
+      <button class="btn-sm" onclick="openDiskMountModal('${escapeHtml(d.path)}','${escapeHtml(d.model||d.name)}','${escapeHtml(d.size)}')">
+        <i class="ti ti-plus"></i>MONTER
+      </button>
+    </div>`
+  ).join('');
 
   el.innerHTML = `
-    <div class="net-section-title">// SYSTÈMES DE FICHIERS</div>
+    <div class="storage-header">
+      <div class="net-section-title" style="margin:0">// SYSTÈMES DE FICHIERS</div>
+      <button class="btn-sm" onclick="openDiskMountModal()"><i class="ti ti-plus"></i>AJOUTER UN DISQUE</button>
+    </div>
     <div class="disk-list">${diskRows || '<div class="empty-msg">Aucune partition montée</div>'}</div>
-    ${blkRows ? `<div class="net-section-title" style="margin-top:24px">// PÉRIPHÉRIQUES BLOC</div>
-    <div class="table-wrap"><table class="sys-table"><thead><tr><th>NOM</th><th>TAILLE</th><th>TYPE</th><th>FS</th><th>POINT DE MONTAGE</th></tr></thead>
-    <tbody>${blkRows}</tbody></table></div>` : ''}`;
+    ${availCards ? `
+    <div class="net-section-title" style="margin-top:24px">// DISQUES DISPONIBLES</div>
+    <div class="disk-list">${availCards}</div>` : ''}`;
 }
 
-function renderBlkDevice(d, depth) {
-  const pad = depth > 0 ? `<span style="opacity:.4;padding-left:${depth*12}px">└─ </span>` : '';
-  let rows = `<tr><td>${pad}${escapeHtml(d.name)}</td><td>${escapeHtml(d.size||'')}</td><td>${escapeHtml(d.type||'')}</td><td>${escapeHtml(d.fstype||'—')}</td><td>${escapeHtml(d.mountpoint||'—')}</td></tr>`;
-  if (d.children) d.children.forEach(c => { rows += renderBlkDevice(c, depth+1); });
-  return rows;
+function openDiskMountModal(device, label, size) {
+  document.getElementById('disk-mount-device').value = device || '';
+  document.getElementById('disk-mount-name').value = '';
+  document.getElementById('disk-mount-label').textContent = device
+    ? `${label || device} (${size || ''})`
+    : 'Choisissez un périphérique dans la liste';
+  document.getElementById('disk-mount-modal').classList.add('open');
+  if (!device) document.getElementById('disk-mount-name').focus();
+}
+
+async function confirmDiskMount() {
+  const device = document.getElementById('disk-mount-device').value.trim();
+  const name   = document.getElementById('disk-mount-name').value.trim();
+  if (!name) { notify('Nom requis', 'err'); return; }
+  if (!device) { notify('Périphérique requis', 'err'); return; }
+
+  const btn = document.querySelector('#disk-mount-modal .btn-vio');
+  btn.disabled = true;
+
+  // On passe par l'API locations du daemon (type=local, device=...)
+  const resp = await fetch('/api/v1/locations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, type: 'local', device }),
+  }).then(r => r.json()).catch(() => null);
+
+  btn.disabled = false;
+  if (!resp || resp.error) {
+    notify(resp?.error || 'Erreur montage', 'err');
+    return;
+  }
+
+  document.getElementById('disk-mount-modal').classList.remove('open');
+  notify(`Disque "${name}" monté — disponible via --storage ${name}`, 'ok');
+  loadStorage();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

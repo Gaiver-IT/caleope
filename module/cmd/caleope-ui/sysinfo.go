@@ -115,6 +115,21 @@ func queryService(unit string) serviceInfo {
 
 // ── Réseau ───────────────────────────────────────────────────────────────────
 
+// Préfixes d'interfaces virtuelles à masquer (Docker, veth, bridges, etc.)
+var virtualIfacePrefixes = []string{
+	"lo", "docker", "br-", "veth", "cali", "flannel",
+	"dummy", "virbr", "ovs-", "tunl", "kube",
+}
+
+func isPhysicalIface(name string) bool {
+	for _, pfx := range virtualIfacePrefixes {
+		if strings.HasPrefix(name, pfx) {
+			return false
+		}
+	}
+	return true
+}
+
 func handleSysNetwork(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -126,13 +141,32 @@ func handleSysNetwork(w http.ResponseWriter, r *http.Request) {
 	routeOut, _ := exec.Command("ip", "-j", "route").Output()
 	dnsOut, _ := exec.Command("resolvectl", "status", "--no-pager").Output()
 
-	var addrs, routes interface{}
-	_ = json.Unmarshal(addrOut, &addrs)
-	_ = json.Unmarshal(routeOut, &routes)
+	// Filtrer pour ne garder que les interfaces physiques
+	var allIfaces []map[string]interface{}
+	physIfaces := allIfaces // fallback : interface brute
+	if json.Unmarshal(addrOut, &allIfaces) == nil {
+		physIfaces = make([]map[string]interface{}, 0)
+		for _, iface := range allIfaces {
+			if name, _ := iface["ifname"].(string); isPhysicalIface(name) {
+				physIfaces = append(physIfaces, iface)
+			}
+		}
+	}
+
+	// Filtrer les routes pour ne garder que celles des interfaces physiques
+	var allRoutes []map[string]interface{}
+	physRoutes := []map[string]interface{}{}
+	if json.Unmarshal(routeOut, &allRoutes) == nil {
+		for _, route := range allRoutes {
+			if dev, _ := route["dev"].(string); isPhysicalIface(dev) {
+				physRoutes = append(physRoutes, route)
+			}
+		}
+	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"interfaces": addrs,
-		"routes":     routes,
+		"interfaces": physIfaces,
+		"routes":     physRoutes,
 		"dns_raw":    string(dnsOut),
 		"success":    true,
 	})
@@ -141,12 +175,21 @@ func handleSysNetwork(w http.ResponseWriter, r *http.Request) {
 // ── Stockage ─────────────────────────────────────────────────────────────────
 
 type diskInfo struct {
-	Source    string `json:"source"`
-	Target    string `json:"target"`
-	Size      string `json:"size"`
-	Used      string `json:"used"`
-	Avail     string `json:"avail"`
-	UsePct    string `json:"use_pct"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Size   string `json:"size"`
+	Used   string `json:"used"`
+	Avail  string `json:"avail"`
+	UsePct string `json:"use_pct"`
+}
+
+// blkDevice représente un périphérique bloc non monté (candidat au montage).
+type blkDevice struct {
+	Name   string `json:"name"`
+	Size   string `json:"size"`
+	Fstype string `json:"fstype"`
+	Model  string `json:"model"`
+	Path   string `json:"path"` // /dev/<name>
 }
 
 func handleSysStorage(w http.ResponseWriter, r *http.Request) {
@@ -160,20 +203,69 @@ func handleSysStorage(w http.ResponseWriter, r *http.Request) {
 	dfOut, _ := exec.Command("df", "-h", "-x", "tmpfs", "-x", "devtmpfs",
 		"-x", "squashfs", "-x", "overlay", "-x", "efivarfs",
 		"--output=source,target,size,used,avail,pcent").Output()
-
 	disks := parseDf(dfOut)
 
-	// lsblk — vue des blocs
+	// lsblk — vue des blocs (inclut les partitions non montées)
 	lsblkOut, _ := exec.Command("lsblk", "-J",
 		"-o", "name,size,type,mountpoint,fstype,model").Output()
 
-	var lsblk interface{}
-	_ = json.Unmarshal(lsblkOut, &lsblk)
+	var lsblkResult struct {
+		Blockdevices []struct {
+			Name       string `json:"name"`
+			Size       string `json:"size"`
+			Type       string `json:"type"`
+			Mountpoint string `json:"mountpoint"`
+			Fstype     string `json:"fstype"`
+			Model      string `json:"model"`
+			Children   []struct {
+				Name       string `json:"name"`
+				Size       string `json:"size"`
+				Type       string `json:"type"`
+				Mountpoint string `json:"mountpoint"`
+				Fstype     string `json:"fstype"`
+			} `json:"children"`
+		} `json:"blockdevices"`
+	}
+
+	var lsblkRaw interface{}
+	_ = json.Unmarshal(lsblkOut, &lsblkRaw)
+
+	// Extraire les périphériques non montés disponibles pour montage
+	available := []blkDevice{}
+	if json.Unmarshal(lsblkOut, &lsblkResult) == nil {
+		for _, dev := range lsblkResult.Blockdevices {
+			if dev.Type == "disk" {
+				// Regarder les partitions enfants non montées
+				for _, child := range dev.Children {
+					if child.Mountpoint == "" && child.Mountpoint != "[SWAP]" && child.Fstype != "" {
+						available = append(available, blkDevice{
+							Name:   child.Name,
+							Size:   child.Size,
+							Fstype: child.Fstype,
+							Model:  dev.Model,
+							Path:   "/dev/" + child.Name,
+						})
+					}
+				}
+				// Disque entier sans partition et sans point de montage
+				if len(dev.Children) == 0 && dev.Mountpoint == "" && dev.Fstype != "" {
+					available = append(available, blkDevice{
+						Name:   dev.Name,
+						Size:   dev.Size,
+						Fstype: dev.Fstype,
+						Model:  dev.Model,
+						Path:   "/dev/" + dev.Name,
+					})
+				}
+			}
+		}
+	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"disks":   disks,
-		"lsblk":   lsblk,
-		"success": true,
+		"disks":     disks,
+		"lsblk":     lsblkRaw,
+		"available": available,
+		"success":   true,
 	})
 }
 
