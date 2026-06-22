@@ -25,8 +25,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
-
 	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
@@ -1047,12 +1045,13 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	fmt.Println("→ Redémarrage du daemon dans 2 secondes...")
 
-	// Redémarrer le daemon via systemd (en arrière-plan)
-	go func() {
-		time.Sleep(2 * time.Second)
-		_ = exec.Command("systemctl", "restart", "caleoped").Run()
-		_ = exec.Command("systemctl", "restart", "caleope-ui").Run()
-	}()
+	// Redémarrer via un script shell indépendant de ce processus.
+	// On ne peut pas faire les deux restarts dans une goroutine : quand
+	// "systemctl restart caleoped" s'exécute, il tue ce processus et la
+	// goroutine meurt avec lui — caleope-ui ne serait jamais redémarré.
+	_ = exec.Command("bash", "-c",
+		"sleep 2 && systemctl restart caleope-ui && systemctl restart caleoped",
+	).Start()
 
 	return map[string]string{
 		"status":  "upgraded",
