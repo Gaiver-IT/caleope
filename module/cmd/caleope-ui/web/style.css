@@ -99,7 +99,7 @@ html, body {
 .servers-panel { margin-bottom: 24px; }
 .panel-label {
   font-size: 9px;
-  color: var(--text3);
+  color: var(--blue);
   letter-spacing: 1.5px;
   font-weight: 700;
   margin-bottom: 8px;
@@ -201,7 +201,7 @@ html, body {
 
 .field-label {
   font-size: 9px;
-  color: var(--text3);
+  color: var(--blue);
   letter-spacing: 1px;
   font-weight: 700;
 }
@@ -332,7 +332,7 @@ html, body {
 
 .sb-group {
   font-size: 8px;
-  color: var(--text3);
+  color: var(--blue);
   letter-spacing: 1.5px;
   padding: 12px 8px 4px;
   font-weight: 700;
@@ -405,7 +405,7 @@ html, body {
 }
 .tb-left  { display: flex; align-items: center; gap: 10px; }
 .tb-right { display: flex; gap: 6px; align-items: center; }
-.tb-section { font-size: 9px; color: var(--text3); letter-spacing: 1px; font-weight: 700; }
+.tb-section { font-size: 9px; color: var(--blue); letter-spacing: 1px; font-weight: 700; }
 .tb-sep     { color: var(--border2); }
 .tb-title   { font-size: 13px; color: var(--text); font-weight: 500; letter-spacing: .5px; }
 
@@ -437,9 +437,9 @@ html, body {
   width: 3px; height: 100%;
   background: var(--vio);
 }
-.mc-label { font-size: 8px; color: var(--text3); letter-spacing: 1px; font-weight: 700; margin-bottom: 8px; }
+.mc-label { font-size: 8px; color: var(--blue); letter-spacing: 1px; font-weight: 700; margin-bottom: 8px; }
 .mc-val   { font-size: 24px; font-weight: 700; color: var(--text); line-height: 1; letter-spacing: -1px; }
-.mc-sub   { font-size: 8px; color: var(--text3); margin-top: 4px; letter-spacing: .3px; }
+.mc-sub   { font-size: 8px; color: var(--blue); margin-top: 4px; letter-spacing: .3px; }
 .mc-vio .mc-val { color: var(--vio-b); }
 .mc-ok  .mc-val { color: var(--ok); }
 
@@ -449,7 +449,7 @@ html, body {
   display: flex;
   justify-content: space-between;
   font-size: 8px;
-  color: var(--text3);
+  color: var(--blue);
   margin-bottom: 3px;
   letter-spacing: .3px;
 }
@@ -685,7 +685,7 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
 .settings-card { background: var(--bg2); border: 1px solid var(--border); padding: 14px; margin-bottom: 10px; }
 .settings-title {
   font-size: 9px;
-  color: var(--text3);
+  color: var(--blue);
   letter-spacing: 1.5px;
   font-weight: 700;
   margin-bottom: 10px;
@@ -698,7 +698,7 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
   justify-content: space-between;
   padding: 6px 0;
   font-size: 10px;
-  color: var(--text3);
+  color: var(--blue);
   letter-spacing: .3px;
 }
 .setting-row + .setting-row { border-top: 1px solid var(--border); }
@@ -873,7 +873,7 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
 .backup-row:hover { border-color: var(--border2); }
 .backup-info { flex: 1; min-width: 0; }
 .backup-name { font-size: 11px; color: var(--text); font-weight: 500; letter-spacing: .3px; }
-.backup-meta { font-size: 9px; color: var(--text3); margin-top: 3px; letter-spacing: .3px; }
+.backup-meta { font-size: 9px; color: var(--blue); margin-top: 3px; letter-spacing: .3px; }
 .backup-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* ── LOCATION ROWS ────────────────────────────────────────────────────────── */
@@ -891,7 +891,7 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
 .loc-row:hover { border-color: var(--border2); }
 .loc-info { flex: 1; min-width: 0; }
 .loc-name { font-size: 11px; color: var(--text); font-weight: 500; letter-spacing: .3px; }
-.loc-meta { font-size: 9px; color: var(--text3); margin-top: 3px; letter-spacing: .3px; }
+.loc-meta { font-size: 9px; color: var(--blue); margin-top: 3px; letter-spacing: .3px; }
 .loc-type-badge { font-size: 9px; color: var(--blue); border: 1px solid var(--blue-dim); padding: 2px 6px; letter-spacing: .5px; font-weight: 700; }
 
 /* ── SECRETS UNLOCK ───────────────────────────────────────────────────────── */
