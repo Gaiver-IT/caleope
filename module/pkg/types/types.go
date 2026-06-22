@@ -186,6 +186,7 @@ type NetworkLocationType string
 const (
 	LocationSMB   NetworkLocationType = "smb"
 	LocationCIFS  NetworkLocationType = "cifs"  // alias smb
+	LocationNFS   NetworkLocationType = "nfs"
 	LocationSFTP  NetworkLocationType = "sftp"
 	LocationLocal NetworkLocationType = "local" // disque local (interne ou externe)
 )
