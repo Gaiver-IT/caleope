@@ -122,6 +122,7 @@ type BackupManifest struct {
 	CaleopeVersion string    `json:"caleope_version"`
 	HasData        bool      `json:"has_data"`
 	HasConfig      bool      `json:"has_config"`
+	Dir            string    `json:"dir,omitempty"` // nom du répertoire sur disque (non stocké dans manifest.json)
 }
 
 // ─────────────────────────────────────────────
@@ -152,6 +153,7 @@ type RuntimeApp struct {
 	Version     string     `json:"version"`
 	Channel     string     `json:"channel"`
 	Repository  string     `json:"repository"`
+	Domain          string     `json:"domain,omitempty"`            // domaine public de l'app (depuis app.env)
 	Ports           []AppPort  `json:"ports"`                      // avec les ports hôtes alloués
 	ComposeDir      string     `json:"compose_dir"`                 // chemin vers apps-installed/<id>/
 	StorageLocation string     `json:"storage_location,omitempty"` // nom de la location NAS (vide = stockage local)

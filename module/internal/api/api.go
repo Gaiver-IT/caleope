@@ -541,6 +541,15 @@ func (s *Server) handleBackupList(args map[string]string) (interface{}, error) {
 	return s.bkp.ListBackups(appID)
 }
 
+func (s *Server) handleBackupDelete(args map[string]string) error {
+	appID := args["app"]
+	dir := args["dir"]
+	if appID == "" || dir == "" {
+		return fmt.Errorf("arguments 'app' et 'dir' requis")
+	}
+	return s.bkp.DeleteBackup(appID, dir)
+}
+
 func (s *Server) handleUpdate(args map[string]string) error {
 	repos, err := s.rt.GetRepos()
 	if err != nil {
@@ -990,8 +999,121 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 }
 
 // ─────────────────────────────────────────────
-// SECRETS — affichage sécurisé avec mot de passe
+// SECRETS — liste et déverrouillage HTTP
 // ─────────────────────────────────────────────
+
+// handleSecretsList retourne les métadonnées (sans valeurs) de toutes les apps qui ont des secrets.
+func (s *Server) handleSecretsList() (interface{}, error) {
+	apps, err := s.rt.ListApps()
+	if err != nil {
+		return nil, err
+	}
+	type appSecretInfo struct {
+		AppID     string `json:"app_id"`
+		AppName   string `json:"app_name"`
+		KeyCount  int    `json:"key_count"`
+		Encrypted bool   `json:"encrypted"`
+	}
+	var result []appSecretInfo
+	enc := secrets.IsSetup(s.baseDir)
+	for _, app := range apps {
+		configDir := filepath.Join(s.baseDir, "app-config", app.ID)
+		data, err := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+		if err != nil {
+			continue
+		}
+		count := 0
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") && strings.Contains(line, "=") {
+				count++
+			}
+		}
+		if count > 0 {
+			result = append(result, appSecretInfo{
+				AppID:    app.ID,
+				AppName:  app.Name,
+				KeyCount: count,
+				Encrypted: enc,
+			})
+		}
+	}
+	if result == nil {
+		result = []appSecretInfo{}
+	}
+	return result, nil
+}
+
+// handleSecretsReveal déchiffre et retourne les secrets d'une ou toutes les apps.
+// args["app"] peut être vide (toutes les apps) ou préciser une app.
+// args["password"] est obligatoire.
+func (s *Server) handleSecretsReveal(args map[string]string) (interface{}, error) {
+	password := args["password"]
+	if password == "" {
+		return nil, fmt.Errorf("argument 'password' manquant")
+	}
+
+	var dek []byte
+	var unlockErr error
+	if secrets.IsSetup(s.baseDir) {
+		dek, unlockErr = secrets.UnlockDEK(s.baseDir, password)
+		if unlockErr != nil {
+			audit.Log(audit.ActionSecretsShow, args["app"], "DENIED:wrong-password")
+			return nil, fmt.Errorf("mot de passe incorrect")
+		}
+	}
+
+	apps, err := s.rt.ListApps()
+	if err != nil {
+		return nil, err
+	}
+
+	type appSecrets struct {
+		AppID   string            `json:"app_id"`
+		AppName string            `json:"app_name"`
+		Vars    map[string]string `json:"vars"`
+	}
+	var result []appSecrets
+
+	for _, app := range apps {
+		// Si une app spécifique est demandée, ignorer les autres
+		if target := args["app"]; target != "" && target != app.ID {
+			continue
+		}
+		configDir := filepath.Join(s.baseDir, "app-config", app.ID)
+		var plaintext string
+		if secrets.IsSetup(s.baseDir) {
+			plaintext, err = secrets.ShowSecrets(configDir, dek)
+			if err != nil {
+				continue
+			}
+		} else {
+			data, readErr := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+			if readErr != nil {
+				continue
+			}
+			plaintext = string(data)
+		}
+		vars := map[string]string{}
+		for _, line := range strings.Split(plaintext, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+				vars[parts[0]] = parts[1]
+			}
+		}
+		if len(vars) > 0 {
+			result = append(result, appSecrets{AppID: app.ID, AppName: app.Name, Vars: vars})
+			audit.Log(audit.ActionSecretsShow, app.ID, "OK:http")
+		}
+	}
+	if result == nil {
+		result = []appSecrets{}
+	}
+	return result, nil
+}
 
 // handleSecretsShow déchiffre et retourne les secrets d'une app.
 // Le mot de passe est demandé à chaque appel (pas de cache de session).

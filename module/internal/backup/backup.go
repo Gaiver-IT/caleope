@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gaiver-it/caleope/internal/docker"
@@ -279,6 +280,7 @@ func (m *Manager) ListBackups(appID string) ([]types.BackupManifest, error) {
 		}
 		var bm types.BackupManifest
 		if err := json.Unmarshal(data, &bm); err == nil {
+			bm.Dir = entry.Name() // nom réel du répertoire, utilisé pour restore/delete
 			manifests = append(manifests, bm)
 		}
 	}
@@ -289,6 +291,22 @@ func (m *Manager) ListBackups(appID string) ([]types.BackupManifest, error) {
 	})
 
 	return manifests, nil
+}
+
+// DeleteBackup supprime un backup par son nom de répertoire (dir).
+func (m *Manager) DeleteBackup(appID, dir string) error {
+	if appID == "" || dir == "" {
+		return fmt.Errorf("app et dir requis")
+	}
+	// Sécurité : dir ne doit pas contenir de séparateur de chemin
+	if strings.ContainsAny(dir, "/\\") {
+		return fmt.Errorf("nom de backup invalide")
+	}
+	backupDir := filepath.Join(m.baseDir, "backups", appID, dir)
+	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
+		return fmt.Errorf("backup '%s' introuvable", dir)
+	}
+	return os.RemoveAll(backupDir)
 }
 
 // ─────────────────────────────────────────────

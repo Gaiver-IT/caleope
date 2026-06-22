@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CALEOPE</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.34.0/dist/tabler-icons.min.css">
+  <link rel="icon" href="img/logo.png" type="image/png">
+  <link rel="stylesheet" href="tabler-icons.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +16,9 @@
   <div class="login-box">
 
     <div class="login-logo">
-      <div class="logo-mark"><i class="ti ti-server-2" aria-hidden="true"></i></div>
+      <div class="logo-mark logo-img-wrap">
+        <img src="/ui/logo" class="logo-img" alt="Caleope" id="logo-img-$" onerror="this.style.opacity=0">
+      </div>
       <div>
         <div class="logo-name">CALEOPE</div>
         <div class="logo-ver">CLIENT V0.4.18</div>
@@ -67,8 +70,10 @@
 
   <!-- SIDEBAR -->
   <nav class="sidebar" role="navigation" aria-label="Navigation principale">
-    <div class="sb-logo">
-      <div class="logo-mark"><i class="ti ti-server-2" aria-hidden="true"></i></div>
+    <div class="sb-logo" style="cursor:pointer" onclick="goSection('dashboard')" title="Tableau de bord">
+      <div class="logo-mark logo-img-wrap" style="width:28px;height:28px">
+        <img src="/ui/logo" class="logo-img" alt="Caleope" id="logo-img-$" onerror="this.style.opacity=0">
+      </div>
       <div>
         <div class="logo-name">CALEOPE</div>
         <div class="logo-ver" id="sb-version">V—</div>
@@ -76,8 +81,11 @@
     </div>
 
     <div class="sb-nav">
+      <button class="nav-btn" data-section="dashboard" onclick="goSection('dashboard')">
+        <i class="ti ti-layout-dashboard" aria-hidden="true"></i>TABLEAU DE BORD
+      </button>
       <div class="sb-group">// APPS</div>
-      <button class="nav-btn active" data-section="apps" onclick="goSection('apps')">
+      <button class="nav-btn" data-section="apps" onclick="goSection('apps')">
         <i class="ti ti-layout-grid" aria-hidden="true"></i>APPLICATIONS
       </button>
       <button class="nav-btn" data-section="logs" onclick="goSection('logs')">
@@ -86,6 +94,9 @@
       <button class="nav-btn" data-section="backups" onclick="goSection('backups')">
         <i class="ti ti-archive" aria-hidden="true"></i>SAUVEGARDES
       </button>
+
+      <!-- Sections injectées dynamiquement selon les apps installées -->
+      <div id="sb-integrations"></div>
 
       <div class="sb-group">// SYSTÈME</div>
       <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
@@ -106,7 +117,7 @@
     </div>
 
     <div class="sb-foot">
-      <div class="srv-chip">
+      <div class="srv-chip" onclick="goSection('stats')" title="Voir les ressources système">
         <div class="chip-pulse"></div>
         <div>
           <div class="chip-host" id="chip-host">—</div>
@@ -127,7 +138,7 @@
       </div>
       <div class="tb-right">
         <span class="sys-clock" id="clock">--:--:--</span>
-        <button class="btn" onclick="loadCurrentSection()">
+        <button class="btn" id="refresh-btn" onclick="refreshSection()" title="Actualiser la section courante">
           <i class="ti ti-refresh"></i>
         </button>
         <button class="btn btn-vio" id="tb-primary-btn" onclick="openInstallModal(S.catalog[0]?.id)">
@@ -138,8 +149,11 @@
 
     <div class="content">
 
+      <!-- DASHBOARD -->
+      <div id="content-dashboard" class="section-content hidden" role="main"></div>
+
       <!-- APPS -->
-      <div id="content-apps" class="section-content" role="main"></div>
+      <div id="content-apps" class="section-content hidden" role="main"></div>
 
       <!-- LOGS -->
       <div id="content-logs" class="section-content hidden">
@@ -190,6 +204,89 @@
     <div class="modal-actions">
       <button class="btn" onclick="document.getElementById('install-modal').classList.remove('open')">ANNULER</button>
       <button class="btn btn-vio" onclick="confirmInstall()"><i class="ti ti-download"></i>INSTALLER</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL BACKUP ──────────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="backup-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-title">
+      SAUVEGARDER UNE APPLICATION
+      <button class="modal-close" onclick="document.getElementById('backup-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="field full">
+        <div class="field-label">APPLICATION *</div>
+        <select class="field-input" id="backup-modal-app"></select>
+      </div>
+      <div class="secret-alert" style="font-size:9px">
+        <i class="ti ti-info-circle" style="font-size:12px;flex-shrink:0"></i>
+        L'application reste disponible pendant la sauvegarde. Les données sont archivées dans le répertoire de sauvegarde Caleope.
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('backup-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="confirmBackupModal()"><i class="ti ti-device-floppy"></i>SAUVEGARDER</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL LOCATION ────────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="location-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:500px">
+    <div class="modal-title">
+      AJOUTER UN EMPLACEMENT RÉSEAU
+      <button class="modal-close" onclick="document.getElementById('location-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="fields" style="grid-template-columns:1fr 1fr">
+        <div class="field">
+          <div class="field-label">NOM *</div>
+          <input class="field-input" id="loc-name" placeholder="nas-media" autocomplete="off"
+            oninput="autoMountPoint()" />
+        </div>
+        <div class="field">
+          <div class="field-label">TYPE *</div>
+          <select class="field-input" id="loc-type" onchange="updateLocTypeFields()">
+            <option value="nfs">NFS</option>
+            <option value="smb">SMB / CIFS</option>
+          </select>
+        </div>
+      </div>
+      <div class="field full">
+        <div class="field-label">HÔTE *</div>
+        <input class="field-input" id="loc-host" placeholder="192.168.1.100" autocomplete="off" />
+      </div>
+      <div class="field full">
+        <div class="field-label">CHEMIN DISTANT *</div>
+        <input class="field-input" id="loc-path" placeholder="/volume1/media  ou  \\server\share" autocomplete="off" />
+      </div>
+      <!-- Identifiants SMB (affichés seulement si type=smb) -->
+      <div id="loc-smb-creds" style="display:none;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field">
+          <div class="field-label">IDENTIFIANT SMB *</div>
+          <input class="field-input" id="loc-user" placeholder="utilisateur" autocomplete="off" />
+        </div>
+        <div class="field">
+          <div class="field-label">MOT DE PASSE SMB</div>
+          <input class="field-input" id="loc-pass" type="password" placeholder="••••••" autocomplete="new-password" />
+        </div>
+      </div>
+      <div class="field full">
+        <div class="field-label">POINT DE MONTAGE LOCAL</div>
+        <input class="field-input" id="loc-mount" placeholder="/mnt/nas-media" autocomplete="off"
+          oninput="this._userEdited=true" />
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">Proposé automatiquement aux apps qui ont besoin de stockage réseau</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('location-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="saveLocation()"><i class="ti ti-plus"></i>AJOUTER</button>
     </div>
   </div>
 </div>

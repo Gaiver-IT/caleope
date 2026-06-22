@@ -165,7 +165,28 @@ func (m *Manager) GetApp(id string) (*types.RuntimeApp, error) {
 		return nil, fmt.Errorf("erreur lecture runtime app %s: %w", id, err)
 	}
 
+	// Enrichir avec le domaine depuis app.env (non stocké dans le JSON runtime)
+	if domain := m.readAppDomain(id); domain != "" {
+		app.Domain = domain
+	}
+
 	return &app, nil
+}
+
+// readAppDomain lit CALEOPE_DOMAIN depuis apps-installed/{id}/app.env.
+// Appelé sans verrou (le verrou est déjà tenu par GetApp/ListApps).
+func (m *Manager) readAppDomain(id string) string {
+	envPath := filepath.Join(m.baseDir, "apps-installed", id, "app.env")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "CALEOPE_DOMAIN=") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "CALEOPE_DOMAIN="))
+		}
+	}
+	return ""
 }
 
 // ListApps retourne toutes les apps installées.
@@ -192,6 +213,11 @@ func (m *Manager) ListApps() ([]*types.RuntimeApp, error) {
 		var app types.RuntimeApp
 		if err := json.Unmarshal(data, &app); err != nil {
 			continue
+		}
+
+		// Enrichir avec le domaine depuis app.env (non stocké dans le JSON runtime)
+		if domain := m.readAppDomain(app.ID); domain != "" {
+			app.Domain = domain
 		}
 
 		// append = ajouter un élément à une slice (comme .append() en Python)

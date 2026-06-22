@@ -132,6 +132,27 @@ func (s *Server) StartHTTP(port int) error {
 		s.httpEvents(w, r)
 	})))
 
+	// GET  /api/v1/secrets         — liste des apps avec secrets (métadonnées)
+	// POST /api/v1/secrets         — déverrouiller + retourner toutes les valeurs
+	mux.Handle("/api/v1/secrets", s.auth(http.HandlerFunc(s.routeSecrets)))
+	// POST /api/v1/secrets/{app}   — déverrouiller + retourner les valeurs d'une app
+	mux.Handle("/api/v1/secrets/", s.auth(http.HandlerFunc(s.routeSecretsApp)))
+
+	// GET /api/v1/audit
+	mux.Handle("/api/v1/audit", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		args := map[string]string{"n": r.URL.Query().Get("n")}
+		data, err := s.handleAuditList(args)
+		if err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, data)
+	})))
+
 	// GET /api/v1/locations — liste
 	// POST /api/v1/locations — ajouter
 	mux.Handle("/api/v1/locations", s.auth(http.HandlerFunc(s.routeLocations)))
@@ -161,6 +182,28 @@ func (s *Server) routeApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// DELETE /api/v1/apps/{id}/backups/{dir}
+	if r.Method == http.MethodDelete && strings.HasPrefix(action, "backups/") {
+		dir := strings.TrimPrefix(action, "backups/")
+		if err := s.handleBackupDelete(map[string]string{"app": id, "dir": dir}); err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "deleted", "app": id, "dir": dir})
+		return
+	}
+
+	// POST /api/v1/apps/{id}/backups/{timestamp}/restore
+	if r.Method == http.MethodPost && strings.HasPrefix(action, "backups/") && strings.HasSuffix(action, "/restore") {
+		ts := strings.TrimSuffix(strings.TrimPrefix(action, "backups/"), "/restore")
+		if err := s.handleRestore(map[string]string{"app": id, "backup": ts}); err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "restored", "app": id, "backup": ts})
+		return
+	}
+
 	key := r.Method + " " + action
 	switch key {
 	case "GET ":
@@ -177,7 +220,7 @@ func (s *Server) routeApp(w http.ResponseWriter, r *http.Request) {
 		s.httpStopByID(w, r, id)
 	case "POST restart":
 		s.httpRestartByID(w, r, id)
-	case "POST backup":
+	case "POST backup", "POST backups":
 		s.httpBackupByID(w, r, id)
 	case "POST restore":
 		s.httpRestoreByID(w, r, id)
@@ -282,10 +325,23 @@ func (s *Server) httpError(w http.ResponseWriter, msg string, status int) {
 
 func (s *Server) httpPing(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := s.rt.GetConfig()
+	ver := version.Version
+	// Si le binaire a été compilé sans ldflags (dev local), utiliser la version de caleope.conf
+	if ver == "dev" && cfg != nil && cfg.Version != "" {
+		ver = cfg.Version
+		if cfg.Channel != "" {
+			ver += "-" + cfg.Channel
+		}
+	}
+	channel := ""
+	if cfg != nil {
+		channel = cfg.Channel
+	}
 	s.httpOK(w, map[string]string{
 		"status":     "ok",
-		"version":    version.Version,
+		"version":    ver,
 		"commit":     version.Commit,
+		"channel":    channel,
 		"domain":     cfg.Domain,
 		"proxy_mode": cfg.ProxyMode,
 	})
@@ -354,10 +410,32 @@ func (s *Server) httpInfoByID(w http.ResponseWriter, r *http.Request, id string)
 
 func (s *Server) httpInstallByID(w http.ResponseWriter, r *http.Request, id string) {
 	args := map[string]string{"app": id}
-	var body map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-		for k, v := range body {
-			args[k] = v
+	// Accepter deux formats :
+	//   1. flat map[string]string (CLI interne)
+	//   2. {params: {key: value}, domain, channel, async} (UI web)
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err == nil {
+		for k, v := range raw {
+			switch k {
+			case "params":
+				// Objet imbriqué : {admin_email: "...", ...} → param_admin_email=...
+				var params map[string]interface{}
+				if json.Unmarshal(v, &params) == nil {
+					for pk, pv := range params {
+						if sv, ok := pv.(string); ok {
+							args["param_"+pk] = sv
+						}
+					}
+				}
+			case "async":
+				// ignoré côté daemon (toujours synchrone pour l'instant)
+			default:
+				// domain, channel, force, gpu, etc.
+				var sv string
+				if json.Unmarshal(v, &sv) == nil {
+					args[k] = sv
+				}
+			}
 		}
 	}
 	data, err := s.handleInstall(args)
@@ -493,6 +571,66 @@ func (s *Server) routeLocations(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
 	}
+}
+
+// ─────────────────────────────────────────────
+// SECRETS
+// ─────────────────────────────────────────────
+
+// routeSecrets : GET /api/v1/secrets  ou  POST /api/v1/secrets
+func (s *Server) routeSecrets(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		data, err := s.handleSecretsList()
+		if err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, data)
+	case http.MethodPost:
+		var body struct {
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Password == "" {
+			s.httpError(w, "champ 'password' requis", http.StatusBadRequest)
+			return
+		}
+		data, err := s.handleSecretsReveal(map[string]string{"password": body.Password})
+		if err != nil {
+			s.httpError(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		s.httpOK(w, data)
+	default:
+		s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+	}
+}
+
+// routeSecretsApp : POST /api/v1/secrets/{app}
+func (s *Server) routeSecretsApp(w http.ResponseWriter, r *http.Request) {
+	appID := strings.TrimPrefix(r.URL.Path, "/api/v1/secrets/")
+	appID = strings.TrimSuffix(appID, "/")
+	if appID == "" {
+		s.routeSecrets(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Password == "" {
+		s.httpError(w, "champ 'password' requis", http.StatusBadRequest)
+		return
+	}
+	data, err := s.handleSecretsReveal(map[string]string{"password": body.Password, "app": appID})
+	if err != nil {
+		s.httpError(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	s.httpOK(w, data)
 }
 
 // routeLocation : /api/v1/locations/{name}[/action]

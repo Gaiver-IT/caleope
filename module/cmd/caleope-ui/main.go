@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -83,6 +84,25 @@ func readFile(path string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
+// readEnvKey extrait la valeur d'une clé dans un fichier clé=valeur (format .env).
+func readEnvKey(path, key string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	prefix := key + "="
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
@@ -107,6 +127,10 @@ func main() {
 	}
 
 	store := newSessions()
+
+	// Répertoire pour le logo custom
+	logoDir  := filepath.Join(*baseDir, "data", "ui")
+	logoBase := filepath.Join(logoDir, "logo")
 
 	// ── Proxy vers caleoped ────────────────────────────────────────────────
 	target, _ := url.Parse(*daemon)
@@ -141,6 +165,245 @@ func main() {
 
 	// ── Routes ────────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
+
+	// Logo custom : GET sert le logo uploadé ou le SVG embarqué par défaut
+	mux.HandleFunc("/ui/logo", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		exts := []struct{ ext, ct string }{
+			{".png", "image/png"}, {".jpg", "image/jpeg"},
+			{".webp", "image/webp"}, {".svg", "image/svg+xml"},
+		}
+		for _, e := range exts {
+			f, err := os.Open(logoBase + e.ext)
+			if err != nil {
+				continue
+			}
+			defer f.Close()
+			w.Header().Set("Content-Type", e.ct)
+			_, _ = io.Copy(w, f)
+			return
+		}
+		// Fallback : SVG embarqué
+		data, err := webFiles.ReadFile("web/img/logo.svg")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/svg+xml")
+		_, _ = w.Write(data)
+	})
+
+	// Upload logo (session requise)
+	mux.HandleFunc("/ui/logo/upload", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseMultipartForm(5 << 20); err != nil {
+			jsonErr(w, http.StatusBadRequest, "fichier trop grand (max 5 Mo)")
+			return
+		}
+		file, header, err := r.FormFile("logo")
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "champ 'logo' manquant")
+			return
+		}
+		defer file.Close()
+
+		// Détecter le type réel
+		buf := make([]byte, 512)
+		n, _ := file.Read(buf)
+		ct := http.DetectContentType(buf[:n])
+		var ext string
+		switch {
+		case strings.HasPrefix(ct, "image/png"):
+			ext = ".png"
+		case strings.HasPrefix(ct, "image/jpeg"):
+			ext = ".jpg"
+		case strings.HasPrefix(ct, "image/webp"):
+			ext = ".webp"
+		case strings.ToLower(filepath.Ext(header.Filename)) == ".svg":
+			ext = ".svg"
+		default:
+			jsonErr(w, http.StatusBadRequest, "format non supporté — utilisez PNG, JPG, SVG ou WebP")
+			return
+		}
+
+		if err := os.MkdirAll(logoDir, 0o755); err != nil {
+			jsonErr(w, http.StatusInternalServerError, "impossible de créer le répertoire")
+			return
+		}
+		// Supprimer les anciens logos
+		for _, e := range []string{".png", ".jpg", ".webp", ".svg"} {
+			_ = os.Remove(logoBase + e)
+		}
+		dst, err := os.Create(logoBase + ext)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, "impossible d'écrire le fichier")
+			return
+		}
+		defer dst.Close()
+		_, _ = dst.Write(buf[:n])
+		_, _ = io.Copy(dst, file)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+
+	// Réinitialiser le logo (session requise)
+	mux.HandleFunc("/ui/logo/reset", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		for _, e := range []string{".png", ".jpg", ".webp", ".svg"} {
+			_ = os.Remove(logoBase + e)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+
+	// ── Proxy vers les APIs des apps installées ──────────────────────────────
+	// GET|POST /ui/proxy/{appid}/{path...}
+	// Lit le token depuis app-config/{appid}/secrets.env,
+	// lit le port depuis runtime/apps/{appid}.json et forward en HTTP local.
+	type appProxyCfg struct {
+		tokenKey   string // clé dans secrets.env
+		authScheme string // "Bearer" ou "X-API-Key"
+		portName   string // nom du port dans RuntimeApp.Ports (ex: "web", "server")
+	}
+	appProxyMap := map[string]appProxyCfg{
+		"authentik": {tokenKey: "AUTHENTIK_BOOTSTRAP_TOKEN", authScheme: "Bearer",   portName: "web"},
+		"azuracast": {tokenKey: "AZURACAST_API_KEY",         authScheme: "X-API-Key", portName: "web"},
+	}
+
+	// readAppPort lit le port hôte d'une app depuis runtime/apps/{appid}.json.
+	readAppPort := func(appID, portName string) int {
+		data, err := os.ReadFile(filepath.Join(*baseDir, "runtime", "apps", appID+".json"))
+		if err != nil {
+			return 0
+		}
+		var app struct {
+			Ports []struct {
+				Name string `json:"name"`
+				Host int    `json:"host"`
+			} `json:"ports"`
+		}
+		if err := json.Unmarshal(data, &app); err != nil {
+			return 0
+		}
+		for _, p := range app.Ports {
+			if p.Name == portName && p.Host > 0 {
+				return p.Host
+			}
+		}
+		// Fallback: premier port disponible
+		if len(app.Ports) > 0 {
+			return app.Ports[0].Host
+		}
+		return 0
+	}
+
+	mux.HandleFunc("/ui/proxy/", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		rest := strings.TrimPrefix(r.URL.Path, "/ui/proxy/")
+		slash := strings.IndexByte(rest, '/')
+		if slash < 0 {
+			jsonErr(w, http.StatusBadRequest, "format: /ui/proxy/{appid}/{path}")
+			return
+		}
+		appID   := rest[:slash]
+		apiPath := rest[slash:]
+
+		cfg, ok := appProxyMap[appID]
+		if !ok {
+			jsonErr(w, http.StatusBadRequest, "app non supportée pour le proxy: "+appID)
+			return
+		}
+
+		secretsPath := filepath.Join(*baseDir, "app-config", appID, "secrets.env")
+		token := readEnvKey(secretsPath, cfg.tokenKey)
+		if token == "" {
+			jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible (app installée ?)")
+			return
+		}
+
+		port := readAppPort(appID, cfg.portName)
+		if port == 0 {
+			jsonErr(w, http.StatusServiceUnavailable, appID+": port hôte introuvable")
+			return
+		}
+
+		targetURL := fmt.Sprintf("http://localhost:%d%s", port, apiPath)
+		if r.URL.RawQuery != "" {
+			targetURL += "?" + r.URL.RawQuery
+		}
+
+		outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+		if err != nil {
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			outReq.Header.Set("Content-Type", ct)
+		}
+		if cfg.authScheme == "Bearer" {
+			outReq.Header.Set("Authorization", "Bearer "+token)
+		} else {
+			outReq.Header.Set(cfg.authScheme, token)
+		}
+		outReq.Header.Set("Accept", "application/json")
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(outReq)
+		if err != nil {
+			jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())
+			return
+		}
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.Header().Set("X-Proxy-App", appID)
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}))
+
+	// Test de connectivité NAS (session requise)
+	mux.HandleFunc("/ui/location/test", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Type string `json:"type"`
+			Host string `json:"host"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Host == "" {
+			jsonErr(w, http.StatusBadRequest, "host requis")
+			return
+		}
+		port := "2049" // NFS
+		if req.Type == "smb" {
+			port = "445"
+		}
+		addr := net.JoinHostPort(req.Host, port)
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+		latency := time.Since(start).Milliseconds()
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"reachable":  false,
+				"error":      err.Error(),
+				"latency_ms": latency,
+			})
+			return
+		}
+		conn.Close()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"reachable":  true,
+			"latency_ms": latency,
+		})
+	}))
 
 	// Login
 	mux.HandleFunc("/auth/login", func(w http.ResponseWriter, r *http.Request) {
