@@ -988,6 +988,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	for _, bin := range []struct{ name, dest string }{
 		{"caleoped-linux-amd64", "/usr/local/bin/caleoped.new"},
 		{"caleope-linux-amd64", "/usr/local/bin/caleope.new"},
+		{"caleope-ui-linux-amd64", "/usr/local/bin/caleope-ui.new"},
 	} {
 		dlCmd := exec.Command("curl", "-fsSL",
 			fmt.Sprintf("%s/%s", baseURL, bin.name),
@@ -1006,6 +1007,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	for _, pair := range []struct{ src, dst string }{
 		{"/usr/local/bin/caleoped.new", "/usr/local/bin/caleoped"},
 		{"/usr/local/bin/caleope.new", "/usr/local/bin/caleope"},
+		{"/usr/local/bin/caleope-ui.new", "/usr/local/bin/caleope-ui"},
 	} {
 		if err := exec.Command("mv", "-f", pair.src, pair.dst).Run(); err != nil {
 			return nil, fmt.Errorf("remplacement %s: %w", pair.dst, err)
@@ -1041,6 +1043,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	go func() {
 		time.Sleep(2 * time.Second)
 		_ = exec.Command("systemctl", "restart", "caleoped").Run()
+		_ = exec.Command("systemctl", "restart", "caleope-ui").Run()
 	}()
 
 	return map[string]string{

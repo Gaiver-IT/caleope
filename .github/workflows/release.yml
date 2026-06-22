@@ -52,8 +52,9 @@ jobs:
           COMMIT="${GITHUB_SHA::7}"
           LDFLAGS="-s -w -X github.com/gaiver-it/caleope/pkg/version.Version=${VERSION} -X github.com/gaiver-it/caleope/pkg/version.Commit=${COMMIT}"
           mkdir -p ../dist
-          go build -ldflags "${LDFLAGS}" -o ../dist/caleoped-linux-amd64 ./cmd/caleoped/
-          go build -ldflags "${LDFLAGS}" -o ../dist/caleope-linux-amd64  ./cmd/caleope/
+          go build -ldflags "${LDFLAGS}" -o ../dist/caleoped-linux-amd64    ./cmd/caleoped/
+          go build -ldflags "${LDFLAGS}" -o ../dist/caleope-linux-amd64     ./cmd/caleope/
+          go build -ldflags "${LDFLAGS}" -o ../dist/caleope-ui-linux-amd64  ./cmd/caleope-ui/
 
       - name: Publier la release GitHub
         env:
@@ -73,11 +74,13 @@ jobs:
               --notes "" \
               --prerelease \
               dist/caleoped-linux-amd64 \
-              dist/caleope-linux-amd64
+              dist/caleope-linux-amd64 \
+              dist/caleope-ui-linux-amd64
           else
             gh release create "${TAG}" \
               --title "${TITLE}" \
               --notes "" \
               dist/caleoped-linux-amd64 \
-              dist/caleope-linux-amd64
+              dist/caleope-linux-amd64 \
+              dist/caleope-ui-linux-amd64
           fi
