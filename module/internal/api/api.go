@@ -1060,8 +1060,12 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// On ne peut pas faire les deux restarts dans une goroutine : quand
 	// "systemctl restart caleoped" s'exécute, il tue ce processus et la
 	// goroutine meurt avec lui — caleope-ui ne serait jamais redémarré.
+	// caleoped d'abord : Requires=caleoped dans caleope-ui.service
+	// implique que si caleoped s'arrête, caleope-ui s'arrête aussi.
+	// En redémarrant caleoped en premier puis caleope-ui ensuite, on évite
+	// que le restart de caleoped ne stoppe caleope-ui sans le relancer.
 	_ = exec.Command("bash", "-c",
-		"sleep 2 && systemctl restart caleope-ui && systemctl restart caleoped",
+		"sleep 2 && systemctl restart caleoped && sleep 2 && systemctl restart caleope-ui",
 	).Start()
 
 	return map[string]string{
