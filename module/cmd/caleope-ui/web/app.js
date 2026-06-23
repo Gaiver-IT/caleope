@@ -2241,19 +2241,28 @@ async function loadVaultwardenUsers() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
 
     const html = await r.text();
-    // Parser le HTML de l'admin panel Vaultwarden avec DOMParser
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    // La table des users a des lignes avec des cellules email (première colonne)
+    const emailRx = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/;
     const rows = [...doc.querySelectorAll('table tbody tr')];
     const users = rows.map(tr => {
       const cells = tr.querySelectorAll('td');
-      const email = cells[0]?.textContent?.trim() || '';
-      const name  = cells[1]?.textContent?.trim() || '';
-      // Certaines versions ont "Enabled"/"Disabled" dans une colonne
-      const statusCell = [...cells].find(td => /enabled|disabled/i.test(td.textContent));
-      const enabled = !statusCell || !/disabled/i.test(statusCell.textContent);
-      return { email, name, enabled };
-    }).filter(u => u.email && u.email.includes('@'));
+      if (cells.length < 2) return null;
+      // Chercher l'email dans les 3 premières cellules via regex
+      let email = '', name = '';
+      for (let i = 0; i < Math.min(cells.length, 3); i++) {
+        const text = cells[i]?.textContent || '';
+        const m = text.match(emailRx);
+        if (m && !email) {
+          email = m[0];
+          // Le nom est la ligne de texte avant l'email dans la même cellule
+          const lines = text.split(/[\n\r]+/).map(l => l.trim()).filter(l => l && !l.includes('@'));
+          name = lines[0] || '';
+        }
+      }
+      const statusText = [...cells].slice(0, 5).map(td => td.textContent).join(' ');
+      const enabled = !/disabled|invited/i.test(statusText);
+      return email ? { email, name, enabled } : null;
+    }).filter(Boolean);
 
     if (!users.length) {
       c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
