@@ -31,6 +31,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gaiver-it/caleope/pkg/version"
 )
 
 //go:embed web
@@ -507,8 +509,12 @@ func main() {
 	})
 
 	addr := fmt.Sprintf(":%d", *port)
+	ver := version.Version
+	if ver == "" || ver == "dev" {
+		ver = "dev"
+	}
 	fmt.Printf("╔══════════════════════════════════════╗\n")
-	fmt.Printf("║       Caleope UI  — v0.4.19          ║\n")
+	fmt.Printf("║  Caleope UI  — %-22s║\n", ver)
 	fmt.Printf("╚══════════════════════════════════════╝\n")
 	fmt.Printf("  Interface : http://0.0.0.0%s\n", addr)
 	fmt.Printf("  Daemon    : %s\n\n", *daemon)

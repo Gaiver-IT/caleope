@@ -1329,7 +1329,13 @@ WantedBy=multi-user.target
 	if domain == "" {
 		return // pas de domaine configuré, on skip
 	}
-	hostIP := getHostIP()
+	// Traefik tourne dans Docker — utiliser l'IP de la gateway de caleope-public
+	// pour joindre caleope-ui (service systemd sur le host, pas dans Docker).
+	// Fallback : IP principale de l'hôte.
+	hostIP := getDockerGateway("caleope-public")
+	if hostIP == "" {
+		hostIP = getHostIP()
+	}
 	traefikDir := filepath.Join(s.baseDir, "data", "traefik", "dynamic")
 	if err := os.MkdirAll(traefikDir, 0755); err != nil {
 		return
@@ -1374,6 +1380,22 @@ func getHostIP() string {
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// getDockerGateway retourne l'IP de la gateway d'un réseau Docker.
+// Cette IP est toujours joignable depuis les containers sur ce réseau (dont Traefik).
+// Elle correspond à l'interface virtuelle du host sur ce bridge Docker.
+func getDockerGateway(network string) string {
+	out, err := exec.Command("docker", "network", "inspect", network,
+		"--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}").Output()
+	if err != nil {
+		return ""
+	}
+	ip := strings.TrimSpace(string(out))
+	if ip == "" || strings.Contains(ip, "error") {
+		return ""
+	}
+	return ip
 }
 
 // coreApps liste les composants essentiels installés automatiquement sur toute instance Caleope.

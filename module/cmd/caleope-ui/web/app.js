@@ -31,9 +31,11 @@ const api = {
     if (ct.includes('application/json')) return r.json();
     return r.text();
   },
-  get:    (p)    => api.req('GET',    p),
-  post:   (p, b) => api.req('POST',   p, b),
-  del:    (p)    => api.req('DELETE', p),
+  get:    (p)       => api.req('GET',    p),
+  post:   (p, b)    => api.req('POST',   p, b),
+  patch:  (p, b)    => api.req('PATCH',  p, b),
+  delete: (p)       => api.req('DELETE', p),
+  del:    (p)       => api.req('DELETE', p),
 };
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -725,10 +727,12 @@ function openLogs(appId) {
 }
 
 async function loadLogs() {
+  if (!S.apps.length) await loadApps();
+
   const select = document.getElementById('log-select');
   if (select && S.apps.length) {
     select.innerHTML = S.apps.map(a =>
-      `<option value="${a.id}" ${a.id === S.logApp ? 'selected' : ''}>${a.id}</option>`
+      `<option value="${a.id}" ${a.id === S.logApp ? 'selected' : ''}>${a.name || a.id}</option>`
     ).join('');
   }
 
@@ -738,21 +742,38 @@ async function loadLogs() {
   stopLogStream();
   clearLogs();
 
-  // Logs (tail 500 pour garder du contexte)
-  const data = await api.get(`/api/v1/apps/${appId}/logs?tail=500`);
-  // La réponse daemon est { data: { logs: "line\nline\n..." } }
-  const raw = data?.data?.logs ?? data?.data?.lines ?? data?.lines ?? data?.data ?? data;
-  const lines = Array.isArray(raw) ? raw :
-    (typeof raw === 'string' ? raw.split('\n') : null);
+  // Badge LIVE
+  const badge = document.getElementById('log-live-badge');
+  if (badge) badge.style.display = 'none';
 
-  if (lines && lines.length) {
-    lines.filter(Boolean).forEach(l => appendLog(l));
-  } else {
-    appendLog(`[Aucun log disponible pour ${appId}]`);
-    appendLog('[Les logs apparaissent après le premier démarrage de l\'application]');
-  }
+  // SSE streaming temps réel
+  const sse = new EventSource(`/api/v1/apps/${appId}/logs/stream?tail=200`);
+  S.logStream = sse;
 
-  appendLogCursor();
+  sse.onopen = () => {
+    if (badge) badge.style.display = '';
+  };
+  sse.onmessage = (e) => {
+    if (e.data) appendLog(e.data);
+  };
+  sse.addEventListener('close', () => {
+    stopLogStream();
+    if (badge) badge.style.display = 'none';
+    appendLog('[— Fin du stream —]');
+    appendLogCursor();
+  });
+  sse.onerror = () => {
+    // SSE non supporté ou coupé — fallback one-shot
+    stopLogStream();
+    if (badge) badge.style.display = 'none';
+    api.get(`/api/v1/apps/${appId}/logs?tail=500`).then(data => {
+      const raw = data?.data?.logs ?? data?.data?.lines ?? data?.lines ?? data?.data ?? data;
+      const lines = Array.isArray(raw) ? raw : (typeof raw === 'string' ? raw.split('\n') : null);
+      if (lines?.length) lines.filter(Boolean).forEach(l => appendLog(l));
+      else { appendLog(`[Aucun log disponible pour ${appId}]`); }
+      appendLogCursor();
+    });
+  };
 }
 
 function clearLogs() {
@@ -1465,6 +1486,142 @@ async function loadDashboard() {
   `;
 }
 
+// ── SECTION: TASKS ───────────────────────────────────────────────────────────
+
+const TASK_TYPE_LABELS = { backup: 'Sauvegarde', upgrade: 'Mise à jour Caleope', update: 'Sync store' };
+const TASK_SCOPE_LABELS = { all: 'Tout (data + config)', config: 'Config uniquement', data: 'Data uniquement' };
+const DAY_LABELS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+
+async function loadTasks() {
+  const c = document.getElementById('content-tasks');
+  if (!c) return;
+
+  c.innerHTML = `<div class="empty-state" style="padding-top:30px"><div class="empty-icon"><i class="ti ti-loader" style="animation:spin .8s linear infinite"></i></div><div class="empty-title" style="font-size:10px">CHARGEMENT...</div></div>`;
+
+  const data = await api.get('/api/v1/tasks');
+  const tasks = data?.data || [];
+
+  if (!tasks.length) {
+    c.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon"><i class="ti ti-clock"></i></div>
+        <div class="empty-title">AUCUNE TÂCHE PLANIFIÉE</div>
+        <div class="empty-sub">Créez des sauvegardes automatiques, des mises à jour nocturnes, ou synchronisez le store régulièrement.</div>
+      </div>`;
+    return;
+  }
+
+  c.innerHTML = `<div class="settings-list">${tasks.map(taskRow).join('')}</div>`;
+}
+
+function taskRow(t) {
+  const typeLabel  = TASK_TYPE_LABELS[t.type]  || t.type;
+  const scopeLabel = t.scope ? ` — ${TASK_SCOPE_LABELS[t.scope] || t.scope}` : '';
+  const appLabel   = t.app   ? ` › ${t.app}` : '';
+  const days       = t.schedule?.days?.length
+    ? t.schedule.days.map(d => DAY_LABELS[d] ?? d).join(' ')
+    : 'Chaque jour';
+  const hour       = String(t.schedule?.hour ?? 0).padStart(2, '0');
+  const min        = String(t.schedule?.minute ?? 0).padStart(2, '0');
+  const lastRun    = t.last_run && t.last_run !== '0001-01-01T00:00:00Z'
+    ? new Date(t.last_run).toLocaleString('fr-FR') : '—';
+  const lastStatus = t.last_status || '';
+  const statusDot  = lastStatus === 'ok' ? 'dot-ok' : lastStatus === 'error' ? 'dot-err' : 'dot-idle';
+
+  return `
+    <div class="settings-card" style="display:flex;align-items:center;gap:10px;padding:10px 12px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+          <span style="font-size:10px;font-weight:700;letter-spacing:.8px">${escapeHtml(typeLabel)}${escapeHtml(appLabel)}${escapeHtml(scopeLabel)}</span>
+          ${t.enabled
+            ? '<span class="badge badge-ok" style="font-size:7px">ACTIF</span>'
+            : '<span class="badge badge-warn" style="font-size:7px">INACTIF</span>'}
+        </div>
+        <div style="font-size:9px;color:var(--text3)">
+          <i class="ti ti-clock" style="font-size:9px"></i>&nbsp;${escapeHtml(hour)}:${escapeHtml(min)} &nbsp;·&nbsp;
+          <i class="ti ti-calendar" style="font-size:9px"></i>&nbsp;${escapeHtml(days)}
+        </div>
+        <div style="font-size:8px;color:var(--text3);margin-top:2px">
+          Dernière exécution : ${escapeHtml(lastRun)}
+          ${lastStatus ? `&nbsp;<span class="srv-dot ${statusDot}" style="display:inline-block;margin-left:2px"></span>` : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn-sm" title="Exécuter maintenant" onclick="runTaskNow('${escapeHtml(t.id)}')">
+          <i class="ti ti-player-play"></i>
+        </button>
+        <button class="btn-sm ${t.enabled ? 'danger' : ''}" title="${t.enabled ? 'Désactiver' : 'Activer'}" onclick="toggleTask('${escapeHtml(t.id)}', ${!t.enabled})">
+          <i class="ti ti-${t.enabled ? 'pause' : 'play'}"></i>
+        </button>
+        <button class="btn-sm danger" title="Supprimer" onclick="deleteTask('${escapeHtml(t.id)}')">
+          <i class="ti ti-trash"></i>
+        </button>
+      </div>
+    </div>`;
+}
+
+async function runTaskNow(id) {
+  const r = await api.post(`/api/v1/tasks/${id}/run`);
+  if (r?.success !== false) notify('Tâche lancée', 'ok');
+  else notify(r?.error || 'Erreur', 'err');
+}
+
+async function toggleTask(id, enable) {
+  const r = await api.patch(`/api/v1/tasks/${id}/toggle`, { enabled: enable });
+  if (r?.success !== false) { notify(enable ? 'Tâche activée' : 'Tâche désactivée', 'ok'); loadTasks(); }
+  else notify(r?.error || 'Erreur', 'err');
+}
+
+async function deleteTask(id) {
+  if (!confirm('Supprimer cette tâche planifiée ?')) return;
+  const r = await api.delete(`/api/v1/tasks/${id}`);
+  if (r?.success !== false) { notify('Tâche supprimée', 'ok'); loadTasks(); }
+  else notify(r?.error || 'Erreur', 'err');
+}
+
+function openTaskModal() {
+  document.getElementById('task-modal')?.classList.add('open');
+  document.getElementById('task-type')?.dispatchEvent(new Event('change'));
+}
+
+function closeTaskModal() {
+  document.getElementById('task-modal')?.classList.remove('open');
+  document.getElementById('task-form')?.reset();
+}
+
+function onTaskTypeChange() {
+  const type = document.getElementById('task-type')?.value;
+  document.getElementById('task-app-row').style.display   = type === 'backup' ? '' : 'none';
+  document.getElementById('task-scope-row').style.display = type === 'backup' ? '' : 'none';
+}
+
+async function submitTaskForm() {
+  const type  = document.getElementById('task-type').value;
+  const app   = document.getElementById('task-app').value.trim();
+  const scope = document.getElementById('task-scope').value;
+  const time  = document.getElementById('task-time').value || '02:00';
+  const daysChecked = [...document.querySelectorAll('.task-day-cb:checked')].map(cb => parseInt(cb.value));
+
+  const [hh, mm] = time.split(':').map(Number);
+
+  const body = {
+    type,
+    app:      type === 'backup' ? app : '',
+    scope:    type === 'backup' ? scope : '',
+    enabled:  true,
+    schedule: { hour: hh || 0, minute: mm || 0, days: daysChecked },
+  };
+
+  const r = await api.post('/api/v1/tasks', body);
+  if (r?.success !== false) {
+    notify('Tâche créée', 'ok');
+    closeTaskModal();
+    loadTasks();
+  } else {
+    notify(r?.error || 'Erreur création tâche', 'err');
+  }
+}
+
 // ── Navigation ────────────────────────────────────────────────────────────────
 const SECTIONS = {
   dashboard: { label: 'TABLEAU DE BORD', num: '/00', load: loadDashboard,  content: 'content-dashboard',  btn: null },
@@ -1473,14 +1630,15 @@ const SECTIONS = {
   backups:   { label: 'SAUVEGARDES',     num: '/03', load: loadBackups,    content: 'content-backups',    btn: { icon: 'ti-device-floppy', label: 'SAUVEGARDER',   action: "triggerBackup()" } },
   secrets:   { label: 'SECRETS',         num: '/04', load: loadSecrets,    content: 'content-secrets',    btn: { icon: 'ti-lock-open',     label: 'DÉVERROUILLER', action: "unlockSecrets()" } },
   locations: { label: 'EMPLACEMENTS',    num: '/05', load: loadLocations,  content: 'content-locations',  btn: { icon: 'ti-plus',          label: 'AJOUTER',       action: "openAddLocationModal()" } },
-  audit:     { label: 'AUDIT',           num: '/06', load: loadAudit,      content: 'content-audit',      btn: null },
-  settings:  { label: 'PARAMÈTRES',      num: '/07', load: loadSettings,   content: 'content-settings',   btn: null },
-  stats:     { label: 'SYSTÈME',         num: '/08', load: loadStats,      content: 'content-stats',      btn: null },
-  terminal:  { label: 'TERMINAL',        num: '/09', load: loadTerminal,   content: 'content-terminal',   btn: null },
-  services:  { label: 'SERVICES',        num: '/10', load: loadServices,   content: 'content-services',   btn: null },
-  network:   { label: 'RÉSEAU',          num: '/11', load: loadNetwork,    content: 'content-network',    btn: null },
-  storage:   { label: 'STOCKAGE',        num: '/12', load: loadStorage,    content: 'content-storage',    btn: null },
-  journal:   { label: 'JOURNAL',         num: '/13', load: loadJournal,    content: 'content-journal',    btn: null },
+  tasks:     { label: 'TÂCHES',           num: '/06', load: loadTasks,      content: 'content-tasks',      btn: { icon: 'ti-plus', label: 'NOUVELLE TÂCHE', action: 'openTaskModal()' } },
+  audit:     { label: 'AUDIT',           num: '/07', load: loadAudit,      content: 'content-audit',      btn: null },
+  settings:  { label: 'PARAMÈTRES',      num: '/08', load: loadSettings,   content: 'content-settings',   btn: null },
+  stats:     { label: 'SYSTÈME',         num: '/09', load: loadStats,      content: 'content-stats',      btn: null },
+  terminal:  { label: 'TERMINAL',        num: '/10', load: loadTerminal,   content: 'content-terminal',   btn: null },
+  services:  { label: 'SERVICES',        num: '/11', load: loadServices,   content: 'content-services',   btn: null },
+  network:   { label: 'RÉSEAU',          num: '/12', load: loadNetwork,    content: 'content-network',    btn: null },
+  storage:   { label: 'STOCKAGE',        num: '/13', load: loadStorage,    content: 'content-storage',    btn: null },
+  journal:   { label: 'JOURNAL',         num: '/14', load: loadJournal,    content: 'content-journal',    btn: null },
 };
 
 // ── Intégrations apps (panels embarqués) ─────────────────────────────────────

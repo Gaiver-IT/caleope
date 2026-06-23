@@ -239,6 +239,8 @@ func (s *Server) routeApp(w http.ResponseWriter, r *http.Request) {
 		s.httpRemoveByID(w, r, id)
 	case "GET logs":
 		s.httpLogsByID(w, r, id)
+	case "GET logs/stream":
+		s.httpLogsStreamByID(w, r, id)
 	case "POST install":
 		s.httpInstallByID(w, r, id)
 	case "POST start":
@@ -492,6 +494,56 @@ func (s *Server) httpRemoveByID(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	s.httpOK(w, nil)
+}
+
+// httpLogsStreamByID — SSE endpoint pour les logs en temps réel.
+// GET /api/v1/apps/{id}/logs/stream?tail=100
+func (s *Server) httpLogsStreamByID(w http.ResponseWriter, r *http.Request, id string) {
+	app, err := s.rt.GetApp(id)
+	if err != nil {
+		s.httpError(w, "application introuvable: "+id, http.StatusNotFound)
+		return
+	}
+
+	tail := 50
+	if t := r.URL.Query().Get("tail"); t != "" {
+		if n, err := fmt.Sscanf(t, "%d", &tail); n != 1 || err != nil {
+			tail = 50
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.httpError(w, "streaming non supporté", http.StatusInternalServerError)
+		return
+	}
+
+	ch := make(chan string, 64)
+	done := make(chan struct{})
+	defer close(done)
+
+	go s.dc.LogsStream(app.ComposeDir, tail, ch, done)
+
+	// Envoyer les lignes au format SSE : "data: <line>\n\n"
+	for {
+		select {
+		case line, ok := <-ch:
+			if !ok {
+				fmt.Fprintf(w, "event: close\ndata: stream terminé\n\n")
+				flusher.Flush()
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", line)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (s *Server) httpLogsByID(w http.ResponseWriter, r *http.Request, id string) {
