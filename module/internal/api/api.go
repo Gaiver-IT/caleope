@@ -1016,7 +1016,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	_ = exec.Command("ln", "-sf", "/usr/local/bin/caleope", "/usr/local/bin/caleope-store").Run()
 
 	// S'assurer que caleope-ui.service et sa config Traefik sont en place
-	s.ensureUISetup()
+	s.EnsureUISetup()
 
 	// Mettre à jour caleope.conf
 	confPath := fmt.Sprintf("%s/caleope.conf", s.baseDir)
@@ -1297,9 +1297,10 @@ func (s *Server) handleTaskToggle(args map[string]string) error {
 	return s.sched.Toggle(id, enabled)
 }
 
-// ensureUISetup garantit que caleope-ui est correctement configuré :
+// EnsureUISetup garantit que caleope-ui est correctement configuré :
 // service systemd + config Traefik dynamic. Idempotent.
-func (s *Server) ensureUISetup() {
+// Appelé au démarrage du daemon ET pendant un upgrade.
+func (s *Server) EnsureUISetup() {
 	// 1. Service systemd
 	const servicePath = "/etc/systemd/system/caleope-ui.service"
 	const serviceContent = `[Unit]

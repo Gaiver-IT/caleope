@@ -115,6 +115,11 @@ func main() {
 
 	server := api.NewServer(*socketPath, rt, st, installer, bkp, dc, col, em, net, *baseDir)
 
+	// Garantir que caleope-ui.service et sa config Traefik sont à jour au démarrage.
+	// Indispensable après un upgrade : c'est le nouvel exécutable qui reécrit la config,
+	// pas l'ancien daemon qui se remplaçait lui-même.
+	server.EnsureUISetup()
+
 	// Planificateur de tâches (backup auto, upgrade, update store)
 	sched := scheduler.New(*baseDir, server)
 	server.SetScheduler(sched)
