@@ -2122,9 +2122,11 @@ async function loadEvents() {
   }
 
   const rows = [...evts].reverse().map(e => {
-    const ico = EVENT_ICONS[e.type] || 'ti-circle';
-    const isErr = e.type?.includes('failed') || e.type?.includes('error');
-    const dotCls = isErr ? 'var(--err)' : e.type?.includes('removed') ? 'var(--warn)' : 'var(--ok)';
+    const type = e.event || e.type || '';
+    const appId = e.app || e.app_id || e.appId || '';
+    const ico = EVENT_ICONS[type] || 'ti-circle';
+    const isErr = type.includes('failed') || type.includes('error');
+    const dotCls = isErr ? 'var(--err)' : type.includes('removed') ? 'var(--warn)' : 'var(--ok)';
     const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('fr-FR') : '';
     return `<div class="loc-row" style="gap:12px">
       <div style="width:30px;height:30px;border-radius:2px;background:var(--bg3);flex-shrink:0;
@@ -2132,8 +2134,8 @@ async function loadEvents() {
         <i class="ti ${ico}" style="font-size:13px;color:${dotCls}"></i>
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:10px;font-weight:700">${escapeHtml(e.type || '—')}</div>
-        <div style="font-size:9px;color:var(--text3)">${escapeHtml(e.app_id || e.appId || '—')}</div>
+        <div style="font-size:10px;font-weight:700">${escapeHtml(type || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(appId || '—')}</div>
       </div>
       <div style="text-align:right;flex-shrink:0;font-size:8px;color:var(--text3)">${escapeHtml(ts)}</div>
     </div>`;
