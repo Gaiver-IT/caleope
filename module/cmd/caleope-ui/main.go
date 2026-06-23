@@ -16,6 +16,7 @@ package main
 import (
 	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -27,6 +28,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -267,16 +269,62 @@ func main() {
 
 	// ── Proxy vers les APIs des apps installées ──────────────────────────────
 	// GET|POST /ui/proxy/{appid}/{path...}
-	// Lit le token depuis app-config/{appid}/secrets.env,
-	// lit le port depuis runtime/apps/{appid}.json et forward en HTTP local.
+	//
+	// Supporte plusieurs modes d'auth et de résolution d'adresse :
+	//   - Bearer / X-Api-Key : token statique dans secrets.env
+	//   - Basic : username + password encodés en base64
+	//   - portName : port hôte dans runtime/apps/{appid}.json
+	//   - containerName + containerPort : résolution IP Docker dynamique
 	type appProxyCfg struct {
-		tokenKey   string // clé dans secrets.env
-		authScheme string // "Bearer" ou "X-API-Key"
-		portName   string // nom du port dans RuntimeApp.Ports (ex: "web", "server")
+		tokenKey      string // clé token dans secrets.env (Bearer/X-Api-Key)
+		basicUserKey  string // clé username pour Basic auth
+		basicPassKey  string // clé password pour Basic auth
+		authScheme    string // "Bearer", "X-Api-Key", "Basic"
+		portName      string // port nommé dans runtime JSON (si pas containerName)
+		secretsApp    string // app dont lire les secrets (si différent de appID)
+		containerName string // nom du conteneur Docker à résoudre
+		containerPort int    // port du conteneur (si containerName défini)
 	}
 	appProxyMap := map[string]appProxyCfg{
-		"authentik": {tokenKey: "AUTHENTIK_BOOTSTRAP_TOKEN", authScheme: "Bearer",   portName: "web"},
-		"azuracast": {tokenKey: "AZURACAST_API_KEY",         authScheme: "X-API-Key", portName: "web"},
+		// Apps avec token hôte mappé
+		"authentik": {tokenKey: "AUTHENTIK_BOOTSTRAP_TOKEN", authScheme: "Bearer",    portName: "web"},
+		"azuracast": {tokenKey: "AZURACAST_API_KEY",         authScheme: "X-Api-Key", portName: "web"},
+
+		// Nextcloud — OCS API + WebDAV (Basic auth)
+		"nextcloud": {basicUserKey: "NEXTCLOUD_ADMIN_USER", basicPassKey: "NEXTCLOUD_ADMIN_PASSWORD",
+			authScheme: "Basic", containerName: "nextcloud", containerPort: 80},
+
+		// Gitea — REST API (Basic auth avec admin)
+		"gitea": {basicUserKey: "GITEA_ADMIN_USER", basicPassKey: "GITEA_ADMIN_PASS",
+			authScheme: "Basic", containerName: "gitea", containerPort: 3000},
+
+		// Vaultwarden — admin API (X-Admin-Token header)
+		"vaultwarden": {tokenKey: "_ADMIN_TOKEN_PLAIN", authScheme: "X-Admin-Token",
+			containerName: "vaultwarden", containerPort: 80},
+
+		// Arr-stack : chaque service via IP Docker
+		"arr-sonarr":  {tokenKey: "ARR_API_SONARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "sonarr",  containerPort: 8989},
+		"arr-radarr":  {tokenKey: "ARR_API_RADARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "radarr",  containerPort: 7878},
+		"arr-lidarr":  {tokenKey: "ARR_API_LIDARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "lidarr",  containerPort: 8686},
+		"arr-prowlarr":{tokenKey: "ARR_API_PROWLARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "prowlarr",containerPort: 9696},
+	}
+
+	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
+	resolveDockerIP := func(containerName string) string {
+		out, err := exec.Command("docker", "inspect",
+			"--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}\n{{end}}",
+			containerName,
+		).Output()
+		if err != nil {
+			return ""
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				return line
+			}
+		}
+		return ""
 	}
 
 	// readAppPort lit le port hôte d'une app depuis runtime/apps/{appid}.json.
@@ -299,7 +347,6 @@ func main() {
 				return p.Host
 			}
 		}
-		// Fallback: premier port disponible
 		if len(app.Ports) > 0 {
 			return app.Ports[0].Host
 		}
@@ -322,20 +369,58 @@ func main() {
 			return
 		}
 
-		secretsPath := filepath.Join(*baseDir, "app-config", appID, "secrets.env")
-		token := readEnvKey(secretsPath, cfg.tokenKey)
-		if token == "" {
-			jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible (app installée ?)")
-			return
+		// Résoudre l'app cible (secrets + adresse)
+		secretsAppID := cfg.secretsApp
+		if secretsAppID == "" {
+			secretsAppID = appID
+		}
+		secretsPath := filepath.Join(*baseDir, "app-config", secretsAppID, "secrets.env")
+
+		// Construire le header d'authentification
+		var authHeader, authValue string
+		switch cfg.authScheme {
+		case "Basic":
+			user := readEnvKey(secretsPath, cfg.basicUserKey)
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
+			if user == "" || pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials non disponibles")
+				return
+			}
+			creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+			authHeader, authValue = "Authorization", "Basic "+creds
+		default:
+			token := readEnvKey(secretsPath, cfg.tokenKey)
+			if token == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+				return
+			}
+			switch cfg.authScheme {
+			case "Bearer":
+				authHeader, authValue = "Authorization", "Bearer "+token
+			default:
+				authHeader, authValue = cfg.authScheme, token
+			}
 		}
 
-		port := readAppPort(appID, cfg.portName)
-		if port == 0 {
-			jsonErr(w, http.StatusServiceUnavailable, appID+": port hôte introuvable")
-			return
+		// Résoudre l'adresse cible
+		var targetBase string
+		if cfg.containerName != "" {
+			ip := resolveDockerIP(cfg.containerName)
+			if ip == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": conteneur introuvable")
+				return
+			}
+			targetBase = fmt.Sprintf("http://%s:%d", ip, cfg.containerPort)
+		} else {
+			port := readAppPort(secretsAppID, cfg.portName)
+			if port == 0 {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": port hôte introuvable")
+				return
+			}
+			targetBase = fmt.Sprintf("http://localhost:%d", port)
 		}
 
-		targetURL := fmt.Sprintf("http://localhost:%d%s", port, apiPath)
+		targetURL := targetBase + apiPath
 		if r.URL.RawQuery != "" {
 			targetURL += "?" + r.URL.RawQuery
 		}
@@ -348,11 +433,7 @@ func main() {
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			outReq.Header.Set("Content-Type", ct)
 		}
-		if cfg.authScheme == "Bearer" {
-			outReq.Header.Set("Authorization", "Bearer "+token)
-		} else {
-			outReq.Header.Set(cfg.authScheme, token)
-		}
+		outReq.Header.Set(authHeader, authValue)
 		outReq.Header.Set("Accept", "application/json")
 
 		client := &http.Client{Timeout: 30 * time.Second}

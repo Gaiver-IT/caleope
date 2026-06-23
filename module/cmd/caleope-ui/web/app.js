@@ -1819,8 +1819,40 @@ const APP_PANELS = {
       { id: 'panel-authentik-groups', label: 'GROUPES',    icon: 'ti-sitemap', load: loadAuthentikGroups },
     ],
   },
-  'azuracast': {
+  'nextcloud': {
+    group: '// CLOUD',
+    icon: 'ti-cloud',
+    panels: [
+      { id: 'panel-nextcloud-files', label: 'FICHIERS', icon: 'ti-files',      load: loadNextcloudFiles },
+      { id: 'panel-nextcloud-users', label: 'COMPTES',  icon: 'ti-users',      load: loadNextcloudUsers },
+    ],
+  },
+  'gitea': {
+    group: '// DEV',
+    icon: 'ti-git-merge',
+    panels: [
+      { id: 'panel-gitea-repos',  label: 'DÉPÔTS',  icon: 'ti-book',       load: loadGiteaRepos  },
+      { id: 'panel-gitea-issues', label: 'ISSUES',  icon: 'ti-circle-dot', load: loadGiteaIssues },
+    ],
+  },
+  'vaultwarden': {
+    group: '// SÉCURITÉ',
+    icon: 'ti-lock',
+    panels: [
+      { id: 'panel-vaultwarden-users', label: 'COMPTES', icon: 'ti-users', load: loadVaultwardenUsers },
+    ],
+  },
+  'arr-stack': {
     group: '// MÉDIAS',
+    icon: 'ti-movie',
+    panels: [
+      { id: 'panel-arr-queue',  label: 'QUEUE',   icon: 'ti-list',        load: loadArrQueue  },
+      { id: 'panel-arr-series', label: 'SÉRIES',  icon: 'ti-device-tv',   load: loadArrSeries },
+      { id: 'panel-arr-films',  label: 'FILMS',   icon: 'ti-movie',       load: loadArrFilms  },
+    ],
+  },
+  'azuracast': {
+    group: '// RADIO',
     icon: 'ti-radio',
     panels: [
       { id: 'panel-azuracast', label: 'RADIO', icon: 'ti-broadcast', load: loadAzuraCast },
@@ -1981,6 +2013,418 @@ async function loadAuthentikGroups() {
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
     </div>`;
+}
+
+// ── Nextcloud — Fichiers récents ──────────────────────────────────────────────
+async function loadNextcloudFiles() {
+  const c = document.getElementById('content-panel-nextcloud-files');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT FICHIERS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'nextcloud')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR</a>` : '';
+
+  // OCS Files API — activité récente
+  const r = await fetch('/ui/proxy/nextcloud/ocs/v2.php/apps/activity/api/v2/activity/all?limit=20&format=json', {
+    headers: { 'OCS-APIRequest': 'true' },
+  });
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-files"></i></div>
+      <div class="empty-title">FICHIERS INDISPONIBLES</div>
+      <div class="empty-sub">API activité Nextcloud non accessible.</div>
+      <div style="margin-top:12px">${adminLink}</div></div>`;
+    return;
+  }
+  const data = await r.json();
+  const activities = data?.ocs?.data || [];
+  if (!activities.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-files"></i></div>
+      <div class="empty-title">AUCUNE ACTIVITÉ</div></div>`;
+    return;
+  }
+
+  const rows = activities.map(a => {
+    const icon = a.type === 'file_created' ? 'ti-file-plus' : a.type === 'file_deleted' ? 'ti-file-minus' : 'ti-file';
+    const color = a.type === 'file_created' ? 'var(--ok)' : a.type === 'file_deleted' ? 'var(--err)' : 'var(--text2)';
+    const ts = a.datetime ? new Date(a.datetime).toLocaleDateString('fr-FR') : '';
+    const subject = a.subject || a.message || '—';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ${escapeHtml(icon)}" style="font-size:11px;color:${color}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(subject)}</div>
+        <div style="font-size:8px;color:var(--text3)">${escapeHtml(a.user || '—')}</div>
+      </div>
+      <div style="font-size:8px;color:var(--text3);flex-shrink:0">${escapeHtml(ts)}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-files" style="font-size:12px"></i> ACTIVITÉ RÉCENTE
+      <span style="color:var(--text3);font-size:9px">${activities.length} actions</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Nextcloud — Utilisateurs ──────────────────────────────────────────────────
+async function loadNextcloudUsers() {
+  const c = document.getElementById('content-panel-nextcloud-users');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT COMPTES...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'nextcloud')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/index.php/settings/users" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>GÉRER</a>` : '';
+
+  const r = await fetch('/ui/proxy/nextcloud/ocs/v1.php/cloud/users?limit=50&format=json', {
+    headers: { 'OCS-APIRequest': 'true' },
+  });
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-users"></i></div>
+      <div class="empty-title">COMPTES INDISPONIBLES</div></div>`;
+    return;
+  }
+  const data = await r.json();
+  const users = data?.ocs?.data?.users || [];
+
+  const rows = users.map(u => `
+    <div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--vio-dim);color:var(--vio-b);
+        display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">
+        ${escapeHtml((u[0]||'?').toUpperCase())}</div>
+      <div style="font-size:10px;font-weight:700">${escapeHtml(u)}</div>
+    </div>`).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-users" style="font-size:12px"></i> COMPTES
+      <span style="color:var(--text3);font-size:9px">${users.length}</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Gitea — Dépôts ────────────────────────────────────────────────────────────
+async function loadGiteaRepos() {
+  const c = document.getElementById('content-panel-gitea-repos');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT DÉPÔTS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'gitea')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/explore/repos" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>EXPLORER</a>` : '';
+
+  const r = await fetch('/ui/proxy/gitea/api/v1/repos/search?limit=30&sort=newest&token=');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-book"></i></div>
+      <div class="empty-title">DÉPÔTS INDISPONIBLES</div>
+      <div class="empty-sub">API Gitea non accessible.</div></div>`;
+    return;
+  }
+  const data = await r.json();
+  const repos = data?.data || [];
+
+  if (!repos.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-book"></i></div>
+      <div class="empty-title">AUCUN DÉPÔT</div></div>`;
+    return;
+  }
+
+  const rows = repos.map(r => {
+    const updated = r.updated ? new Date(r.updated).toLocaleDateString('fr-FR') : '—';
+    const lang = r.language ? `<span style="font-size:7px;padding:1px 4px;border-radius:1px;background:var(--bg3);color:var(--text2)">${escapeHtml(r.language)}</span>` : '';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ${r.fork ? 'ti-git-fork' : 'ti-book'}" style="font-size:11px;color:var(--text2)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.full_name || r.name || '—')}</div>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:2px">${lang}
+          ${r.private ? '<span style="font-size:7px;padding:1px 4px;background:var(--warn-dim);color:var(--warn-b);border-radius:1px">PRIVÉ</span>' : ''}
+          <span style="font-size:8px;color:var(--text3)">${r.stars_count||0} ★</span>
+        </div>
+      </div>
+      <div style="font-size:8px;color:var(--text3);flex-shrink:0">${escapeHtml(updated)}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-book" style="font-size:12px"></i> DÉPÔTS
+      <span style="color:var(--text3);font-size:9px">${repos.length}</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Gitea — Issues ouvertes ───────────────────────────────────────────────────
+async function loadGiteaIssues() {
+  const c = document.getElementById('content-panel-gitea-issues');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT ISSUES...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'gitea')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/issues" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>VOIR TOUT</a>` : '';
+
+  const r = await fetch('/ui/proxy/gitea/api/v1/repos/search?limit=50&token=');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-circle-dot"></i></div>
+      <div class="empty-title">ISSUES INDISPONIBLES</div></div>`;
+    return;
+  }
+  const reposData = await r.json();
+  const repos = reposData?.data || [];
+
+  // Récupérer les issues ouvertes de tous les dépôts en parallèle (max 10)
+  const issueResults = await Promise.all(
+    repos.slice(0, 10).map(repo =>
+      fetch(`/ui/proxy/gitea/api/v1/repos/${encodeURIComponent(repo.full_name)}/issues?state=open&limit=5&type=issues`)
+        .then(r => r.ok ? r.json() : [])
+        .catch(() => [])
+    )
+  );
+  const issues = issueResults.flat().filter(Boolean);
+
+  if (!issues.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-circle-check"></i></div>
+      <div class="empty-title">AUCUNE ISSUE OUVERTE</div></div>`;
+    return;
+  }
+
+  const rows = issues.slice(0, 30).map(i => {
+    const ts = i.created_at ? new Date(i.created_at).toLocaleDateString('fr-FR') : '—';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--ok-dim);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ti-circle-dot" style="font-size:11px;color:var(--ok)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(i.title||'—')}</div>
+        <div style="font-size:8px;color:var(--text3)">${escapeHtml(i.repository?.full_name||'—')} · #${i.number}</div>
+      </div>
+      <div style="font-size:8px;color:var(--text3);flex-shrink:0">${escapeHtml(ts)}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-circle-dot" style="font-size:12px;color:var(--ok)"></i> ISSUES OUVERTES
+      <span style="color:var(--text3);font-size:9px">${issues.length}</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Vaultwarden — Comptes ────────────────────────────────────────────────────
+async function loadVaultwardenUsers() {
+  const c = document.getElementById('content-panel-vaultwarden-users');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT COMPTES...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'vaultwarden')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/admin" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>ADMIN</a>` : '';
+
+  const r = await fetch('/ui/proxy/vaultwarden/admin/users/overview', {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
+      <div class="empty-title">COMPTES INDISPONIBLES</div>
+      <div class="empty-sub">Token admin non accessible.</div>
+      <div style="margin-top:12px">${adminLink}</div></div>`;
+    return;
+  }
+  const users = await r.json();
+  if (!Array.isArray(users) || !users.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
+      <div class="empty-title">AUCUN COMPTE</div>
+      <div style="margin-top:12px">${adminLink}</div></div>`;
+    return;
+  }
+
+  const rows = users.map(u => {
+    const initials = ((u.name || u.email || '?')[0]).toUpperCase();
+    const active = !u.Disabled;
+    const lastActive = u.LastActive ? new Date(u.LastActive).toLocaleDateString('fr-FR') : '—';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--vio-dim);color:var(--vio-b);
+        display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">
+        ${escapeHtml(initials)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(u.email || '—')}</div>
+        <div style="font-size:8px;color:var(--text3)">${u.items || 0} éléments</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        ${active
+          ? '<span class="badge badge-run" style="font-size:7px">ACTIF</span>'
+          : '<span class="badge badge-err" style="font-size:7px">DÉSACTIVÉ</span>'}
+        <div style="font-size:8px;color:var(--text3);margin-top:2px">${escapeHtml(lastActive)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-lock" style="font-size:12px"></i> COMPTES VAULTWARDEN
+      <span style="color:var(--text3);font-size:9px">${users.length}</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Arr-stack — Queue de téléchargement ──────────────────────────────────────
+async function loadArrQueue() {
+  const c = document.getElementById('content-panel-arr-queue');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT QUEUE...</div>`;
+
+  // Récupère les queues Sonarr + Radarr en parallèle
+  const [sonarrQ, radarrQ] = await Promise.all([
+    fetch('/ui/proxy/arr-sonarr/api/v3/queue?pageSize=20').then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/ui/proxy/arr-radarr/api/v3/queue?pageSize=20').then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+
+  const sonarrItems = (sonarrQ?.records || []).map(i => ({...i, _src: 'SONARR'}));
+  const radarrItems = (radarrQ?.records || []).map(i => ({...i, _src: 'RADARR'}));
+  const all = [...sonarrItems, ...radarrItems];
+
+  if (!all.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-check"></i></div>
+      <div class="empty-title">QUEUE VIDE</div>
+      <div class="empty-sub">Aucun téléchargement en cours.</div></div>`;
+    return;
+  }
+
+  const rows = all.map(i => {
+    const pct = i.sizeleft != null && i.size ? Math.round((1 - i.sizeleft / i.size) * 100) : 0;
+    const status = i.status || '—';
+    const statusColor = status === 'downloading' ? 'var(--ok)' : status === 'queued' ? 'var(--text3)' : 'var(--warn)';
+    const title = i.title || i.series?.title || i.movie?.title || '—';
+    return `<div class="loc-row" style="gap:10px;flex-direction:column;align-items:stretch;padding:6px 0">
+      <div style="display:flex;gap:10px;align-items:center">
+        <span style="font-size:7px;padding:1px 4px;background:var(--bg3);color:var(--text3);border-radius:1px;flex-shrink:0">${escapeHtml(i._src)}</span>
+        <div style="flex:1;min-width:0;font-size:9px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</div>
+        <span style="font-size:8px;color:${statusColor};flex-shrink:0">${escapeHtml(status)}</span>
+      </div>
+      <div style="height:3px;background:var(--bg3);border-radius:1px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:var(--ok);border-radius:1px;transition:.3s"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="padding:10px 12px">
+      <i class="ti ti-list" style="font-size:12px"></i> QUEUE
+      <span style="color:var(--text3);font-size:9px">${all.length} élément(s)</span>
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Arr-stack — Séries surveillées (Sonarr) ───────────────────────────────────
+async function loadArrSeries() {
+  const c = document.getElementById('content-panel-arr-series');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT SÉRIES...</div>`;
+
+  const r = await fetch('/ui/proxy/arr-sonarr/api/v3/series?sortKey=added&sortDir=desc');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-device-tv"></i></div>
+      <div class="empty-title">SONARR INDISPONIBLE</div></div>`;
+    return;
+  }
+  const series = await r.json();
+  if (!series.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-device-tv"></i></div>
+      <div class="empty-title">AUCUNE SÉRIE</div></div>`;
+    return;
+  }
+
+  const rows = series.slice(0, 30).map(s => {
+    const pct = s.episodeCount > 0 ? Math.round(s.episodeFileCount / s.episodeCount * 100) : 0;
+    const statusColor = s.monitored ? 'var(--ok)' : 'var(--text3)';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ti-device-tv" style="font-size:11px;color:${statusColor}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.title||'—')}</div>
+        <div style="font-size:8px;color:var(--text3)">${s.episodeFileCount||0}/${s.episodeCount||0} épisodes · ${pct}%</div>
+      </div>
+      <span style="font-size:7px;padding:1px 4px;background:var(--bg3);color:var(--text3);border-radius:1px;flex-shrink:0">${s.seasons?.length||0} S</span>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="padding:10px 12px">
+      <i class="ti ti-device-tv" style="font-size:12px"></i> SÉRIES
+      <span style="color:var(--text3);font-size:9px">${series.length}</span>
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Arr-stack — Films surveillés (Radarr) ─────────────────────────────────────
+async function loadArrFilms() {
+  const c = document.getElementById('content-panel-arr-films');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT FILMS...</div>`;
+
+  const r = await fetch('/ui/proxy/arr-radarr/api/v3/movie?sortKey=added&sortDir=desc');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-movie"></i></div>
+      <div class="empty-title">RADARR INDISPONIBLE</div></div>`;
+    return;
+  }
+  const movies = await r.json();
+  if (!movies.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-movie"></i></div>
+      <div class="empty-title">AUCUN FILM</div></div>`;
+    return;
+  }
+
+  const downloaded = movies.filter(m => m.hasFile);
+  const missing = movies.filter(m => m.monitored && !m.hasFile);
+
+  const renderFilm = m => {
+    const year = m.year ? ` (${m.year})` : '';
+    const hasFile = m.hasFile;
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ti-movie" style="font-size:11px;color:${hasFile ? 'var(--ok)' : 'var(--warn)'}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml((m.title||'—')+year)}</div>
+        <div style="font-size:8px;color:var(--text3)">${escapeHtml(m.studio||m.genres?.[0]||'—')}</div>
+      </div>
+      <span class="badge ${hasFile ? 'badge-run' : 'badge-warn'}" style="font-size:7px;flex-shrink:0">${hasFile ? 'OK' : 'MANQUANT'}</span>
+    </div>`;
+  };
+
+  const allRows = [...missing.slice(0,10), ...downloaded.slice(0,20)].map(renderFilm).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="padding:10px 12px">
+      <i class="ti ti-movie" style="font-size:12px"></i> FILMS
+      <span style="color:var(--text3);font-size:9px">${downloaded.length} dispo · ${missing.length} manquants</span>
+    </div>
+    <div style="padding:0 12px 12px">${allRows}</div>
+  </div>`;
 }
 
 // ── AzuraCast — Stations ──────────────────────────────────────────────────────
