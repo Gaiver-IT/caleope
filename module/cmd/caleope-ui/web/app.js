@@ -535,6 +535,15 @@ function appCard(app) {
                 <span class="btn-label">DÉMARRER</span>
                </button>`
           }
+          <button class="action-btn" onclick="triggerAppBackup('${app.id}')" title="Sauvegarder">
+            <i class="ti ti-device-floppy"></i>
+            <span class="btn-label">BACKUP</span>
+          </button>
+          ${HARDCODED_PARAMS[app.id] ? `
+          <button class="action-btn" onclick="openReconfigureModal('${app.id}')" title="Reconfigurer">
+            <i class="ti ti-settings"></i>
+            <span class="btn-label">CONFIG</span>
+          </button>` : ''}
           <button class="action-btn danger" onclick="removeApp('${app.id}')" title="Supprimer">
             <i class="ti ti-trash"></i>
             <span class="btn-label">SUPPRIMER</span>
@@ -598,6 +607,39 @@ async function removeApp(id) {
   }
 }
 
+async function triggerAppBackup(id) {
+  notify(`Sauvegarde de ${id}...`, 'info');
+  const r = await api.post(`/api/v1/apps/${id}/backup`);
+  if (r && r.success !== false) {
+    notify(`${id} — sauvegarde créée`, 'ok');
+  } else {
+    notify(r?.error || 'Erreur backup', 'err');
+  }
+}
+
+async function openReconfigureModal(appId) {
+  S.installTarget = appId;
+  const app = S.apps.find(a => a.id === appId);
+  const params = HARDCODED_PARAMS[appId] || [];
+
+  // Précharger les emplacements
+  if (params.some(p => p.type === 'location') && S.locations.length === 0) {
+    const locData = await api.get('/api/v1/locations');
+    S.locations = Array.isArray(locData?.data) ? locData.data : [];
+  }
+
+  S.installParams = params;
+  document.getElementById('modal-app-name').textContent = appId.toUpperCase() + ' — RECONFIGURER';
+  const paramsEl = document.getElementById('modal-params');
+  paramsEl.innerHTML = params.length === 0
+    ? `<div style="font-size:10px;color:var(--text3)">Aucun paramètre reconfigurable pour cette app.</div>`
+    : params.map(p => renderParamField(p)).join('');
+
+  updateParamVisibility();
+  document.getElementById('install-modal').classList.add('open');
+  document.getElementById('install-modal').dataset.mode = 'reconfigure';
+}
+
 // ── Install modal ─────────────────────────────────────────────────────────────
 async function openInstallModal(appId) {
   S.installTarget = appId;
@@ -622,44 +664,47 @@ async function openInstallModal(appId) {
   const paramsEl = document.getElementById('modal-params');
   paramsEl.innerHTML = S.installParams.length === 0
     ? `<div style="font-size:10px;color:var(--text3)">Aucun paramètre configurable — installation avec les valeurs par défaut.</div>`
-    : S.installParams.map(p => {
-        let inner;
-        if (p.type === 'bool') {
-          inner = `
-            <div style="display:flex;gap:6px">
-              <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
-                <input type="radio" name="param-${p.id}" id="param-${p.id}-on" value="true" ${p.default !== 'false' ? 'checked' : ''} style="accent-color:var(--vio)" onclick="updateParamVisibility()">ACTIVÉ
-              </label>
-              <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
-                <input type="radio" name="param-${p.id}" id="param-${p.id}-off" value="false" ${p.default === 'false' ? 'checked' : ''} style="accent-color:var(--vio)" onclick="updateParamVisibility()">DÉSACTIVÉ
-              </label>
-            </div>`;
-        } else if (p.type === 'location') {
-          const systemOpt = `<option value="${p.default}">SYSTÈME — ${p.default}</option>`;
-          const locOpts = S.locations.map(l =>
-            `<option value="${l.mount_point || l.path}">${escapeHtml(l.name)} — ${escapeHtml(l.mount_point || l.path)}</option>`
-          ).join('');
-          inner = `<select class="field-input" id="param-${p.id}" onchange="updateParamVisibility()">
-              ${systemOpt}${locOpts}
-            </select>
-            <div style="font-size:9px;color:var(--text3);margin-top:2px">${p.description || ''} — <span style="color:var(--blue)">Emplacements dans EMPLACEMENTS</span></div>`;
-        } else if (p.type === 'select' && p.options) {
-          inner = `<select class="field-input" id="param-${p.id}" onchange="updateParamVisibility()">
-              ${p.options.map(o => `<option value="${o}" ${o === p.default ? 'selected' : ''}>${o}</option>`).join('')}
-            </select>`;
-        } else {
-          inner = `<input class="field-input" id="param-${p.id}" type="${p.type === 'secret' ? 'password' : 'text'}"
-            placeholder="${p.description || ''}" value="${p.default || ''}" />`;
-        }
-        const desc = (p.type !== 'location' && p.description) ? `<div style="font-size:9px;color:var(--text3);margin-top:2px">${p.description}</div>` : '';
-        return `<div id="param-wrap-${p.id}" class="field full">
-          <div class="field-label">${escapeHtml(p.label).toUpperCase()}${p.required ? ' *' : ''}</div>
-          ${inner}${desc}
-        </div>`;
-      }).join('');
+    : S.installParams.map(p => renderParamField(p)).join('');
 
   updateParamVisibility();
   document.getElementById('install-modal').classList.add('open');
+}
+
+// Rendu d'un champ de paramètre dans le modal install/reconfigure.
+function renderParamField(p) {
+  let inner;
+  if (p.type === 'bool') {
+    inner = `
+      <div style="display:flex;gap:6px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
+          <input type="radio" name="param-${p.id}" id="param-${p.id}-on" value="true" ${p.default !== 'false' ? 'checked' : ''} style="accent-color:var(--vio)" onclick="updateParamVisibility()">ACTIVÉ
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
+          <input type="radio" name="param-${p.id}" id="param-${p.id}-off" value="false" ${p.default === 'false' ? 'checked' : ''} style="accent-color:var(--vio)" onclick="updateParamVisibility()">DÉSACTIVÉ
+        </label>
+      </div>`;
+  } else if (p.type === 'location') {
+    const systemOpt = `<option value="${p.default}">SYSTÈME — ${p.default}</option>`;
+    const locOpts = S.locations.map(l =>
+      `<option value="${l.mount_point || l.path}">${escapeHtml(l.name)} — ${escapeHtml(l.mount_point || l.path)}</option>`
+    ).join('');
+    inner = `<select class="field-input" id="param-${p.id}" onchange="updateParamVisibility()">
+        ${systemOpt}${locOpts}
+      </select>
+      <div style="font-size:9px;color:var(--text3);margin-top:2px">${p.description || ''} — <span style="color:var(--blue)">Emplacements dans EMPLACEMENTS</span></div>`;
+  } else if (p.type === 'select' && p.options) {
+    inner = `<select class="field-input" id="param-${p.id}" onchange="updateParamVisibility()">
+        ${p.options.map(o => `<option value="${o}" ${o === p.default ? 'selected' : ''}>${o}</option>`).join('')}
+      </select>`;
+  } else {
+    inner = `<input class="field-input" id="param-${p.id}" type="${p.type === 'secret' ? 'password' : 'text'}"
+      placeholder="${p.description || ''}" value="${p.default || ''}" />`;
+  }
+  const desc = (p.type !== 'location' && p.description) ? `<div style="font-size:9px;color:var(--text3);margin-top:2px">${p.description}</div>` : '';
+  return `<div id="param-wrap-${p.id}" class="field full">
+    <div class="field-label">${escapeHtml(p.label).toUpperCase()}${p.required ? ' *' : ''}</div>
+    ${inner}${desc}
+  </div>`;
 }
 
 // ── Visibilité conditionnelle des params (depends_on) ─────────────────────────
@@ -688,7 +733,6 @@ function updateParamVisibility() {
 async function confirmInstall() {
   const params = {};
   S.installParams.forEach(p => {
-    // Ne pas envoyer les champs masqués par depends_on
     const wrap = document.getElementById(`param-wrap-${p.id}`);
     if (wrap && wrap.style.display === 'none') return;
     if (p.type === 'bool') {
@@ -700,15 +744,29 @@ async function confirmInstall() {
     }
   });
 
-  document.getElementById('install-modal').classList.remove('open');
+  const modal = document.getElementById('install-modal');
+  const mode = modal.dataset.mode || 'install';
+  modal.classList.remove('open');
+  delete modal.dataset.mode;
+
   const appLabel = S.catalog.find(a => a.id === S.installTarget)?.name || S.installTarget;
+
+  if (mode === 'reconfigure') {
+    const taskId = taskAdd('install', S.installTarget, `Reconfiguration — ${appLabel}`);
+    const r = await api.post(`/api/v1/apps/${S.installTarget}/reconfigure`, { params });
+    if (r && r.success !== false) {
+      taskDone(taskId, 'Reconfiguration terminée', true);
+      notify(`${S.installTarget} — reconfiguration terminée`, 'ok');
+      setTimeout(loadApps, 1000);
+    } else {
+      taskDone(taskId, r?.error || 'Erreur inconnue', false);
+      notify(r?.error || 'Erreur reconfiguration', 'err');
+    }
+    return;
+  }
+
   const taskId = taskAdd('install', S.installTarget, `Installation — ${appLabel}`);
-
-  const r = await api.post(`/api/v1/apps/${S.installTarget}/install`, {
-    params,
-    async: true,
-  });
-
+  const r = await api.post(`/api/v1/apps/${S.installTarget}/install`, { params, async: true });
   if (r && r.success !== false) {
     taskDone(taskId, 'Installation terminée', true);
     notify(`${S.installTarget} — installation terminée`, 'ok');
@@ -2129,11 +2187,19 @@ function showLogin() {
   document.getElementById('login-screen').style.display = 'flex';
 }
 
+let _dashRefreshInterval = null;
+
 function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').classList.add('visible');
   startClock();
   goSection('dashboard');
+  // Auto-refresh dashboard + stats toutes les 30s
+  if (_dashRefreshInterval) clearInterval(_dashRefreshInterval);
+  _dashRefreshInterval = setInterval(() => {
+    if (S.section === 'dashboard') loadDashboard();
+    else if (S.section === 'stats') loadStats();
+  }, 30000);
 }
 
 function refreshSection() {
