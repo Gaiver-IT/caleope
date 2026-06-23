@@ -1997,7 +1997,7 @@ async function loadAuthentikGroups() {
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:10px;font-weight:700">${escapeHtml(g.name || '—')}</div>
-        <div style="font-size:9px;color:var(--text3)">${(g.users ?? g.users_obj?.length ?? 0)} membre(s)</div>
+        <div style="font-size:9px;color:var(--text3)">${(g.users?.length ?? g.users_obj?.length ?? 0)} membre(s)</div>
       </div>
       ${g.is_superuser ? '<span class="badge badge-warn" style="font-size:7px">SUPER</span>' : ''}
     </div>`).join('');
