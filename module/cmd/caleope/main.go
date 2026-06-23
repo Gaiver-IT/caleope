@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -95,6 +94,12 @@ func main() {
 		cmdPing()
 	case "token":
 		cmdToken()
+	case "offline-pack":
+		cmdOfflinePack(args)
+	case "offline-update":
+		cmdOfflineUpdate(args)
+	case "task", "tasks":
+		cmdTask(args)
 	case "help", "--help", "-h":
 		printHelp()
 	default:
@@ -110,7 +115,7 @@ func main() {
 
 func cmdInstall(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>] [--param key=value ...]")
+		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>] [--param KEY=VALUE] [--gpu]")
 	}
 
 	apiArgs := map[string]string{
@@ -137,62 +142,102 @@ func cmdInstall(args []string) {
 				apiArgs["storage"] = args[i+1]
 				i++
 			}
-		case "--language":
-			// Raccourci pratique pour --param language=<code>
-			if i+1 < len(args) {
-				apiArgs["param_language"] = args[i+1]
-				i++
-			}
 		case "--param":
-			// --param key=value  →  transmis au daemon comme param_<key>=<value>
-			// setup.sh les reçoit comme CALEOPE_PARAM_<KEY>=<value>
 			if i+1 < len(args) {
 				kv := args[i+1]
-				if idx := strings.Index(kv, "="); idx > 0 {
-					key := kv[:idx]
-					val := kv[idx+1:]
-					apiArgs["param_"+key] = val
+				if idx := strings.IndexByte(kv, '='); idx > 0 {
+					apiArgs["param_"+strings.ToLower(kv[:idx])] = kv[idx+1:]
 				}
 				i++
+			}
+		case "--gpu":
+			apiArgs["gpu"] = "true"
+		}
+	}
+
+	// Lire CALEOPE_PARAM_* depuis l'environnement (priorité basse : surchargeable par --param)
+	for _, envLine := range os.Environ() {
+		if strings.HasPrefix(envLine, "CALEOPE_PARAM_") {
+			if parts := strings.SplitN(envLine, "=", 2); len(parts) == 2 {
+				key := "param_" + strings.ToLower(strings.TrimPrefix(parts[0], "CALEOPE_PARAM_"))
+				if _, exists := apiArgs[key]; !exists {
+					apiArgs[key] = parts[1]
+				}
 			}
 		}
 	}
 
-	// Collecter les params interactifs depuis params.json de l'app,
-	// sauf si l'utilisateur en a déjà fourni via --param (mode non-interactif).
-	hasManualParams := false
-	for k := range apiArgs {
-		if strings.HasPrefix(k, "param_") {
-			hasManualParams = true
-			break
-		}
-	}
-	if !hasManualParams {
-		paramDefs := fetchStoreParams(args[0])
-		if len(paramDefs) > 0 {
-			fmt.Printf("\n⚙️  Configuration de '%s'\n", args[0])
-			fmt.Printf("   (les champs marqués * sont obligatoires, Entrée = valeur par défaut)\n\n")
-			collectedParams := map[string]string{}
-			for _, p := range paramDefs {
-				// Respect de la condition when: "PARAM_ID=valeur"
-				if p.When != "" {
-					parts := strings.SplitN(p.When, "=", 2)
-					if len(parts) == 2 {
-						depVal := collectedParams[parts[0]]
-						if depVal != parts[1] {
-							continue
+	// Collecter les params requis manquants via prompt interactif (terminal seulement)
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		paramsResp := callDaemon("store-params", map[string]string{"app": args[0]})
+		if paramsResp.Success {
+			if paramDefs, ok := paramsResp.Data.([]interface{}); ok && len(paramDefs) > 0 {
+				r := bufio.NewReader(os.Stdin)
+				needHeader := true
+				for _, raw := range paramDefs {
+					def, ok := raw.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					id, _ := def["id"].(string)
+					if id == "" {
+						continue
+					}
+					paramKey := "param_" + strings.ToLower(id)
+					if _, alreadySet := apiArgs[paramKey]; alreadySet {
+						continue
+					}
+					required, _ := def["required"].(bool)
+					defaultVal, _ := def["default"].(string)
+					if !required && defaultVal != "" {
+						continue
+					}
+					if needHeader {
+						fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+						fmt.Printf("  Paramètres de configuration pour '%s'\n", args[0])
+						fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+						needHeader = false
+					}
+					label, _ := def["label"].(string)
+					desc, _ := def["description"].(string)
+					ptype, _ := def["type"].(string)
+					if desc != "" {
+						fmt.Printf("\n  %s\n  (%s)\n", label, desc)
+					} else {
+						fmt.Printf("\n  %s\n", label)
+					}
+					var val string
+					for {
+						if defaultVal != "" {
+							fmt.Printf("  Valeur [%s] : ", defaultVal)
+						} else {
+							fmt.Printf("  Valeur : ")
 						}
+						var line string
+						if ptype == "secret" {
+							b, err := term.ReadPassword(int(os.Stdin.Fd()))
+							fmt.Println()
+							if err == nil {
+								line = strings.TrimSpace(string(b))
+							}
+						} else {
+							line, _ = r.ReadString('\n')
+							line = strings.TrimSpace(line)
+						}
+						if line == "" {
+							line = defaultVal
+						}
+						if line != "" || !required {
+							val = line
+							break
+						}
+						fmt.Println("  ❌ Ce paramètre est obligatoire.")
+					}
+					if val != "" {
+						apiArgs[paramKey] = val
 					}
 				}
-				val := promptParam(p)
-				for p.Required && val == "" {
-					fmt.Printf("  ⚠  Ce champ est obligatoire.\n")
-					val = promptParam(p)
-				}
-				collectedParams[p.ID] = val
-				apiArgs["param_"+p.ID] = val
 			}
-			fmt.Println()
 		}
 	}
 
@@ -201,74 +246,7 @@ func cmdInstall(args []string) {
 	} else {
 		fmt.Printf("📦 Installation de '%s'...\n", args[0])
 	}
-
-	// Spinner pendant l'installation — peut durer plusieurs minutes
-	// (téléchargement images + démarrage containers + bootstrap inter-services).
-	// Activé uniquement si stdout est un terminal (pas en pipe/SSH sans TTY).
-	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	spinDone := make(chan struct{})
-	go func() {
-		if !isTTY {
-			// Pas de terminal : afficher juste des lignes de progression sans \r
-			stages := []string{
-				"Préparation...",
-				"Téléchargement des images...",
-				"Démarrage des containers...",
-				"Initialisation des services...",
-				"Configuration inter-services...",
-			}
-			for si, stage := range stages {
-				select {
-				case <-spinDone:
-					return
-				case <-time.After(time.Duration(si*20) * time.Second):
-					// ne jamais imprimer après done
-					select {
-					case <-spinDone:
-						return
-					default:
-						fmt.Printf("  → %s\n", stage)
-					}
-				}
-			}
-			<-spinDone
-			return
-		}
-		// Mode terminal : spinner animé avec écrasement de ligne
-		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-		stages := []string{
-			"Préparation",
-			"Téléchargement des images",
-			"Démarrage des containers",
-			"Initialisation des services",
-			"Configuration inter-services",
-		}
-		fi, si := 0, 0
-		stageTick := time.NewTicker(20 * time.Second)
-		spinTick := time.NewTicker(100 * time.Millisecond)
-		defer stageTick.Stop()
-		defer spinTick.Stop()
-		for {
-			select {
-			case <-spinDone:
-				fmt.Print("\r\033[K") // effacer la ligne
-				return
-			case <-stageTick.C:
-				if si < len(stages)-1 {
-					si++
-				}
-			case <-spinTick.C:
-				fmt.Printf("\r  %s %s...", frames[fi%len(frames)], stages[si])
-				fi++
-			}
-		}
-	}()
-
 	resp := callDaemon("install", apiArgs)
-	close(spinDone)
-	if isTTY {
-		time.Sleep(60 * time.Millisecond) // laisser le goroutine effacer la ligne
-	}
 
 	if !resp.Success {
 		die("❌ " + resp.Error)
@@ -380,7 +358,7 @@ func cmdConfigureArrStack() string {
 	vpnEnabled := vpnAnswer == "o" || vpnAnswer == "oui" || vpnAnswer == "y" || vpnAnswer == "yes"
 
 	if !vpnEnabled {
-		updates["COMPOSE_PROFILES"] = "novpn"
+		updates["COMPOSE_PROFILES"] = "novpn,jellyfin"
 		updates["ARR_QBT_HOST"] = "qbittorrent"
 		updates["ARR_VPN_PROVIDER"] = ""
 		updates["ARR_VPN_TYPE"] = ""
@@ -462,7 +440,7 @@ func cmdConfigureArrStack() string {
 		}
 		country := ask("Pays du serveur VPN (Entrée pour ignorer)", "")
 
-		updates["COMPOSE_PROFILES"] = "vpn"
+		updates["COMPOSE_PROFILES"] = "vpn,jellyfin"
 		updates["ARR_QBT_HOST"] = "arr-gluetun"
 		updates["ARR_VPN_PROVIDER"] = provider
 		updates["ARR_VPN_TYPE"] = vpnType
@@ -591,8 +569,8 @@ func cmdLogs(args []string) {
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
-	for i := 1; i < len(args)-1; i++ {
-		if args[i] == "--tail" {
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--tail" && i+1 < len(args) {
 			apiArgs["tail"] = args[i+1]
 			i++
 		}
@@ -1080,11 +1058,35 @@ func cmdStopStart(action string, args []string) {
 
 func cmdBackup(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope backup <app>")
+		die("Usage: caleope backup <app> [--restic --repo <url> [--password <pass>]]")
+	}
+
+	apiArgs := map[string]string{"app": args[0]}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--restic":
+			apiArgs["restic"] = "true"
+		case "--repo":
+			if i+1 < len(args) {
+				apiArgs["repo"] = args[i+1]
+				i++
+			}
+		case "--password":
+			if i+1 < len(args) {
+				apiArgs["restic_password"] = args[i+1]
+				i++
+			}
+		}
+	}
+	// Lire depuis RESTIC_PASSWORD si non fourni via --password
+	if apiArgs["restic"] == "true" && apiArgs["restic_password"] == "" {
+		if p := os.Getenv("RESTIC_PASSWORD"); p != "" {
+			apiArgs["restic_password"] = p
+		}
 	}
 
 	fmt.Printf("💾 Sauvegarde de '%s'...\n", args[0])
-	resp := callDaemon("backup", map[string]string{"app": args[0]})
+	resp := callDaemon("backup", apiArgs)
 	if !resp.Success {
 		die("❌ " + resp.Error)
 	}
@@ -1100,8 +1102,8 @@ func cmdRestore(args []string) {
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
-	for i := 1; i < len(args)-1; i++ {
-		if args[i] == "--backup" {
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--backup" && i+1 < len(args) {
 			apiArgs["backup"] = args[i+1]
 			i++
 		}
@@ -1164,8 +1166,18 @@ func cmdBackupList(args []string) {
 }
 
 func cmdUpdate(args []string) {
-	fmt.Println("🔄 Synchronisation des dépôts...")
-	resp := callDaemon("update", nil)
+	apiArgs := map[string]string{}
+	for _, a := range args {
+		if a == "--alpha" {
+			apiArgs["channel"] = "alpha"
+		}
+	}
+	if apiArgs["channel"] == "alpha" {
+		fmt.Println("🔄 Synchronisation des dépôts (canal alpha)...")
+	} else {
+		fmt.Println("🔄 Synchronisation des dépôts...")
+	}
+	resp := callDaemon("update", apiArgs)
 	if !resp.Success {
 		die("❌ " + resp.Error)
 	}
@@ -1174,6 +1186,7 @@ func cmdUpdate(args []string) {
 
 func cmdUpgrade(args []string) {
 	checkOnly := contains(args, "--check")
+	useAlpha := contains(args, "--alpha")
 
 	if checkOnly {
 		fmt.Println("🔍 Vérification des mises à jour...")
@@ -1185,6 +1198,9 @@ func cmdUpgrade(args []string) {
 	apiArgs := map[string]string{}
 	if checkOnly {
 		apiArgs["check"] = "true"
+	}
+	if useAlpha {
+		apiArgs["channel"] = "alpha"
 	}
 
 	resp := callDaemon("upgrade", apiArgs)
@@ -1280,69 +1296,19 @@ func readPassword() (string, error) {
 	return string(pwd), nil
 }
 
-// fetchStoreParams interroge le daemon pour obtenir les params interactifs d'une app.
-// Retourne nil si l'app n'a pas de params.json ou en cas d'erreur.
-func fetchStoreParams(appID string) []types.ParamDef {
-	resp := callDaemon("store-params", map[string]string{"app": appID})
-	if !resp.Success || resp.Data == nil {
-		return nil
-	}
-	raw, err := json.Marshal(resp.Data)
-	if err != nil {
-		return nil
-	}
-	var params []types.ParamDef
-	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil
-	}
-	return params
-}
-
-// promptParam affiche un prompt interactif pour un param et retourne la valeur saisie.
-func promptParam(p types.ParamDef) string {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		tty = os.Stdin
-	} else {
-		defer tty.Close()
-	}
-
-	if p.Description != "" {
-		fmt.Fprintf(tty, "  \033[2m%s\033[0m\n", p.Description)
-	}
-
-	switch {
-	case p.Default != "":
-		fmt.Fprintf(tty, "  %s [%s] : ", p.Label, p.Default)
-	case p.Required:
-		fmt.Fprintf(tty, "  %s * : ", p.Label)
-	default:
-		fmt.Fprintf(tty, "  %s : ", p.Label)
-	}
-
-	if p.Type == "secret" {
-		exec.Command("stty", "-F", "/dev/tty", "-echo").Run() //nolint
-	}
-
-	reader := bufio.NewReader(tty)
-	val, _ := reader.ReadString('\n')
-	val = strings.TrimRight(val, "\r\n")
-
-	if p.Type == "secret" {
-		exec.Command("stty", "-F", "/dev/tty", "echo").Run() //nolint
-		fmt.Fprintln(tty)
-	}
-
-	if val == "" && p.Default != "" {
-		return p.Default
-	}
-	return val
-}
-
 // callDaemon envoie une requête au daemon et retourne la réponse.
+// Réessaie jusqu'à 10 fois (3 s) si le socket n'est pas encore disponible
+// — absorbe la race condition entre `systemctl restart` et la première commande.
 func callDaemon(command string, args map[string]string) types.APIResponse {
-	// Se connecter au socket UNIX
-	conn, err := net.Dial("unix", SOCKET_PATH)
+	var conn net.Conn
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		conn, err = net.Dial("unix", SOCKET_PATH)
+		if err == nil {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Impossible de contacter le daemon.\n")
 		fmt.Fprintf(os.Stderr, "   Vérifiez que caleoped tourne : systemctl status caleoped\n")
@@ -1383,6 +1349,7 @@ Commandes:
     --domain <dom>  Domaine (optionnel — auto: <app>.<domaine_base>)
     --channel       Canal: stable (défaut), latest, nightly
     --force         Forcer la réinstallation
+    --param K=V     Paramètre d'installation (répétable ; ou via env CALEOPE_PARAM_K=V)
 
   configure <app>   Reconfigurer une application (wizard interactif)
                     Exemples : caleope configure arr-stack (VPN)
@@ -1426,16 +1393,35 @@ Commandes:
   location mount <n>    Monter un emplacement
   location unmount <n>  Démonter un emplacement
 
-  update            Synchroniser les dépôts Git
+  update            Synchroniser les dépôts Git (branche main)
+    --alpha         Synchroniser depuis la branche alpha du store
   upgrade           Mettre à jour Caleope vers la dernière version
     --check         Vérifier sans installer
+    --alpha         Installer la dernière pré-release alpha
   token             Afficher le token d'accès à l'API REST (:8765)
   version           Afficher la version installée
   ping              Vérifier que le daemon est actif
 
+Tâches planifiées :
+  task list                         Lister les tâches planifiées
+  task add <id> --type <type> --at HH:MM [--days j1,j2] [--app <app>] [--scope all|config|data]
+                                    Créer une tâche (type: backup, upgrade, update)
+  task remove <id>                  Supprimer une tâche
+  task run <id>                     Exécuter une tâche immédiatement
+  task enable/disable <id>          Activer ou désactiver une tâche
+
+Mode submarine (installation hors-ligne) :
+  offline-pack <dest>              Créer un bundle dans <dest>/ (binaires + store + images Docker)
+  offline-pack <dest> --no-images  Bundle sans images Docker (binaires + store uniquement)
+  offline-update <bundle>          Appliquer un bundle sur une installation existante
+  Installation offline :           sudo bash install.sh --offline <bundle-path>
+
 Exemples:
   caleope install jellyfin --domain media.home.local
-  caleope install nextcloud --domain cloud.home.local
+  caleope task add backup-nuit --type backup --at 03:00
+  caleope task add backup-configs --type backup --scope config --at 01:00 --days lun,mer,ven
+  caleope task add upgrade-auto --type upgrade --at 01:00 --days dim
+  caleope task list
   caleope list
   caleope remove jellyfin
   caleope search media

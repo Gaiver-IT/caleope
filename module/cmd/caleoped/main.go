@@ -22,9 +22,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/gaiver-it/caleope/internal/api"
+	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
@@ -32,6 +35,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/scheduler"
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 )
@@ -66,21 +70,23 @@ func main() {
 	}
 	fmt.Println("✓ Runtime initialisé")
 
-	// ── Initialisation chiffrement secrets (1er démarrage après install) ──
-	// install.sh écrit le mot de passe dans core/daemon/secrets-init-password
-	// Le daemon lit ce fichier, génère master.enc, puis supprime le fichier.
-	initPassPath := fmt.Sprintf("%s/core/daemon/secrets-init-password", *baseDir)
-	if passBytes, err := os.ReadFile(initPassPath); err == nil {
-		password := string(passBytes)
-		if password != "" {
-			if _, setupErr := secrets.Setup(*baseDir, password); setupErr != nil {
-				fmt.Fprintf(os.Stderr, "⚠️  Chiffrement secrets: %v\n", setupErr)
+	// ── Initialisation du chiffrement des secrets (premier démarrage) ──
+	// install.sh écrit le mot de passe dans core/daemon/secrets-init-password (mode 600).
+	// Le daemon lit ce fichier, initialise le chiffrement, puis le supprime immédiatement.
+	initPasswordFile := filepath.Join(*baseDir, "core", "daemon", "secrets-init-password")
+	if data, err := os.ReadFile(initPasswordFile); err == nil {
+		password := strings.TrimSpace(string(data))
+		_ = os.Remove(initPasswordFile) // supprimer immédiatement
+		if !secrets.IsSetup(*baseDir) && password != "" {
+			if _, err := secrets.Setup(*baseDir, password); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Initialisation chiffrement secrets: %v\n", err)
 			} else {
-				fmt.Println("✓ Chiffrement des secrets initialisé (master.enc créé)")
+				fmt.Println("✓ Chiffrement des secrets initialisé")
+				audit.Log(audit.ActionStartup, "daemon", "secrets-initialized")
 			}
 		}
-		_ = os.Remove(initPassPath) // supprimer immédiatement après lecture
 	}
+	audit.Log(audit.ActionStartup, "daemon", "started")
 
 	st := store.NewStore(*baseDir)
 	dc := docker.NewClient()
@@ -108,6 +114,17 @@ func main() {
 	}()
 
 	server := api.NewServer(*socketPath, rt, st, installer, bkp, dc, col, em, net, *baseDir)
+
+	// Garantir que caleope-ui.service et sa config Traefik sont à jour au démarrage.
+	// Indispensable après un upgrade : c'est le nouvel exécutable qui reécrit la config,
+	// pas l'ancien daemon qui se remplaçait lui-même.
+	server.EnsureUISetup()
+
+	// Planificateur de tâches (backup auto, upgrade, update store)
+	sched := scheduler.New(*baseDir, server)
+	server.SetScheduler(sched)
+	sched.Start()
+	defer sched.Stop()
 
 	// API REST HTTP
 	go func() {

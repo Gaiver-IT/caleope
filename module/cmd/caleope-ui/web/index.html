@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CALEOPE</title>
+  <link rel="icon" href="img/logo.png" type="image/png">
+  <link rel="stylesheet" href="tabler-icons.min.css">
+  <link rel="stylesheet" href="xterm.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── LOGIN ───────────────────────────────────────────────────────────────── -->
+<div id="login-screen" style="display:none">
+  <div class="grid-bg"></div>
+  <div class="login-box">
+
+    <div class="login-logo">
+      <div class="logo-mark logo-img-wrap">
+        <img src="/ui/logo" class="logo-img" alt="Caleope" id="logo-img-$" onerror="this.style.opacity=0">
+      </div>
+      <div>
+        <div class="logo-name">CALEOPE</div>
+        <div class="logo-ver">CLIENT V0.5.1</div>
+      </div>
+    </div>
+
+    <div class="panel-label">// SERVEURS ENREGISTRÉS</div>
+    <div class="servers-panel">
+      <div class="srv-row selected" id="srv-local">
+        <div class="srv-dot dot-ok"></div>
+        <div class="srv-info">
+          <div class="srv-name" id="srv-host">CE SERVEUR</div>
+          <div class="srv-meta" id="srv-meta">Connexion locale — socket /run/caleoped.sock</div>
+        </div>
+        <div class="srv-badges">
+          <span class="badge badge-ok">EN LIGNE</span>
+        </div>
+        <div class="srv-check"><i class="ti ti-check" aria-hidden="true"></i></div>
+      </div>
+    </div>
+
+    <div class="divider">AUTHENTIFICATION</div>
+
+    <form id="login-form">
+      <div class="fields">
+        <div class="field full">
+          <div class="field-label">MOT DE PASSE UI</div>
+          <input class="field-input" id="login-pw" type="password"
+            placeholder="Mot de passe de l'interface" autocomplete="current-password" required>
+        </div>
+      </div>
+      <div class="login-error" id="login-error"></div>
+      <div class="login-actions">
+        <button type="submit" class="btn btn-vio" id="login-btn">
+          <i class="ti ti-arrow-right"></i>CONNECTER
+        </button>
+      </div>
+    </form>
+
+    <div class="status-bar">
+      <i class="ti ti-shield-check" aria-hidden="true"></i>
+      SESSION COOKIE · HTTPONLY · SAMESITE STRICT · 24H
+    </div>
+  </div>
+</div>
+
+<!-- ── APP ─────────────────────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" role="navigation" aria-label="Navigation principale">
+    <div class="sb-logo" style="cursor:pointer" onclick="goSection('dashboard')" title="Tableau de bord">
+      <div class="logo-mark logo-img-wrap" style="width:28px;height:28px">
+        <img src="/ui/logo" class="logo-img" alt="Caleope" id="logo-img-$" onerror="this.style.opacity=0">
+      </div>
+      <div>
+        <div class="logo-name">CALEOPE</div>
+        <div class="logo-ver" id="sb-version">V—</div>
+      </div>
+    </div>
+
+    <div class="sb-nav">
+      <button class="nav-btn" data-section="dashboard" onclick="goSection('dashboard')">
+        <i class="ti ti-layout-dashboard" aria-hidden="true"></i>TABLEAU DE BORD
+      </button>
+      <div class="sb-group">// APPS</div>
+      <button class="nav-btn" data-section="apps" onclick="goSection('apps')">
+        <i class="ti ti-layout-grid" aria-hidden="true"></i>APPLICATIONS
+      </button>
+      <button class="nav-btn" data-section="logs" onclick="goSection('logs')">
+        <i class="ti ti-terminal-2" aria-hidden="true"></i>LOGS
+      </button>
+      <button class="nav-btn" data-section="backups" onclick="goSection('backups')">
+        <i class="ti ti-archive" aria-hidden="true"></i>SAUVEGARDES
+      </button>
+
+      <!-- Sections injectées dynamiquement selon les apps installées -->
+      <div id="sb-integrations"></div>
+
+      <div class="sb-group">// SERVEUR</div>
+      <button class="nav-btn" data-section="terminal" onclick="goSection('terminal')">
+        <i class="ti ti-terminal-2" aria-hidden="true"></i>TERMINAL
+      </button>
+      <button class="nav-btn" data-section="services" onclick="goSection('services')">
+        <i class="ti ti-list-check" aria-hidden="true"></i>SERVICES
+      </button>
+      <button class="nav-btn" data-section="network" onclick="goSection('network')">
+        <i class="ti ti-wifi" aria-hidden="true"></i>RÉSEAU
+      </button>
+      <button class="nav-btn" data-section="storage" onclick="goSection('storage')">
+        <i class="ti ti-database" aria-hidden="true"></i>STOCKAGE
+      </button>
+      <button class="nav-btn" data-section="journal" onclick="goSection('journal')">
+        <i class="ti ti-file-text" aria-hidden="true"></i>JOURNAL
+      </button>
+
+      <div class="sb-group">// SYSTÈME</div>
+      <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
+        <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
+      </button>
+      <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
+        <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
+      </button>
+      <button class="nav-btn" data-section="audit" onclick="goSection('audit')">
+        <i class="ti ti-clipboard-list" aria-hidden="true"></i>AUDIT
+      </button>
+      <button class="nav-btn" data-section="stats" onclick="goSection('stats')">
+        <i class="ti ti-chart-bar" aria-hidden="true"></i>SYSTÈME
+      </button>
+      <button class="nav-btn" data-section="settings" onclick="goSection('settings')">
+        <i class="ti ti-settings" aria-hidden="true"></i>PARAMÈTRES
+      </button>
+    </div>
+
+    <div class="sb-foot">
+      <div class="srv-chip" onclick="goSection('stats')" title="Voir les ressources système">
+        <div class="chip-pulse"></div>
+        <div>
+          <div class="chip-host" id="chip-host">—</div>
+          <div class="chip-ip" id="chip-ip">—</div>
+        </div>
+        <i class="ti ti-chevron-right" style="font-size:11px;color:var(--text3);margin-left:auto" aria-hidden="true"></i>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="topbar">
+      <div class="tb-left">
+        <span id="tb-section" class="tb-section">/01</span>
+        <span class="tb-sep">—</span>
+        <span id="tb-title" class="tb-title">APPLICATIONS</span>
+      </div>
+      <div class="tb-right">
+        <span class="sys-clock" id="clock">--:--:--</span>
+        <button class="btn" id="refresh-btn" onclick="refreshSection()" title="Actualiser la section courante">
+          <i class="ti ti-refresh"></i>
+        </button>
+        <button class="btn btn-vio" id="tb-primary-btn" onclick="openInstallModal(S.catalog[0]?.id)">
+          <i class="ti ti-plus"></i>INSTALLER
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- DASHBOARD -->
+      <div id="content-dashboard" class="section-content hidden" role="main"></div>
+
+      <!-- APPS -->
+      <div id="content-apps" class="section-content hidden" role="main"></div>
+
+      <!-- LOGS -->
+      <div id="content-logs" class="section-content hidden">
+        <div class="log-wrap">
+          <div class="log-toolbar">
+            <select class="log-select" id="log-select" onchange="changeLogApp()"></select>
+            <span id="log-live-badge" class="badge badge-ok" style="display:none;font-size:8px;animation:pulse 1.5s infinite">
+              <i class="ti ti-radio" style="font-size:9px"></i>&nbsp;LIVE
+            </span>
+            <button class="btn-sm" style="margin-left:auto" onclick="loadLogs()">
+              <i class="ti ti-refresh"></i>REFRESH
+            </button>
+          </div>
+          <div class="log-body" id="log-body"></div>
+        </div>
+      </div>
+
+      <!-- TASKS -->
+      <div id="content-tasks" class="section-content hidden"></div>
+
+      <!-- BACKUPS -->
+      <div id="content-backups" class="section-content hidden"></div>
+
+      <!-- SECRETS -->
+      <div id="content-secrets" class="section-content hidden"></div>
+
+      <!-- LOCATIONS -->
+      <div id="content-locations" class="section-content hidden"></div>
+
+      <!-- AUDIT -->
+      <div id="content-audit" class="section-content hidden"></div>
+
+      <!-- STATS -->
+      <div id="content-stats" class="section-content hidden"></div>
+
+      <!-- SETTINGS -->
+      <div id="content-settings" class="section-content hidden"></div>
+
+      <!-- TERMINAL -->
+      <div id="content-terminal" class="section-content hidden">
+        <div class="term-wrap">
+          <div id="xterm-container"></div>
+        </div>
+      </div>
+
+      <!-- SERVICES -->
+      <div id="content-services" class="section-content hidden"></div>
+
+      <!-- NETWORK -->
+      <div id="content-network" class="section-content hidden"></div>
+
+      <!-- STORAGE -->
+      <div id="content-storage" class="section-content hidden"></div>
+
+      <!-- JOURNAL -->
+      <div id="content-journal" class="section-content hidden">
+        <div class="journal-wrap">
+          <div class="journal-toolbar">
+            <select class="log-select" id="journal-unit-select" onchange="loadJournal()">
+              <option value="all">— Toutes les unités —</option>
+            </select>
+            <button class="btn-sm" style="margin-left:auto" onclick="loadJournal()">
+              <i class="ti ti-refresh"></i>REFRESH
+            </button>
+          </div>
+          <div class="log-body" id="journal-body"></div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ── MODAL INSTALL ────────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="install-modal" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-title">
+      INSTALLER — <span id="modal-app-name"></span>
+      <button class="modal-close" onclick="document.getElementById('install-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="modal-params" id="modal-params"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('install-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="confirmInstall()"><i class="ti ti-download"></i>INSTALLER</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL BACKUP ──────────────────────────────────────────────────────────── -->
+<!-- ── MODAL TASK ──────────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="task-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-title">NOUVELLE TÂCHE PLANIFIÉE</span>
+      <button class="modal-close" onclick="closeTaskModal()" aria-label="Fermer"><i class="ti ti-x"></i></button>
+    </div>
+    <form id="task-form" onsubmit="event.preventDefault(); submitTaskForm()">
+      <div class="modal-body">
+
+        <div class="field full">
+          <div class="field-label">TYPE</div>
+          <select class="field-input" id="task-type" onchange="onTaskTypeChange()">
+            <option value="backup">Sauvegarde automatique</option>
+            <option value="upgrade">Mise à jour Caleope</option>
+            <option value="update">Synchronisation du store</option>
+          </select>
+        </div>
+
+        <div class="field full" id="task-app-row">
+          <div class="field-label">APPLICATION <span style="color:var(--text3)">(vide = toutes)</span></div>
+          <input class="field-input" id="task-app" type="text" placeholder="jellyfin, nextcloud… ou vide pour toutes">
+        </div>
+
+        <div class="field full" id="task-scope-row">
+          <div class="field-label">PÉRIMÈTRE</div>
+          <select class="field-input" id="task-scope">
+            <option value="all">Tout (data + config)</option>
+            <option value="config">Config uniquement</option>
+            <option value="data">Data uniquement</option>
+          </select>
+        </div>
+
+        <div class="field full">
+          <div class="field-label">HEURE D'EXÉCUTION</div>
+          <input class="field-input" id="task-time" type="time" value="02:00">
+        </div>
+
+        <div class="field full">
+          <div class="field-label">JOURS <span style="color:var(--text3)">(aucun = chaque jour)</span></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="0" style="accent-color:var(--accent)"> Dim</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="1" style="accent-color:var(--accent)"> Lun</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="2" style="accent-color:var(--accent)"> Mar</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="3" style="accent-color:var(--accent)"> Mer</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="4" style="accent-color:var(--accent)"> Jeu</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="5" style="accent-color:var(--accent)"> Ven</label>
+            <label style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text2);cursor:pointer"><input type="checkbox" class="task-day-cb" value="6" style="accent-color:var(--accent)"> Sam</label>
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeTaskModal()">ANNULER</button>
+        <button type="submit" class="btn btn-vio"><i class="ti ti-plus"></i>CRÉER</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-overlay" id="backup-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-title">
+      SAUVEGARDER UNE APPLICATION
+      <button class="modal-close" onclick="document.getElementById('backup-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="field full">
+        <div class="field-label">APPLICATION *</div>
+        <select class="field-input" id="backup-modal-app"></select>
+      </div>
+      <div class="secret-alert" style="font-size:9px">
+        <i class="ti ti-info-circle" style="font-size:12px;flex-shrink:0"></i>
+        L'application reste disponible pendant la sauvegarde. Les données sont archivées dans le répertoire de sauvegarde Caleope.
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('backup-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="confirmBackupModal()"><i class="ti ti-device-floppy"></i>SAUVEGARDER</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL LOCATION ────────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="location-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:500px">
+    <div class="modal-title">
+      AJOUTER UN EMPLACEMENT RÉSEAU
+      <button class="modal-close" onclick="document.getElementById('location-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="fields" style="grid-template-columns:1fr 1fr">
+        <div class="field">
+          <div class="field-label">NOM *</div>
+          <input class="field-input" id="loc-name" placeholder="nas-media" autocomplete="off"
+            oninput="autoMountPoint()" />
+        </div>
+        <div class="field">
+          <div class="field-label">TYPE *</div>
+          <select class="field-input" id="loc-type" onchange="updateLocTypeFields()">
+            <option value="nfs">NFS</option>
+            <option value="smb">SMB / CIFS</option>
+          </select>
+        </div>
+      </div>
+      <div class="field full">
+        <div class="field-label">HÔTE *</div>
+        <input class="field-input" id="loc-host" placeholder="192.168.1.100" autocomplete="off" />
+      </div>
+      <div class="field full">
+        <div class="field-label">CHEMIN DISTANT *</div>
+        <input class="field-input" id="loc-path" placeholder="/volume1/media  ou  \\server\share" autocomplete="off" />
+      </div>
+      <!-- Identifiants SMB (affichés seulement si type=smb) -->
+      <div id="loc-smb-creds" style="display:none;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field">
+          <div class="field-label">IDENTIFIANT SMB *</div>
+          <input class="field-input" id="loc-user" placeholder="utilisateur" autocomplete="off" />
+        </div>
+        <div class="field">
+          <div class="field-label">MOT DE PASSE SMB</div>
+          <input class="field-input" id="loc-pass" type="password" placeholder="••••••" autocomplete="new-password" />
+        </div>
+      </div>
+      <div class="field full">
+        <div class="field-label">POINT DE MONTAGE LOCAL</div>
+        <input class="field-input" id="loc-mount" placeholder="/mnt/nas-media" autocomplete="off"
+          oninput="this._userEdited=true" />
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">Proposé automatiquement aux apps qui ont besoin de stockage réseau</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('location-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="saveLocation()"><i class="ti ti-plus"></i>AJOUTER</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL DISQUE LOCAL ────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="disk-mount-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">
+      MONTER UN DISQUE LOCAL
+      <button class="modal-close" onclick="document.getElementById('disk-mount-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="secret-alert" style="font-size:9px">
+        <i class="ti ti-info-circle" style="font-size:12px;flex-shrink:0"></i>
+        <span id="disk-mount-label">Périphérique sélectionné</span>
+      </div>
+      <input type="hidden" id="disk-mount-device">
+      <div class="field full">
+        <div class="field-label">NOM DE L'EMPLACEMENT *</div>
+        <input class="field-input" id="disk-mount-name" placeholder="backup-usb" autocomplete="off"
+          onkeydown="if(event.key==='Enter') confirmDiskMount()">
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">
+          Utilisé avec <code style="color:var(--blue)">caleope install &lt;app&gt; --storage &lt;nom&gt;</code>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('disk-mount-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="confirmDiskMount()"><i class="ti ti-plug-connected"></i>MONTER</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── NOTIFICATIONS ────────────────────────────────────────────────────────── -->
+<div class="notif-stack" id="notif-stack" aria-live="polite"></div>
+
+<script src="xterm.js"></script>
+<script src="app.js"></script>
+<script>
+// Helpers exposés globalement depuis main.go
+function loadCurrentSection() { if (SECTIONS[S.section]?.load) SECTIONS[S.section].load(); }
+
+// Récup infos daemon pour sidebar dès auth OK
+async function updateSidebarInfo() {
+  const resp = await api.get('/api/v1/ping');
+  if (!resp) return;
+  // L'API enveloppe la réponse dans {data: {...}, success: true}
+  const d = resp.data ?? resp;
+  const host = d.domain?.split('.')[0]?.toUpperCase() || 'CALEOPE';
+  document.getElementById('chip-host').textContent = host;
+  document.getElementById('chip-ip').textContent   = d.version ? 'v' + d.version : '—';
+  document.getElementById('sb-version').textContent = d.version ? 'V' + d.version.toUpperCase() : 'V—';
+}
+
+const _showApp = showApp;
+window.showApp = function() {
+  _showApp();
+  updateSidebarInfo();
+};
+</script>
+</body>
+</html>

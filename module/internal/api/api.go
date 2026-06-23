@@ -20,14 +20,11 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
@@ -37,6 +34,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
+	"github.com/gaiver-it/caleope/internal/scheduler"
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/pkg/types"
@@ -45,28 +43,6 @@ import (
 
 // SOCKET_PATH est le chemin du fichier socket UNIX.
 const SOCKET_PATH = "/run/caleoped.sock"
-
-// installSession capture les logs d'une installation asynchrone.
-type installSession struct {
-	mu      sync.Mutex
-	lines   []string
-	done    bool
-	err     error
-	notes   string
-	appID   string
-	startAt time.Time
-}
-
-// Write implémente io.Writer — chaque écriture ajoute des lignes à la session.
-func (s *installSession) Write(p []byte) (n int, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	text := strings.TrimRight(string(p), "\n")
-	for _, line := range strings.Split(text, "\n") {
-		s.lines = append(s.lines, line)
-	}
-	return len(p), nil
-}
 
 // Server est le serveur API du daemon.
 type Server struct {
@@ -79,10 +55,9 @@ type Server struct {
 	col        *metrics.Collector
 	emitter    *events.Emitter
 	net        *network.Manager
+	sched      *scheduler.Scheduler
 	baseDir    string
 	token      string
-	sessmu     sync.RWMutex
-	sessions   map[string]*installSession
 }
 
 func NewServer(
@@ -97,7 +72,7 @@ func NewServer(
 	net *network.Manager,
 	baseDir string,
 ) *Server {
-	return &Server{
+	s := &Server{
 		socketPath: socketPath,
 		rt:         rt,
 		st:         st,
@@ -109,8 +84,41 @@ func NewServer(
 		net:        net,
 		baseDir:    baseDir,
 		token:      loadOrCreateToken(baseDir),
-		sessions:   make(map[string]*installSession),
 	}
+	// Le scheduler est injecté après construction (le daemon appelle scheduler.New(baseDir, server))
+	return s
+}
+
+// SetScheduler injecte le scheduler dans le server (appelé par le daemon après construction).
+func (s *Server) SetScheduler(sched *scheduler.Scheduler) {
+	s.sched = sched
+}
+
+// ── Implémentation de scheduler.Runner ────────────────────────────────────────
+
+func (s *Server) RunBackup(app string, scope types.BackupScope) error {
+	if app == "" {
+		_, errs := s.bkp.BackupAll(scope)
+		if len(errs) > 0 {
+			msgs := make([]string, len(errs))
+			for i, e := range errs {
+				msgs[i] = e.Error()
+			}
+			return fmt.Errorf("%d erreur(s): %s", len(errs), strings.Join(msgs, "; "))
+		}
+		return nil
+	}
+	_, err := s.bkp.BackupWithScope(app, scope)
+	return err
+}
+
+func (s *Server) RunUpgrade() error {
+	_, err := s.handleUpgrade(map[string]string{})
+	return err
+}
+
+func (s *Server) RunUpdate() error {
+	return s.handleUpdate(map[string]string{})
 }
 
 // ─────────────────────────────────────────────
@@ -223,8 +231,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleLocationUnmount(req.Args)
 	case "location-storage":
 		data, err = s.handleLocationStorage(req.Args)
-	case "install-status":
-		data, err = s.handleInstallStatus(req.Args)
+	case "task-list":
+		data, err = s.handleTaskList()
+	case "task-add":
+		data, err = s.handleTaskAdd(req.Args)
+	case "task-remove":
+		err = s.handleTaskRemove(req.Args)
+	case "task-run":
+		err = s.handleTaskRun(req.Args)
+	case "task-toggle":
+		err = s.handleTaskToggle(req.Args)
 	case "configure":
 		data, err = s.handleConfigure(req.Args)
 	case "ping":
@@ -309,7 +325,6 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	opts := install.InstallOptions{
 		AppID:  appID,
 		Domain: domain,
-		Force:  args["force"] == "true",
 		Channel: func() string {
 			if c := args["channel"]; c != "" {
 				return c
@@ -317,49 +332,14 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 			return "stable"
 		}(),
 		Params: params,
-		Async:  args["async"] == "true",
+		Force:  args["force"] == "true",
+		GPU:    args["gpu"] == "true",
 	}
 
 	// Stockage NAS : résoudre le chemin de données avant l'installation
 	if storageLocation := args["storage"]; storageLocation != "" {
 		opts.StorageLocation = storageLocation
 		opts.StorageDataDir = s.net.AppDataDir(storageLocation, appID)
-	}
-
-	// Mode asynchrone : lancer l'installation en arrière-plan et retourner immédiatement
-	if opts.Async {
-		sessionID := fmt.Sprintf("%s-%d", appID, time.Now().UnixMilli())
-		session := &installSession{
-			appID:   appID,
-			startAt: time.Now(),
-		}
-		s.sessmu.Lock()
-		s.sessions[sessionID] = session
-		s.sessmu.Unlock()
-
-		multiWriter := io.MultiWriter(os.Stdout, session)
-		installer := s.installer.WithWriter(multiWriter)
-
-		go func() {
-			installErr := installer.Install(opts)
-			session.mu.Lock()
-			defer session.mu.Unlock()
-			session.done = true
-			session.err = installErr
-			// Lire post-install.txt si l'installation a réussi
-			if installErr == nil {
-				notesPath := filepath.Join(s.baseDir, "app-config", appID, "post-install.txt")
-				if notes, readErr := os.ReadFile(notesPath); readErr == nil {
-					session.notes = string(notes)
-				}
-			}
-		}()
-
-		return map[string]string{
-			"session_id": sessionID,
-			"status":     "started",
-			"app":        appID,
-		}, nil
 	}
 
 	if err := s.installer.Install(opts); err != nil {
@@ -374,40 +354,6 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	}
 
 	return nil, nil
-}
-
-func (s *Server) handleInstallStatus(args map[string]string) (interface{}, error) {
-	sessionID := args["session"]
-	if sessionID == "" {
-		return nil, fmt.Errorf("argument 'session' manquant")
-	}
-	s.sessmu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.sessmu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("session '%s' introuvable", sessionID)
-	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	status := "running"
-	errMsg := ""
-	if session.done {
-		if session.err != nil {
-			status = "error"
-			errMsg = session.err.Error()
-		} else {
-			status = "done"
-		}
-	}
-	return types.InstallSessionStatus{
-		SessionID: sessionID,
-		AppID:     session.appID,
-		Status:    status,
-		Lines:     append([]string{}, session.lines...),
-		Error:     errMsg,
-		Notes:     session.notes,
-		StartAt:   session.startAt,
-	}, nil
 }
 
 // handleStoreParams retourne la liste des params interactifs d'une app (params.json).
@@ -595,6 +541,22 @@ func (s *Server) handleBackup(args map[string]string) (interface{}, error) {
 		return nil, fmt.Errorf("argument 'app' manquant")
 	}
 
+	// Backend Restic si demandé
+	if args["restic"] == "true" {
+		repo := args["repo"]
+		if repo == "" {
+			return nil, fmt.Errorf("--repo requis avec --restic (ex: sftp:user@host:/path)")
+		}
+		repoURL, err := s.bkp.ResticBackup(appID, repo, args["restic_password"])
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"repo":    repoURL,
+			"message": fmt.Sprintf("Backup Restic de '%s' → %s", appID, repoURL),
+		}, nil
+	}
+
 	backupDir, err := s.bkp.Backup(appID)
 	if err != nil {
 		return nil, err
@@ -624,15 +586,46 @@ func (s *Server) handleBackupList(args map[string]string) (interface{}, error) {
 	return s.bkp.ListBackups(appID)
 }
 
+func (s *Server) handleBackupDelete(args map[string]string) error {
+	appID := args["app"]
+	dir := args["dir"]
+	if appID == "" || dir == "" {
+		return fmt.Errorf("arguments 'app' et 'dir' requis")
+	}
+	return s.bkp.DeleteBackup(appID, dir)
+}
+
 func (s *Server) handleUpdate(args map[string]string) error {
 	repos, err := s.rt.GetRepos()
 	if err != nil {
 		return err
 	}
+
+	// Si channel=alpha est explicitement demandé, forcer la branche alpha sur tous les repos officiels.
+	// Sinon lire le canal depuis caleope.conf pour les repos sans branche explicite.
+	channel := ""
+	if args != nil {
+		channel = args["channel"]
+	}
+	if channel == "" {
+		if cfg, err := s.rt.GetConfig(); err == nil {
+			channel = cfg.Channel
+		}
+	}
+
 	var syncErr error
 	for i := range repos {
-		if err := s.st.SyncRepo(&repos[i]); err != nil {
-			fmt.Printf("⚠️  Erreur sync repo %s: %v\n", repos[i].Name, err)
+		r := &repos[i]
+		if r.Branch == "" {
+			switch channel {
+			case "alpha":
+				r.Branch = "alpha"
+			default:
+				r.Branch = "main"
+			}
+		}
+		if err := s.st.SyncRepo(r); err != nil {
+			fmt.Printf("⚠️  Erreur sync repo %s: %v\n", r.Name, err)
 			syncErr = err
 		}
 	}
@@ -669,13 +662,20 @@ func (s *Server) handleLocationAdd(args map[string]string) (interface{}, error) 
 	}
 	locType := types.NetworkLocationType(args["type"])
 	if locType == "" {
-		return nil, fmt.Errorf("argument 'type' manquant (smb, cifs, sftp)")
+		return nil, fmt.Errorf("argument 'type' manquant (smb, cifs, sftp, local)")
+	}
+
+	// Pour le type local, le champ "device" indique le périphérique (/dev/sdb1).
+	// On le stocke dans Host pour réutiliser la structure NetworkLocation.
+	host := args["host"]
+	if locType == types.LocationLocal && args["device"] != "" {
+		host = args["device"]
 	}
 
 	loc := types.NetworkLocation{
 		Name:     name,
 		Type:     locType,
-		Host:     args["host"],
+		Host:     host,
 		Share:    args["share"],
 		Username: args["username"],
 		Options:  args["options"],
@@ -895,19 +895,22 @@ func isClosedError(err error) bool {
 }
 
 func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
-	// Déterminer le canal (stable ou alpha) depuis caleope.conf
-	cfg, _ := s.rt.GetConfig()
-	channel := cfg.Channel
+	// Canal : arg explicite > caleope.conf > stable
+	channel := args["channel"]
+	if channel == "" {
+		cfg, _ := s.rt.GetConfig()
+		channel = cfg.Channel
+	}
 	if channel == "" {
 		channel = "stable"
 	}
 
 	// Choisir l'endpoint GitHub selon le canal
 	// stable → /releases/latest (ignore les pré-releases)
-	// alpha  → /releases?per_page=1 (inclut les pré-releases, plus récent en premier)
+	// alpha  → /releases?per_page=20, filtré sur prerelease:true
 	var apiURL string
 	if channel == "alpha" {
-		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases?per_page=1"
+		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases?per_page=20"
 	} else {
 		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases/latest"
 	}
@@ -920,14 +923,31 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	// Parser le JSON de la release (format différent selon le canal)
 	type releaseInfo struct {
-		TagName string `json:"tag_name"`
-		HTMLURL string `json:"html_url"`
+		TagName    string `json:"tag_name"`
+		HTMLURL    string `json:"html_url"`
+		Prerelease bool   `json:"prerelease"`
 	}
 	var release releaseInfo
 	if channel == "alpha" {
 		var releases []releaseInfo
-		if err := json.Unmarshal(out, &releases); err != nil || len(releases) == 0 {
+		if err := json.Unmarshal(out, &releases); err != nil {
 			return nil, fmt.Errorf("réponse GitHub invalide (canal alpha): %w", err)
+		}
+		// Prendre uniquement la première pre-release — évite de rétrogader vers une release stable
+		found := false
+		for _, r := range releases {
+			if r.Prerelease {
+				release = r
+				found = true
+				break
+			}
+		}
+		if !found {
+			return map[string]string{
+				"status":  "up_to_date",
+				"version": version.Version,
+				"message": "Aucune pré-release alpha disponible sur GitHub",
+			}, nil
 		}
 		release = releases[0]
 	} else {
@@ -967,6 +987,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	for _, bin := range []struct{ name, dest string }{
 		{"caleoped-linux-amd64", "/usr/local/bin/caleoped.new"},
 		{"caleope-linux-amd64", "/usr/local/bin/caleope.new"},
+		{"caleope-ui-linux-amd64", "/usr/local/bin/caleope-ui.new"},
 	} {
 		dlCmd := exec.Command("curl", "-fsSL",
 			fmt.Sprintf("%s/%s", baseURL, bin.name),
@@ -985,6 +1006,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	for _, pair := range []struct{ src, dst string }{
 		{"/usr/local/bin/caleoped.new", "/usr/local/bin/caleoped"},
 		{"/usr/local/bin/caleope.new", "/usr/local/bin/caleope"},
+		{"/usr/local/bin/caleope-ui.new", "/usr/local/bin/caleope-ui"},
 	} {
 		if err := exec.Command("mv", "-f", pair.src, pair.dst).Run(); err != nil {
 			return nil, fmt.Errorf("remplacement %s: %w", pair.dst, err)
@@ -993,6 +1015,9 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	// Symlink de compatibilité : caleope-store → caleope
 	_ = exec.Command("ln", "-sf", "/usr/local/bin/caleope", "/usr/local/bin/caleope-store").Run()
+
+	// S'assurer que caleope-ui.service et sa config Traefik sont en place
+	s.EnsureUISetup()
 
 	// Mettre à jour caleope.conf
 	confPath := fmt.Sprintf("%s/caleope.conf", s.baseDir)
@@ -1014,13 +1039,20 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		fmt.Println("✅ Dépôts synchronisés")
 	}
 
+	// Installer les composants essentiels s'ils sont absents.
+	// Ces apps font partie de l'infrastructure Caleope et doivent être présentes
+	// sur toute installation complète.
+	s.ensureCoreApps()
+
 	fmt.Println("→ Redémarrage du daemon dans 2 secondes...")
 
-	// Redémarrer le daemon via systemd (en arrière-plan)
-	go func() {
-		time.Sleep(2 * time.Second)
-		_ = exec.Command("systemctl", "restart", "caleoped").Run()
-	}()
+	// Redémarrer via un script shell indépendant de ce processus.
+	// On ne peut pas faire les deux restarts dans une goroutine : quand
+	// "systemctl restart caleoped" s'exécute, il tue ce processus et la
+	// goroutine meurt avec lui — caleope-ui ne serait jamais redémarré.
+	_ = exec.Command("bash", "-c",
+		"sleep 2 && systemctl restart caleope-ui && systemctl restart caleoped",
+	).Start()
 
 	return map[string]string{
 		"status":  "upgraded",
@@ -1031,12 +1063,124 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 }
 
 // ─────────────────────────────────────────────
-// SECRETS
+// SECRETS — liste et déverrouillage HTTP
 // ─────────────────────────────────────────────
 
+// handleSecretsList retourne les métadonnées (sans valeurs) de toutes les apps qui ont des secrets.
+func (s *Server) handleSecretsList() (interface{}, error) {
+	apps, err := s.rt.ListApps()
+	if err != nil {
+		return nil, err
+	}
+	type appSecretInfo struct {
+		AppID     string `json:"app_id"`
+		AppName   string `json:"app_name"`
+		KeyCount  int    `json:"key_count"`
+		Encrypted bool   `json:"encrypted"`
+	}
+	var result []appSecretInfo
+	enc := secrets.IsSetup(s.baseDir)
+	for _, app := range apps {
+		configDir := filepath.Join(s.baseDir, "app-config", app.ID)
+		data, err := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+		if err != nil {
+			continue
+		}
+		count := 0
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") && strings.Contains(line, "=") {
+				count++
+			}
+		}
+		if count > 0 {
+			result = append(result, appSecretInfo{
+				AppID:    app.ID,
+				AppName:  app.Name,
+				KeyCount: count,
+				Encrypted: enc,
+			})
+		}
+	}
+	if result == nil {
+		result = []appSecretInfo{}
+	}
+	return result, nil
+}
+
+// handleSecretsReveal déchiffre et retourne les secrets d'une ou toutes les apps.
+// args["app"] peut être vide (toutes les apps) ou préciser une app.
+// args["password"] est obligatoire.
+func (s *Server) handleSecretsReveal(args map[string]string) (interface{}, error) {
+	password := args["password"]
+	if password == "" {
+		return nil, fmt.Errorf("argument 'password' manquant")
+	}
+
+	var dek []byte
+	var unlockErr error
+	if secrets.IsSetup(s.baseDir) {
+		dek, unlockErr = secrets.UnlockDEK(s.baseDir, password)
+		if unlockErr != nil {
+			audit.Log(audit.ActionSecretsShow, args["app"], "DENIED:wrong-password")
+			return nil, fmt.Errorf("mot de passe incorrect")
+		}
+	}
+
+	apps, err := s.rt.ListApps()
+	if err != nil {
+		return nil, err
+	}
+
+	type appSecrets struct {
+		AppID   string            `json:"app_id"`
+		AppName string            `json:"app_name"`
+		Vars    map[string]string `json:"vars"`
+	}
+	var result []appSecrets
+
+	for _, app := range apps {
+		// Si une app spécifique est demandée, ignorer les autres
+		if target := args["app"]; target != "" && target != app.ID {
+			continue
+		}
+		configDir := filepath.Join(s.baseDir, "app-config", app.ID)
+		var plaintext string
+		if secrets.IsSetup(s.baseDir) {
+			plaintext, err = secrets.ShowSecrets(configDir, dek)
+			if err != nil {
+				continue
+			}
+		} else {
+			data, readErr := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+			if readErr != nil {
+				continue
+			}
+			plaintext = string(data)
+		}
+		vars := map[string]string{}
+		for _, line := range strings.Split(plaintext, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+				vars[parts[0]] = parts[1]
+			}
+		}
+		if len(vars) > 0 {
+			result = append(result, appSecrets{AppID: app.ID, AppName: app.Name, Vars: vars})
+			audit.Log(audit.ActionSecretsShow, app.ID, "OK:http")
+		}
+	}
+	if result == nil {
+		result = []appSecrets{}
+	}
+	return result, nil
+}
+
 // handleSecretsShow déchiffre et retourne les secrets d'une app.
-// args["app"] = identifiant de l'app
-// args["password"] = mot de passe pour déchiffrer (transmis en clair sur le socket local)
+// Le mot de passe est demandé à chaque appel (pas de cache de session).
 func (s *Server) handleSecretsShow(args map[string]string) (interface{}, error) {
 	appID := args["app"]
 	if appID == "" {
@@ -1047,48 +1191,279 @@ func (s *Server) handleSecretsShow(args map[string]string) (interface{}, error) 
 		return nil, fmt.Errorf("argument 'password' manquant")
 	}
 
+	if !secrets.IsSetup(s.baseDir) {
+		// Pas de chiffrement configuré : lire secrets.env directement
+		configDir := filepath.Join(s.baseDir, "app-config", appID)
+		plain, err := os.ReadFile(filepath.Join(configDir, "secrets.env"))
+		if err != nil {
+			return nil, fmt.Errorf("secrets.env introuvable pour '%s'", appID)
+		}
+		audit.Log(audit.ActionSecretsShow, appID, "OK:no-encryption")
+		return map[string]string{"secrets": string(plain), "encrypted": "false"}, nil
+	}
+
+	dek, err := secrets.UnlockDEK(s.baseDir, password)
+	if err != nil {
+		audit.Log(audit.ActionSecretsShow, appID, "DENIED:wrong-password")
+		return nil, fmt.Errorf("mot de passe incorrect")
+	}
+
 	configDir := filepath.Join(s.baseDir, "app-config", appID)
-	if _, err := os.Stat(configDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("application '%s' introuvable ou non installée", appID)
+	plaintext, err := secrets.ShowSecrets(configDir, dek)
+	if err != nil {
+		return nil, fmt.Errorf("déchiffrement secrets '%s': %w", appID, err)
 	}
 
-	var content string
-	if secrets.IsSetup(s.baseDir) {
-		dek, err := secrets.UnlockDEK(s.baseDir, password)
-		if err != nil {
-			audit.Log(audit.ActionSecrets, appID, "ERREUR: "+err.Error())
-			return nil, err
-		}
-		var showErr error
-		content, showErr = secrets.ShowSecrets(configDir, dek)
-		if showErr != nil {
-			return nil, showErr
-		}
-	} else {
-		// Chiffrement non configuré → lire secrets.env directement (root-only 0600)
-		raw, err := os.ReadFile(filepath.Join(configDir, "secrets.env"))
-		if err != nil {
-			return nil, fmt.Errorf("aucun secret trouvé pour '%s'", appID)
-		}
-		content = string(raw)
-	}
-
-	audit.Log(audit.ActionSecrets, appID, "OK")
-	return map[string]string{"app": appID, "secrets": content}, nil
+	audit.Log(audit.ActionSecretsShow, appID, "OK")
+	return map[string]string{"secrets": plaintext, "encrypted": "true"}, nil
 }
 
 // ─────────────────────────────────────────────
-// AUDIT
+// AUDIT — lecture du journal
 // ─────────────────────────────────────────────
 
+// handleAuditList retourne les dernières lignes du journal d'audit.
 func (s *Server) handleAuditList(args map[string]string) (interface{}, error) {
-	n := 100
-	if v := args["limit"]; v != "" {
-		fmt.Sscanf(v, "%d", &n)
+	n := 50 // défaut : 50 dernières lignes
+	if nStr, ok := args["n"]; ok && nStr != "" {
+		fmt.Sscanf(nStr, "%d", &n)
 	}
 	lines, err := audit.Read(n)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"lines": lines}, nil
+	return map[string]interface{}{"lines": lines, "count": len(lines)}, nil
+}
+
+// ─────────────────────────────────────────────
+// TÂCHES PLANIFIÉES
+// ─────────────────────────────────────────────
+
+func (s *Server) handleTaskList() (interface{}, error) {
+	if s.sched == nil {
+		return []types.Task{}, nil
+	}
+	return s.sched.Load()
+}
+
+func (s *Server) handleTaskAdd(args map[string]string) (interface{}, error) {
+	if s.sched == nil {
+		return nil, fmt.Errorf("scheduler non initialisé")
+	}
+	taskJSON, ok := args["task"]
+	if !ok || taskJSON == "" {
+		return nil, fmt.Errorf("argument 'task' (JSON) manquant")
+	}
+	var t types.Task
+	if err := json.Unmarshal([]byte(taskJSON), &t); err != nil {
+		return nil, fmt.Errorf("JSON tâche invalide : %w", err)
+	}
+	if err := s.sched.Add(t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func (s *Server) handleTaskRemove(args map[string]string) error {
+	if s.sched == nil {
+		return fmt.Errorf("scheduler non initialisé")
+	}
+	id := args["id"]
+	if id == "" {
+		return fmt.Errorf("argument 'id' manquant")
+	}
+	return s.sched.Remove(id)
+}
+
+func (s *Server) handleTaskRun(args map[string]string) error {
+	if s.sched == nil {
+		return fmt.Errorf("scheduler non initialisé")
+	}
+	id := args["id"]
+	if id == "" {
+		return fmt.Errorf("argument 'id' manquant")
+	}
+	return s.sched.RunNow(id)
+}
+
+func (s *Server) handleTaskToggle(args map[string]string) error {
+	if s.sched == nil {
+		return fmt.Errorf("scheduler non initialisé")
+	}
+	id := args["id"]
+	if id == "" {
+		return fmt.Errorf("argument 'id' manquant")
+	}
+	enabled := args["enabled"] == "true"
+	return s.sched.Toggle(id, enabled)
+}
+
+// EnsureUISetup garantit que caleope-ui est correctement configuré :
+// service systemd + config Traefik dynamic. Idempotent.
+// Appelé au démarrage du daemon ET pendant un upgrade.
+func (s *Server) EnsureUISetup() {
+	// 1. Service systemd
+	const servicePath = "/etc/systemd/system/caleope-ui.service"
+	const serviceContent = `[Unit]
+Description=Caleope UI Server
+After=network.target caleoped.service
+Requires=caleoped.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/caleope-ui \
+    --base-dir /opt/gaiver-it/caleope \
+    --daemon   http://127.0.0.1:8765 \
+    --port     8766
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`
+	_ = os.WriteFile(servicePath, []byte(serviceContent), 0644)
+	_ = exec.Command("systemctl", "daemon-reload").Run()
+	_ = exec.Command("systemctl", "enable", "caleope-ui").Run()
+
+	// 2. Config Traefik dynamic — route ui.<domain> → localhost:8766
+	domain := s.rt.AppDomain("ui")
+	if domain == "" {
+		return // pas de domaine configuré, on skip
+	}
+	// Traefik tourne dans Docker — utiliser l'IP de la gateway de caleope-public
+	// pour joindre caleope-ui (service systemd sur le host, pas dans Docker).
+	// Fallback : IP principale de l'hôte.
+	hostIP := getDockerGateway("caleope-public")
+	if hostIP == "" {
+		hostIP = getHostIP()
+	}
+	traefikDir := filepath.Join(s.baseDir, "data", "traefik", "dynamic")
+	if err := os.MkdirAll(traefikDir, 0755); err != nil {
+		return
+	}
+
+	// Adapter la config selon le proxy mode choisi à l'installation :
+	// - traefik : Traefik gère Let's Encrypt → certResolver + redirect HTTP→HTTPS
+	// - npm     : NPM gère le TLS en amont → Traefik ne voit que du HTTP (web seulement)
+	// - standalone : HTTP seul, pas de TLS (LAN/offline)
+	cfg, _ := s.rt.GetConfig()
+	proxyMode := ""
+	if cfg != nil {
+		proxyMode = cfg.ProxyMode
+	}
+
+	var traefikConf string
+	switch proxyMode {
+	case "traefik":
+		traefikConf = fmt.Sprintf(`http:
+  routers:
+    caleope-ui:
+      rule: "Host(`+"`%s`"+`)"
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+      service: caleope-ui
+    caleope-ui-http:
+      rule: "Host(`+"`%s`"+`)"
+      entryPoints:
+        - web
+      middlewares:
+        - redirect-to-https
+      service: caleope-ui
+
+  services:
+    caleope-ui:
+      loadBalancer:
+        servers:
+          - url: "http://%s:8766"
+
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+`, domain, domain, hostIP)
+	default: // npm, standalone, ou non configuré → HTTP seul via web
+		traefikConf = fmt.Sprintf(`http:
+  routers:
+    caleope-ui:
+      rule: "Host(`+"`%s`"+`)"
+      entryPoints:
+        - web
+      service: caleope-ui
+
+  services:
+    caleope-ui:
+      loadBalancer:
+        servers:
+          - url: "http://%s:8766"
+`, domain, hostIP)
+	}
+	_ = os.WriteFile(filepath.Join(traefikDir, "caleope-ui.yml"), []byte(traefikConf), 0644)
+}
+
+// getHostIP retourne l'IP principale de l'hôte (interface sortante).
+func getHostIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// getDockerGateway retourne l'IP de la gateway d'un réseau Docker.
+// Cette IP est toujours joignable depuis les containers sur ce réseau (dont Traefik).
+// Elle correspond à l'interface virtuelle du host sur ce bridge Docker.
+func getDockerGateway(network string) string {
+	out, err := exec.Command("docker", "network", "inspect", network,
+		"--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}").Output()
+	if err != nil {
+		return ""
+	}
+	ip := strings.TrimSpace(string(out))
+	if ip == "" || strings.Contains(ip, "error") {
+		return ""
+	}
+	return ip
+}
+
+// coreApps liste les composants essentiels installés automatiquement sur toute instance Caleope.
+// Chaque entrée contient l'ID de l'app et son domaine (vide = auto-dérivé depuis la config).
+var coreApps = []struct {
+	id     string
+	domain string // vide = s.rt.AppDomain(id)
+}{
+	{"crowdsec", ""},
+	{"authentik", ""},
+}
+
+// ensureCoreApps installe silencieusement les composants core manquants.
+// Appelé à chaque upgrade — idempotent si l'app est déjà installée.
+func (s *Server) ensureCoreApps() {
+	for _, app := range coreApps {
+		if _, err := s.rt.GetApp(app.id); err == nil {
+			continue // déjà installée
+		}
+		domain := app.domain
+		if domain == "" {
+			if m := s.peekManifest(app.id); m != nil && m.UseBaseDomain {
+				domain = s.rt.BaseDomain()
+			} else {
+				domain = s.rt.AppDomain(app.id)
+			}
+		}
+		fmt.Printf("→ Installation du composant core : %s...\n", app.id)
+		if err := s.installer.Install(install.InstallOptions{
+			AppID:   app.id,
+			Domain:  domain,
+			Channel: "stable",
+		}); err != nil {
+			fmt.Printf("⚠️  %s : installation échouée : %v\n", app.id, err)
+		} else {
+			fmt.Printf("✅ %s installé\n", app.id)
+		}
+	}
 }

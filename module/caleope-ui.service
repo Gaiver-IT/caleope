@@ -1,0 +1,17 @@
+[Unit]
+Description=Caleope UI Server
+After=network.target caleoped.service
+Requires=caleoped.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/caleope-ui \
+    --base-dir /opt/gaiver-it/caleope \
+    --daemon   http://127.0.0.1:8765 \
+    --port     8766
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

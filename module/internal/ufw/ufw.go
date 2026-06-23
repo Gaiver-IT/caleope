@@ -1,40 +1,45 @@
 // internal/ufw/ufw.go
 //
-// 🔥 UFW MANAGER — gestion dynamique du pare-feu
+// 🔥 Gestion du pare-feu UFW
 //
-// Ouvre/ferme les ports UFW automatiquement lors de l'installation
-// et de la suppression d'apps. Seuls les ports marqués "firewall: true"
-// dans app.json sont concernés — les ports internes Traefik (8000-9999)
-// ne sont PAS exposés directement.
+// Ouvre/ferme les ports UFW lors de l'installation et suppression d'apps.
+// Si UFW n'est pas actif, toutes les opérations sont silencieusement ignorées.
 
 package ufw
 
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
-// IsAvailable vérifie si UFW est installé et actif sur le système.
+// PortSpec décrit un port à ouvrir ou fermer dans UFW.
+type PortSpec struct {
+	Name     string
+	Host     int
+	Protocol string // "tcp", "udp", "any"
+	Firewall bool   // true = gérer dans UFW
+}
+
+// IsAvailable retourne true si UFW est installé et actif.
 func IsAvailable() bool {
-	cmd := exec.Command("ufw", "status")
-	out, err := cmd.Output()
+	out, err := exec.Command("ufw", "status").Output()
 	if err != nil {
 		return false
 	}
-	return !strings.Contains(string(out), "inactive")
+	return strings.Contains(string(out), "Status: active")
 }
 
 // Open ouvre un port dans UFW.
-// proto = "tcp", "udp" ou "any" (pour les deux).
-// Idempotent : si la règle existe déjà, UFW l'ignore silencieusement.
+// proto = "tcp", "udp" ou "any" (any = pas de suffixe, UFW autorise les deux)
 func Open(port int, proto string) error {
 	if !IsAvailable() {
-		return nil // UFW absent ou inactif → pas d'erreur fatale
+		return nil
 	}
-	rule := fmt.Sprintf("%d/%s", port, proto)
-	if proto == "any" {
-		rule = fmt.Sprintf("%d", port)
+	rule := strconv.Itoa(port)
+	if proto != "any" && proto != "" {
+		rule += "/" + proto
 	}
 	out, err := exec.Command("ufw", "allow", rule).CombinedOutput()
 	if err != nil {
@@ -43,22 +48,19 @@ func Open(port int, proto string) error {
 	return nil
 }
 
-// Close supprime une règle UFW pour un port.
-// Idempotent : si la règle n'existe pas, UFW l'ignore silencieusement.
+// Close ferme un port dans UFW (supprime la règle allow).
 func Close(port int, proto string) error {
 	if !IsAvailable() {
 		return nil
 	}
-	rule := fmt.Sprintf("%d/%s", port, proto)
-	if proto == "any" {
-		rule = fmt.Sprintf("%d", port)
+	rule := strconv.Itoa(port)
+	if proto != "any" && proto != "" {
+		rule += "/" + proto
 	}
-	// "delete allow" supprime la règle d'autorisation
 	out, err := exec.Command("ufw", "delete", "allow", rule).CombinedOutput()
 	if err != nil {
-		// UFW retourne une erreur si la règle n'existe pas — on l'ignore
-		if strings.Contains(string(out), "Could not delete non-existent rule") ||
-			strings.Contains(string(out), "could not find") {
+		// Règle inexistante → pas une erreur critique
+		if strings.Contains(string(out), "Could not delete non-existent rule") {
 			return nil
 		}
 		return fmt.Errorf("ufw delete allow %s: %w (%s)", rule, err, strings.TrimSpace(string(out)))
@@ -66,8 +68,8 @@ func Close(port int, proto string) error {
 	return nil
 }
 
-// OpenPorts ouvre tous les ports d'une app qui ont Firewall=true.
-// Appelé après l'installation réussie.
+// OpenPorts ouvre tous les ports marqués Firewall:true dans la liste.
+// Retourne les erreurs non-fatales sans interrompre le reste.
 func OpenPorts(ports []PortSpec) []error {
 	var errs []error
 	for _, p := range ports {
@@ -79,14 +81,13 @@ func OpenPorts(ports []PortSpec) []error {
 			proto = "tcp"
 		}
 		if err := Open(p.Host, proto); err != nil {
-			errs = append(errs, fmt.Errorf("port %d/%s: %w", p.Host, proto, err))
+			errs = append(errs, fmt.Errorf("port %s(%d): %w", p.Name, p.Host, err))
 		}
 	}
 	return errs
 }
 
-// ClosePorts ferme tous les ports d'une app qui ont Firewall=true.
-// Appelé lors de la suppression.
+// ClosePorts ferme tous les ports marqués Firewall:true dans la liste.
 func ClosePorts(ports []PortSpec) []error {
 	var errs []error
 	for _, p := range ports {
@@ -98,17 +99,8 @@ func ClosePorts(ports []PortSpec) []error {
 			proto = "tcp"
 		}
 		if err := Close(p.Host, proto); err != nil {
-			errs = append(errs, fmt.Errorf("port %d/%s: %w", p.Host, proto, err))
+			errs = append(errs, fmt.Errorf("port %s(%d): %w", p.Name, p.Host, err))
 		}
 	}
 	return errs
-}
-
-// PortSpec décrit un port à ouvrir/fermer dans UFW.
-// Miroir simplifié de types.AppPort pour éviter la dépendance circulaire.
-type PortSpec struct {
-	Name     string
-	Host     int
-	Protocol string // "tcp", "udp", "any"
-	Firewall bool   // true = doit être ouvert dans UFW
 }

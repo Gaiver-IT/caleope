@@ -230,6 +230,8 @@ func (m *Manager) Mount(name string) error {
 		mountErr = m.mountNFS(loc)
 	case types.LocationSFTP:
 		mountErr = m.mountSFTP(loc, password)
+	case types.LocationLocal:
+		mountErr = m.mountLocal(loc)
 	default:
 		return fmt.Errorf("type d'emplacement inconnu: %s", loc.Type)
 	}
@@ -605,6 +607,27 @@ func (m *Manager) ListFiles(name string, maxEntries int) ([]string, error) {
 		}
 	}
 	return files, nil
+}
+
+// ─────────────────────────────────────────────
+// MONTAGE LOCAL (disque interne/externe)
+// ─────────────────────────────────────────────
+
+// mountLocal monte un disque local. Le chemin du périphérique est stocké dans Host (ex: /dev/sdb1).
+func (m *Manager) mountLocal(loc types.NetworkLocation) error {
+	device := loc.Host
+	if device == "" {
+		return fmt.Errorf("chemin du périphérique manquant (Host)")
+	}
+	if _, err := os.Stat(device); err != nil {
+		return fmt.Errorf("périphérique introuvable : %s", device)
+	}
+
+	out, err := exec.Command("mount", "-t", "auto", device, loc.MountPoint).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("montage échoué : %s", strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // humanSize formate une taille en octets de façon lisible.

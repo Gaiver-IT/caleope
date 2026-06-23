@@ -2,7 +2,7 @@
 title: Installation
 description: Installer Caleope sur Debian/Ubuntu
 published: true
-date: 2026-05-23
+date: 2026-06-18
 ---
 
 # Installation
@@ -29,10 +29,27 @@ apt install -y curl
 curl -fsSL https://raw.githubusercontent.com/Gaiver-IT/caleope/main/install.sh | bash
 ```
 
-L'installateur te demande deux informations :
+**Installation non-interactive** (scripts, CI) — passer les variables d'environnement pour sauter les prompts :
+
+```bash
+CALEOPE_DOMAIN=caleope.home.local \
+CALEOPE_PROXY_MODE=standalone \
+CALEOPE_CHANNEL=stable \
+bash install.sh
+```
+
+L'installateur te demande quelques informations :
 
 - **Domaine de base** — ex : `home.local` ou `monserveur.fr`  
   Les applications seront accessibles sur `<app>.<domaine-base>` (ex: `jellyfin.home.local`)
+
+- **Mode reverse proxy** — trois options :
+
+  | Mode | Quand l'utiliser |
+  |------|-----------------|
+  | `npm` | Derrière NPM, Caddy ou un autre proxy existant — Traefik reçoit du HTTP, pas de gestion des certs |
+  | `traefik` | Traefik gère tout en direct — HTTPS et Let's Encrypt automatiques |
+  | `standalone` | Réseau local, hors-ligne, air-gap — HTTP uniquement, aucun certificat requis |
 
 - **Canal** — `stable` (recommandé) ou `alpha` (fonctionnalités en avant-première)
 
@@ -82,6 +99,24 @@ Caleope s'installe dans `/opt/gaiver-it/caleope/` :
 ├── mounts/           # Points de montage NAS
 └── caleope.conf      # Configuration globale
 ```
+
+---
+
+## Installation hors-ligne (mode submarine)
+
+Pour installer Caleope **sans accès internet** (réseau isolé, clé USB, air-gap) :
+
+```bash
+# 1. Sur une machine connectée, créer un bundle
+caleope offline-pack /media/usb/
+
+# 2. Sur le serveur hors-ligne, lancer l'installation
+sudo bash install.sh --offline /media/usb/caleope-bundle-2026-06-22
+```
+
+> Docker doit être installé avant de lancer l'installation offline.
+
+→ [Documentation complète du mode submarine](/submarine)
 
 ---
 

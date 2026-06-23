@@ -29,9 +29,10 @@ type AppManifest struct {
 	Ports         []AppPort       `json:"ports"`
 	Volumes       []AppVolume     `json:"volumes"`
 	Backup        AppBackup       `json:"backup"`
-	UseBaseDomain bool            `json:"use_base_domain"`              // true = domaine racine (pas appID.domain)
-	SecureHeaders bool            `json:"secure_headers,omitempty"`     // true = headers sécurité Traefik (HSTS, CSP...)
-	AuthMiddleware bool           `json:"auth_middleware,omitempty"`    // true = forward-auth Authentik si installé
+	UseBaseDomain bool            `json:"use_base_domain"`            // true = domaine racine (pas appID.domain)
+	SecureHeaders bool            `json:"secure_headers,omitempty"`   // Traefik secure headers opt-in
+	AuthMiddleware bool           `json:"auth_middleware,omitempty"`  // Authentik forward auth opt-in
+	NoContainer   bool            `json:"no_container,omitempty"`     // true = outil système, pas de container Docker
 }
 
 type AppCapabilities struct {
@@ -48,17 +49,16 @@ type AppNetwork struct {
 
 type AppPort struct {
 	Name      string `json:"name"`
-	Container int    `json:"container"`          // port dans le container
-	Host      int    `json:"host"`               // port alloué dynamiquement sur l'hôte
-	Dynamic   bool   `json:"dynamic"`            // true = Caleope choisit le port hôte
-	Protocol  string `json:"protocol,omitempty"` // "tcp", "udp", "any" (défaut: "tcp")
-	Firewall  bool   `json:"firewall,omitempty"` // true = ouvrir dans UFW à l'install
+	Container int    `json:"container"`           // port dans le container
+	Host      int    `json:"host"`                // port alloué dynamiquement sur l'hôte
+	Dynamic   bool   `json:"dynamic"`             // true = Caleope choisit le port hôte
+	Protocol  string `json:"protocol,omitempty"` // "tcp", "udp", "any" — pour UFW
+	Firewall  bool   `json:"firewall,omitempty"` // true = ouvrir dans UFW
 }
 
 type AppVolume struct {
-	Source string `json:"source"`          // chemin relatif sur l'hôte (ex: app-data/jellyfin)
-	Target string `json:"target"`          // chemin dans le container (ex: /config)
-	NAS    bool   `json:"nas,omitempty"`   // true = ce volume va sur NAS si --storage est spécifié
+	Source string `json:"source"` // chemin relatif sur l'hôte (ex: app-data/jellyfin)
+	Target string `json:"target"` // chemin dans le container (ex: /config)
 }
 
 type AppBackup struct {
@@ -72,27 +72,13 @@ type AppBackup struct {
 
 // ParamDef décrit un paramètre interactif demandé lors de l'installation.
 // Le champ ID (en majuscules) devient la variable CALEOPE_PARAM_<ID> dans setup.sh.
-// Types supportés : "string", "secret" (masqué), "path", "bool", "select".
 type ParamDef struct {
-	ID          string   `json:"id"`                    // nom de la variable (→ CALEOPE_PARAM_<ID>)
-	Label       string   `json:"label"`                 // texte affiché à l'utilisateur
-	Description string   `json:"description"`           // aide contextuelle (affiché en gris sous le label)
-	Type        string   `json:"type"`                  // "string", "secret", "path", "bool", "select"
-	Options     []string `json:"options,omitempty"`     // pour type "select" : liste des choix possibles
-	Required    bool     `json:"required"`              // true = obligatoire, boucle jusqu'à saisie valide
-	Default     string   `json:"default"`               // valeur par défaut si l'utilisateur laisse vide
-	When        string   `json:"when,omitempty"`        // condition d'affichage (ex: "VPN_ENABLED=true")
-}
-
-// InstallSessionStatus est retourné par la commande "install-status".
-type InstallSessionStatus struct {
-	SessionID string    `json:"session_id"`
-	AppID     string    `json:"app_id"`
-	Status    string    `json:"status"`          // "running", "done", "error"
-	Lines     []string  `json:"lines"`           // logs accumulés
-	Error     string    `json:"error,omitempty"`
-	Notes     string    `json:"notes,omitempty"` // post-install.txt si done
-	StartAt   time.Time `json:"started_at"`
+	ID          string `json:"id"`          // nom de la variable (→ CALEOPE_PARAM_<ID>)
+	Label       string `json:"label"`       // texte affiché à l'utilisateur
+	Description string `json:"description"` // aide contextuelle (affiché en gris sous le label)
+	Type        string `json:"type"`        // "string", "secret" (masqué), "path"
+	Required    bool   `json:"required"`    // true = obligatoire, boucle jusqu'à saisie valide
+	Default     string `json:"default"`     // valeur par défaut si l'utilisateur laisse vide
 }
 
 // ─────────────────────────────────────────────
@@ -136,6 +122,8 @@ type BackupManifest struct {
 	CaleopeVersion string    `json:"caleope_version"`
 	HasData        bool      `json:"has_data"`
 	HasConfig      bool      `json:"has_config"`
+	Scope          string    `json:"scope,omitempty"` // "all", "config", "data"
+	Dir            string    `json:"dir,omitempty"`   // nom du répertoire sur disque (non stocké dans manifest.json)
 }
 
 // ─────────────────────────────────────────────
@@ -166,6 +154,7 @@ type RuntimeApp struct {
 	Version     string     `json:"version"`
 	Channel     string     `json:"channel"`
 	Repository  string     `json:"repository"`
+	Domain          string     `json:"domain,omitempty"`            // domaine public de l'app (depuis app.env)
 	Ports           []AppPort  `json:"ports"`                      // avec les ports hôtes alloués
 	ComposeDir      string     `json:"compose_dir"`                 // chemin vers apps-installed/<id>/
 	StorageLocation string     `json:"storage_location,omitempty"` // nom de la location NAS (vide = stockage local)
@@ -195,10 +184,11 @@ type Event struct {
 type NetworkLocationType string
 
 const (
-	LocationSMB  NetworkLocationType = "smb"
-	LocationCIFS NetworkLocationType = "cifs" // alias smb
-	LocationSFTP NetworkLocationType = "sftp"
-	LocationNFS  NetworkLocationType = "nfs"
+	LocationSMB   NetworkLocationType = "smb"
+	LocationCIFS  NetworkLocationType = "cifs"  // alias smb
+	LocationNFS   NetworkLocationType = "nfs"
+	LocationSFTP  NetworkLocationType = "sftp"
+	LocationLocal NetworkLocationType = "local" // disque local (interne ou externe)
 )
 
 // NetworkLocation représente un emplacement réseau monté ou montable.
@@ -256,4 +246,47 @@ type Repo struct {
 	Trust    TrustLevel `json:"trust"`
 	LocalDir string     `json:"local_dir"` // chemin du cache local
 	LastSync time.Time  `json:"last_sync"`
+	Branch   string     `json:"branch,omitempty"` // branche git (défaut : "main")
+}
+
+// ─────────────────────────────────────────────
+// TÂCHES PLANIFIÉES
+// ─────────────────────────────────────────────
+
+type TaskType string
+
+const (
+	TaskTypeBackup  TaskType = "backup"  // sauvegarder une ou toutes les apps
+	TaskTypeUpgrade TaskType = "upgrade" // mettre à jour Caleope
+	TaskTypeUpdate  TaskType = "update"  // synchroniser le catalogue d'apps
+)
+
+type BackupScope string
+
+const (
+	BackupScopeAll    BackupScope = "all"    // données + config (défaut)
+	BackupScopeConfig BackupScope = "config" // config uniquement (léger)
+	BackupScopeData   BackupScope = "data"   // données uniquement
+)
+
+// Task représente une tâche planifiée persistée dans core/tasks.json
+type Task struct {
+	ID          string      `json:"id"`           // slug unique (ex: "backup-jellyfin-nuit")
+	Type        TaskType    `json:"type"`
+	App         string      `json:"app,omitempty"`   // pour type=backup ; vide = toutes les apps
+	Scope       BackupScope `json:"scope,omitempty"` // pour type=backup
+	Schedule    Schedule    `json:"schedule"`
+	Enabled     bool        `json:"enabled"`
+	LastRun     time.Time   `json:"last_run,omitempty"`
+	LastStatus  string      `json:"last_status,omitempty"` // "ok", "error: ..."
+	CreatedAt   time.Time   `json:"created_at"`
+}
+
+// Schedule définit quand une tâche s'exécute.
+// Hour et Minute en heure locale. Days = jours de la semaine (0=dim, 1=lun, …, 6=sam).
+// Si Days est vide, la tâche tourne tous les jours.
+type Schedule struct {
+	Hour   int   `json:"hour"`             // 0–23
+	Minute int   `json:"minute"`           // 0–59
+	Days   []int `json:"days,omitempty"`   // 0=dim … 6=sam ; vide = tous les jours
 }

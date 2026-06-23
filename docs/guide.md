@@ -2,7 +2,7 @@
 title: Guide utilisateur
 description: Référence complète des commandes Caleope
 published: true
-date: 2026-06-07
+date: 2026-06-18
 ---
 
 # Guide utilisateur
@@ -29,22 +29,17 @@ date: 2026-06-07
 caleope install jellyfin
 # Domaine personnalisé :
 caleope install jellyfin --domain media.mon-domaine.fr
-# Données sur NAS (chemin absolu vers le point de montage) :
-caleope install arr-stack --storage /mnt/nas/media
-# Paramètre spécifique à une app :
-caleope install arr-stack --param language=en
-caleope install arr-stack --param vpn_enabled=true --param vpn_provider=protonvpn
+# Données sur NAS :
+caleope install jellyfin --storage mon-nas
+# Paramètre interactif (ex: apps avec config requise) :
+caleope install pterodactyl-wings --param NODE_FQDN=1.2.3.4
+# Activer le passthrough GPU (si l'app le supporte) :
+caleope install jellyfin --gpu
+# Variable d'environnement équivalente à --param :
+CALEOPE_PARAM_NODE_FQDN=1.2.3.4 caleope install pterodactyl-wings
 ```
 
-> Si l'application génère des identifiants (Nextcloud, Grafana, Jellyfin…), ils sont affichés à la fin de l'installation et sauvegardés dans `/opt/gaiver-it/caleope/app-config/<app>/secrets.env`.
-
-### Reconfigurer
-
-Certaines applications supportent la reconfiguration interactive après installation :
-
-```bash
-caleope configure arr-stack    # reconfigurer le VPN (wizard interactif)
-```
+> Si l'application génère des identifiants (Nextcloud, Grafana…), ils sont affichés à la fin de l'installation et sauvegardés dans `/opt/gaiver-it/caleope/app-config/<app>/secrets.env`.
 
 ### Lister
 
@@ -92,6 +87,8 @@ caleope search cloud    # → nextcloud...
 
 ## Sauvegardes
 
+### Backup local (tar)
+
 ```bash
 # Créer une sauvegarde
 caleope backup nextcloud
@@ -113,6 +110,34 @@ Les sauvegardes sont stockées dans `/opt/gaiver-it/caleope/backups/<app>/<times
 > **Astuce** — automatiser avec cron :
 > ```bash
 > echo "0 3 * * * root caleope backup nextcloud" >> /etc/cron.d/caleope-backup
+> ```
+
+### Backup Restic (déduplication)
+
+[Restic](https://restic.net) est un outil de backup incrémental avec déduplication. Il permet des sauvegardes vers un dépôt distant (SFTP, S3, Backblaze…) en ne transférant que les blocs modifiés.
+
+```bash
+# Prérequis : installer restic
+caleope install restic
+
+# Backup vers un dépôt local (test)
+caleope backup jellyfin --restic --repo /mnt/backup/caleope --password <pass>
+
+# Backup vers un serveur SFTP
+caleope backup jellyfin \
+  --restic \
+  --repo sftp:user@backup-host:/backups/caleope \
+  --password <pass>
+
+# Lister les snapshots existants
+sudo sh -c 'RESTIC_PASSWORD=<pass> restic -r /mnt/backup/caleope snapshots'
+```
+
+> Le daemon `caleoped` tourne en root — le dépôt Restic appartient à root. Utiliser `sudo` pour les commandes `restic` directes.
+
+> Le mot de passe peut aussi être transmis via `RESTIC_PASSWORD` dans le shell appelant :
+> ```bash
+> RESTIC_PASSWORD=<pass> caleope backup jellyfin --restic --repo /mnt/backup/caleope
 > ```
 
 ---
@@ -207,6 +232,68 @@ caleope location storage jellyfin
 
 ---
 
+## GPU — Passthrough matériel
+
+Certaines applications (Jellyfin…) peuvent utiliser le GPU de l'hôte pour l'accélération matérielle du transcodage vidéo.
+
+```bash
+caleope install jellyfin --gpu
+```
+
+Caleope détecte automatiquement le type de GPU :
+- **NVIDIA** — injecte `deploy.resources.reservations.devices` (driver nvidia)
+- **Intel / AMD** — monte `/dev/dri` avec les bons groupes système
+
+Un fichier `compose.override.yml` est généré dans le répertoire de l'app. Il est chargé automatiquement à chaque `docker compose up`.
+
+> L'option `--gpu` n'a effet que si l'app déclare `"gpu": true` dans son `app.json`. Consulter la page de chaque app pour vérifier.
+
+Apps avec support GPU : [Jellyfin](/apps/jellyfin)
+
+---
+
+## Outils système
+
+Certains paquets du store n'ont pas de container Docker — ils installent un outil directement sur le système hôte.
+
+```bash
+caleope install restic   # installe le binaire restic
+caleope list             # apparaît dans la liste avec port "-"
+```
+
+Ces apps sont visibles dans `caleope list` mais `caleope start/stop` ne s'applique pas.
+
+→ [Restic](/apps/restic)
+
+---
+
+## Mode submarine (hors-ligne)
+
+Le mode submarine permet d'installer ou mettre à jour Caleope sans accès internet.
+
+### Créer un bundle
+
+```bash
+caleope offline-pack /media/usb/
+# → crée /media/usb/caleope-bundle-2026-06-22/ avec binaires, store et images Docker
+```
+
+### Mettre à jour une installation existante
+
+```bash
+caleope offline-update /media/usb/caleope-bundle-2026-06-22
+sudo systemctl restart caleoped caleope-ui
+```
+
+| Commande | Description |
+|----------|-------------|
+| `caleope offline-pack <dest>` | Créer un bundle d'installation offline |
+| `caleope offline-update <bundle>` | Appliquer un bundle sur une installation existante |
+
+→ [Documentation complète du mode submarine](/submarine)
+
+---
+
 ## API REST
 
 L'API REST écoute sur le port **8765**.
@@ -219,5 +306,7 @@ caleope token
 TOKEN=$(caleope token | grep Token | awk '{print $NF}')
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8765/api/v1/apps
 ```
+
+> **Rate limiting** : 60 requêtes par minute par adresse IP. Au-delà, l'API répond `429 Too Many Requests` avec le header `Retry-After: 60`.
 
 → [Référence complète de l'API](/api)

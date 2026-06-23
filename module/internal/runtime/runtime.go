@@ -17,6 +17,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,7 +165,28 @@ func (m *Manager) GetApp(id string) (*types.RuntimeApp, error) {
 		return nil, fmt.Errorf("erreur lecture runtime app %s: %w", id, err)
 	}
 
+	// Enrichir avec le domaine depuis app.env (non stocké dans le JSON runtime)
+	if domain := m.readAppDomain(id); domain != "" {
+		app.Domain = domain
+	}
+
 	return &app, nil
+}
+
+// readAppDomain lit CALEOPE_DOMAIN depuis apps-installed/{id}/app.env.
+// Appelé sans verrou (le verrou est déjà tenu par GetApp/ListApps).
+func (m *Manager) readAppDomain(id string) string {
+	envPath := filepath.Join(m.baseDir, "apps-installed", id, "app.env")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "CALEOPE_DOMAIN=") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "CALEOPE_DOMAIN="))
+		}
+	}
+	return ""
 }
 
 // ListApps retourne toutes les apps installées.
@@ -191,6 +213,11 @@ func (m *Manager) ListApps() ([]*types.RuntimeApp, error) {
 		var app types.RuntimeApp
 		if err := json.Unmarshal(data, &app); err != nil {
 			continue
+		}
+
+		// Enrichir avec le domaine depuis app.env (non stocké dans le JSON runtime)
+		if domain := m.readAppDomain(app.ID); domain != "" {
+			app.Domain = domain
 		}
 
 		// append = ajouter un élément à une slice (comme .append() en Python)
@@ -228,28 +255,38 @@ func (m *Manager) AllocatePort(appID string, min, max int) (int, error) {
 		return 0, err
 	}
 
-	// Construire un set des ports déjà utilisés
-	// map[int]bool = dictionnaire Go (clé: port, valeur: true si utilisé)
+	// Construire un set des ports déjà utilisés selon ports.json
 	used := make(map[int]bool)
 	for _, p := range ports {
 		used[p] = true
 	}
 
-	// Trouver le premier port libre
+	// Trouver le premier port libre — double vérification système (net.Listen)
+	// pour couvrir les apps installées avant le port tracking ou celles bindées
+	// par d'autres processus hors Caleope.
 	for port := min; port <= max; port++ {
-		if !used[port] {
-			ports[appID] = port
-			if err := m.writePorts(ports); err != nil {
-				return 0, err
-			}
-			return port, nil
+		if used[port] {
+			continue
 		}
+		// Vérifier que le port est vraiment libre sur le système
+		// (couvre les apps sans entrée dans ports.json ou les processus tiers)
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			continue // port déjà bindé
+		}
+		ln.Close()
+		ports[appID] = port
+		if err := m.writePorts(ports); err != nil {
+			return 0, err
+		}
+		return port, nil
 	}
 
 	return 0, fmt.Errorf("aucun port disponible entre %d et %d", min, max)
 }
 
-// ReleasePort libère le port d'une app dans ports.json.
+// ReleasePort libère tous les ports d'une app dans ports.json.
+// Les clés sont au format "<appID>-<portName>".
 func (m *Manager) ReleasePort(appID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -259,8 +296,12 @@ func (m *Manager) ReleasePort(appID string) error {
 		return err
 	}
 
-	// delete = supprimer une clé d'une map Go
-	delete(ports, appID)
+	prefix := appID + "-"
+	for key := range ports {
+		if key == appID || strings.HasPrefix(key, prefix) {
+			delete(ports, key)
+		}
+	}
 	return m.writePorts(ports)
 }
 
