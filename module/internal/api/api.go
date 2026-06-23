@@ -1340,17 +1340,31 @@ WantedBy=multi-user.target
 	if err := os.MkdirAll(traefikDir, 0755); err != nil {
 		return
 	}
-	traefikConf := fmt.Sprintf(`http:
+
+	// Adapter la config selon le proxy mode choisi à l'installation :
+	// - traefik : Traefik gère Let's Encrypt → certResolver + redirect HTTP→HTTPS
+	// - npm     : NPM gère le TLS en amont → Traefik ne voit que du HTTP (web seulement)
+	// - standalone : HTTP seul, pas de TLS (LAN/offline)
+	cfg, _ := s.rt.GetConfig()
+	proxyMode := ""
+	if cfg != nil {
+		proxyMode = cfg.ProxyMode
+	}
+
+	var traefikConf string
+	switch proxyMode {
+	case "traefik":
+		traefikConf = fmt.Sprintf(`http:
   routers:
     caleope-ui:
-      rule: "Host(` + "`%s`" + `)"
+      rule: "Host(`+"`%s`"+`)"
       entryPoints:
         - websecure
       tls:
         certResolver: letsencrypt
       service: caleope-ui
     caleope-ui-http:
-      rule: "Host(` + "`%s`" + `)"
+      rule: "Host(`+"`%s`"+`)"
       entryPoints:
         - web
       middlewares:
@@ -1369,6 +1383,22 @@ WantedBy=multi-user.target
         scheme: https
         permanent: true
 `, domain, domain, hostIP)
+	default: // npm, standalone, ou non configuré → HTTP seul via web
+		traefikConf = fmt.Sprintf(`http:
+  routers:
+    caleope-ui:
+      rule: "Host(`+"`%s`"+`)"
+      entryPoints:
+        - web
+      service: caleope-ui
+
+  services:
+    caleope-ui:
+      loadBalancer:
+        servers:
+          - url: "http://%s:8766"
+`, domain, hostIP)
+	}
 	_ = os.WriteFile(filepath.Join(traefikDir, "caleope-ui.yml"), []byte(traefikConf), 0644)
 }
 
