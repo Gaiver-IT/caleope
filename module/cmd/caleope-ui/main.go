@@ -273,33 +273,43 @@ func main() {
 	// Supporte plusieurs modes d'auth et de résolution d'adresse :
 	//   - Bearer / X-Api-Key : token statique dans secrets.env
 	//   - Basic : username + password encodés en base64
+	//   - GitToken : Authorization: token TOKEN (Gitea API)
+	//   - VaultwardenAdmin : POST /admin cookie flow
 	//   - portName : port hôte dans runtime/apps/{appid}.json
 	//   - containerName + containerPort : résolution IP Docker dynamique
 	type appProxyCfg struct {
 		tokenKey      string // clé token dans secrets.env (Bearer/X-Api-Key)
 		basicUserKey  string // clé username pour Basic auth
 		basicPassKey  string // clé password pour Basic auth
-		authScheme    string // "Bearer", "X-Api-Key", "Basic"
+		authScheme    string // "Bearer", "X-Api-Key", "Basic", "GitToken", "VaultwardenAdmin"
 		portName      string // port nommé dans runtime JSON (si pas containerName)
 		secretsApp    string // app dont lire les secrets (si différent de appID)
 		containerName string // nom du conteneur Docker à résoudre
 		containerPort int    // port du conteneur (si containerName défini)
+		hostOverride  string // Host header override (ex: nextcloud.domain.com)
+		extraHeaders  map[string]string // headers supplémentaires à ajouter
 	}
+
+	// Lire le domaine depuis caleope.conf pour le Host header Nextcloud
+	caleopeDomain := readEnvKey(filepath.Join(*baseDir, "caleope.conf"), "CALEOPE_DOMAIN")
+
 	appProxyMap := map[string]appProxyCfg{
 		// Apps avec token hôte mappé
 		"authentik": {tokenKey: "AUTHENTIK_BOOTSTRAP_TOKEN", authScheme: "Bearer",    portName: "web"},
 		"azuracast": {tokenKey: "AZURACAST_API_KEY",         authScheme: "X-Api-Key", portName: "web"},
 
-		// Nextcloud — OCS API + WebDAV (Basic auth)
+		// Nextcloud — OCS API : Basic auth + Host header requis (trusted_domains)
 		"nextcloud": {basicUserKey: "NEXTCLOUD_ADMIN_USER", basicPassKey: "NEXTCLOUD_ADMIN_PASSWORD",
-			authScheme: "Basic", containerName: "nextcloud", containerPort: 80},
+			authScheme: "Basic", containerName: "nextcloud", containerPort: 80,
+			hostOverride: "nextcloud." + caleopeDomain,
+			extraHeaders: map[string]string{"OCS-APIRequest": "true"}},
 
-		// Gitea — REST API (Basic auth avec admin)
-		"gitea": {basicUserKey: "GITEA_ADMIN_USER", basicPassKey: "GITEA_ADMIN_PASS",
-			authScheme: "Basic", containerName: "gitea", containerPort: 3000},
+		// Gitea — REST API (token API généré via gitea admin)
+		"gitea": {tokenKey: "GITEA_API_TOKEN", authScheme: "GitToken",
+			containerName: "gitea", containerPort: 3000},
 
-		// Vaultwarden — admin API (X-Admin-Token header)
-		"vaultwarden": {tokenKey: "_ADMIN_TOKEN_PLAIN", authScheme: "X-Admin-Token",
+		// Vaultwarden — admin panel (session cookie via POST /admin)
+		"vaultwarden": {tokenKey: "_ADMIN_TOKEN_PLAIN", authScheme: "VaultwardenAdmin",
 			containerName: "vaultwarden", containerPort: 80},
 
 		// Arr-stack : chaque service via IP Docker
@@ -376,32 +386,6 @@ func main() {
 		}
 		secretsPath := filepath.Join(*baseDir, "app-config", secretsAppID, "secrets.env")
 
-		// Construire le header d'authentification
-		var authHeader, authValue string
-		switch cfg.authScheme {
-		case "Basic":
-			user := readEnvKey(secretsPath, cfg.basicUserKey)
-			pass := readEnvKey(secretsPath, cfg.basicPassKey)
-			if user == "" || pass == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials non disponibles")
-				return
-			}
-			creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
-			authHeader, authValue = "Authorization", "Basic "+creds
-		default:
-			token := readEnvKey(secretsPath, cfg.tokenKey)
-			if token == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
-				return
-			}
-			switch cfg.authScheme {
-			case "Bearer":
-				authHeader, authValue = "Authorization", "Bearer "+token
-			default:
-				authHeader, authValue = cfg.authScheme, token
-			}
-		}
-
 		// Résoudre l'adresse cible
 		var targetBase string
 		if cfg.containerName != "" {
@@ -425,6 +409,96 @@ func main() {
 			targetURL += "?" + r.URL.RawQuery
 		}
 
+		client := &http.Client{Timeout: 30 * time.Second}
+
+		// VaultwardenAdmin : session cookie flow (POST /admin → cookie VW_ADMIN)
+		if cfg.authScheme == "VaultwardenAdmin" {
+			adminToken := readEnvKey(secretsPath, cfg.tokenKey)
+			if adminToken == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+				return
+			}
+			formData := strings.NewReader("token=" + url.QueryEscape(adminToken))
+			authReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, targetBase+"/admin", formData)
+			authReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			// Ne pas suivre les redirections pour récupérer le cookie
+			noRedirectClient := &http.Client{
+				Timeout: 15 * time.Second,
+				CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			}
+			authResp, err := noRedirectClient.Do(authReq)
+			if err != nil {
+				jsonErr(w, http.StatusBadGateway, "vaultwarden: auth: "+err.Error())
+				return
+			}
+			authResp.Body.Close()
+			var vwCookie string
+			for _, c := range authResp.Cookies() {
+				if c.Name == "VW_ADMIN" {
+					vwCookie = c.Value
+					break
+				}
+			}
+			if vwCookie == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "vaultwarden: cookie VW_ADMIN absent (token invalide ?)")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			outReq.Header.Set("Cookie", "VW_ADMIN="+vwCookie)
+			outReq.Header.Set("Accept", "application/json, text/html")
+			resp, err := client.Do(outReq)
+			if err != nil {
+				jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())
+				return
+			}
+			defer resp.Body.Close()
+			ct := resp.Header.Get("Content-Type")
+			w.Header().Set("Content-Type", ct)
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// Construire le header d'authentification (autres schemes)
+		var authHeader, authValue string
+		switch cfg.authScheme {
+		case "Basic":
+			user := readEnvKey(secretsPath, cfg.basicUserKey)
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
+			if user == "" || pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials non disponibles")
+				return
+			}
+			creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+			authHeader, authValue = "Authorization", "Basic "+creds
+		case "GitToken":
+			token := readEnvKey(secretsPath, cfg.tokenKey)
+			if token == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+				return
+			}
+			authHeader, authValue = "Authorization", "token "+token
+		default:
+			token := readEnvKey(secretsPath, cfg.tokenKey)
+			if token == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+				return
+			}
+			switch cfg.authScheme {
+			case "Bearer":
+				authHeader, authValue = "Authorization", "Bearer "+token
+			default:
+				authHeader, authValue = cfg.authScheme, token
+			}
+		}
+
 		outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 		if err != nil {
 			jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -435,8 +509,15 @@ func main() {
 		}
 		outReq.Header.Set(authHeader, authValue)
 		outReq.Header.Set("Accept", "application/json")
+		// Host override (ex: Nextcloud trusted_domains)
+		if cfg.hostOverride != "" {
+			outReq.Host = cfg.hostOverride
+		}
+		// Headers supplémentaires (ex: OCS-APIRequest pour Nextcloud)
+		for k, v := range cfg.extraHeaders {
+			outReq.Header.Set(k, v)
+		}
 
-		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(outReq)
 		if err != nil {
 			jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())

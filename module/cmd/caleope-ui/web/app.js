@@ -2236,53 +2236,64 @@ async function loadVaultwardenUsers() {
   const adminLink = appDomain ? `<a href="https://${appDomain}/admin" target="_blank" rel="noopener"
     class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>ADMIN</a>` : '';
 
-  const r = await fetch('/ui/proxy/vaultwarden/admin/users/overview', {
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!r.ok) {
+  try {
+    const r = await fetch('/ui/proxy/vaultwarden/admin/users/overview');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+    const html = await r.text();
+    // Parser le HTML de l'admin panel Vaultwarden avec DOMParser
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    // La table des users a des lignes avec des cellules email (première colonne)
+    const rows = [...doc.querySelectorAll('table tbody tr')];
+    const users = rows.map(tr => {
+      const cells = tr.querySelectorAll('td');
+      const email = cells[0]?.textContent?.trim() || '';
+      const name  = cells[1]?.textContent?.trim() || '';
+      // Certaines versions ont "Enabled"/"Disabled" dans une colonne
+      const statusCell = [...cells].find(td => /enabled|disabled/i.test(td.textContent));
+      const enabled = !statusCell || !/disabled/i.test(statusCell.textContent);
+      return { email, name, enabled };
+    }).filter(u => u.email && u.email.includes('@'));
+
+    if (!users.length) {
+      c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
+        <div class="empty-title">AUCUN COMPTE</div>
+        <div style="margin-top:12px">${adminLink}</div></div>`;
+      return;
+    }
+
+    const rowsHtml = users.map(u => {
+      const initials = (u.email[0] || '?').toUpperCase();
+      return `<div class="loc-row" style="gap:10px">
+        <div style="width:26px;height:26px;border-radius:2px;background:var(--vio-dim);color:var(--vio-b);
+          display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">
+          ${escapeHtml(initials)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:10px;font-weight:700">${escapeHtml(u.email)}</div>
+          ${u.name ? `<div style="font-size:8px;color:var(--text3)">${escapeHtml(u.name)}</div>` : ''}
+        </div>
+        <div>
+          ${u.enabled
+            ? '<span class="badge badge-run" style="font-size:7px">ACTIF</span>'
+            : '<span class="badge badge-err" style="font-size:7px">DÉSACTIVÉ</span>'}
+        </div>
+      </div>`;
+    }).join('');
+
+    c.innerHTML = `<div class="settings-card" style="padding:0">
+      <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+        <i class="ti ti-lock" style="font-size:12px"></i> COMPTES VAULTWARDEN
+        <span style="color:var(--text3);font-size:9px">${users.length}</span>
+        ${adminLink}
+      </div>
+      <div style="padding:0 12px 12px">${rowsHtml}</div>
+    </div>`;
+  } catch (err) {
     c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
       <div class="empty-title">COMPTES INDISPONIBLES</div>
-      <div class="empty-sub">Token admin non accessible.</div>
+      <div class="empty-sub">${escapeHtml(String(err.message))}</div>
       <div style="margin-top:12px">${adminLink}</div></div>`;
-    return;
   }
-  const users = await r.json();
-  if (!Array.isArray(users) || !users.length) {
-    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
-      <div class="empty-title">AUCUN COMPTE</div>
-      <div style="margin-top:12px">${adminLink}</div></div>`;
-    return;
-  }
-
-  const rows = users.map(u => {
-    const initials = ((u.name || u.email || '?')[0]).toUpperCase();
-    const active = !u.Disabled;
-    const lastActive = u.LastActive ? new Date(u.LastActive).toLocaleDateString('fr-FR') : '—';
-    return `<div class="loc-row" style="gap:10px">
-      <div style="width:26px;height:26px;border-radius:2px;background:var(--vio-dim);color:var(--vio-b);
-        display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">
-        ${escapeHtml(initials)}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:10px;font-weight:700">${escapeHtml(u.email || '—')}</div>
-        <div style="font-size:8px;color:var(--text3)">${u.items || 0} éléments</div>
-      </div>
-      <div style="text-align:right;flex-shrink:0">
-        ${active
-          ? '<span class="badge badge-run" style="font-size:7px">ACTIF</span>'
-          : '<span class="badge badge-err" style="font-size:7px">DÉSACTIVÉ</span>'}
-        <div style="font-size:8px;color:var(--text3);margin-top:2px">${escapeHtml(lastActive)}</div>
-      </div>
-    </div>`;
-  }).join('');
-
-  c.innerHTML = `<div class="settings-card" style="padding:0">
-    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
-      <i class="ti ti-lock" style="font-size:12px"></i> COMPTES VAULTWARDEN
-      <span style="color:var(--text3);font-size:9px">${users.length}</span>
-      ${adminLink}
-    </div>
-    <div style="padding:0 12px 12px">${rows}</div>
-  </div>`;
 }
 
 // ── Arr-stack — Queue de téléchargement ──────────────────────────────────────
