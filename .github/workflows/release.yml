@@ -63,18 +63,18 @@ jobs:
           TITLE: ${{ steps.meta.outputs.title }}
           PRERELEASE: ${{ steps.meta.outputs.prerelease }}
         run: |
-          # Pour alpha-latest : supprimer l'ancienne release ET son tag (rolling)
-          if [[ "${TAG}" == "alpha-latest" ]]; then
-            gh release delete "${TAG}" --yes --cleanup-tag 2>/dev/null || true
-          fi
-
           ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64"
 
           if gh release view "${TAG}" &>/dev/null; then
-            # La release existe déjà — remplacer les assets
+            # Release existante — remplacer les assets sans interruption (pas de delete)
+            # Évite le window où la release n'a aucun asset pendant la reconstruction
             for asset in ${ASSETS}; do
               gh release upload "${TAG}" "${asset}" --clobber
             done
+            # Pour alpha-latest : mettre à jour le titre avec le nouveau commit
+            if [[ "${TAG}" == "alpha-latest" ]]; then
+              gh release edit "${TAG}" --title "${TITLE}"
+            fi
           elif [[ "${PRERELEASE}" == "true" ]]; then
             gh release create "${TAG}" \
               --title "${TITLE}" \
