@@ -1922,7 +1922,9 @@ async function loadAuthentikUsers() {
     return;
   }
   const data = await r.json();
-  const users = data.results || [];
+  // Filtrer les comptes de service Authentik (outposts, etc.)
+  const users = (data.results || []).filter(u => u.type !== 'internal_service_account');
+  const total = data.pagination?.count ?? data.results?.length ?? 0;
 
   if (!users.length) {
     c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-users"></i></div>
@@ -1959,7 +1961,7 @@ async function loadAuthentikUsers() {
     <div class="settings-card" style="padding:0">
       <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
         <i class="ti ti-users" style="font-size:12px"></i> UTILISATEURS
-        <span style="color:var(--text3);font-size:9px">${users.length} / ${data.pagination?.count || users.length}</span>
+        <span style="color:var(--text3);font-size:9px">${users.length}</span>
         ${adminLink}
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
@@ -1995,7 +1997,7 @@ async function loadAuthentikGroups() {
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:10px;font-weight:700">${escapeHtml(g.name || '—')}</div>
-        <div style="font-size:9px;color:var(--text3)">${escapeHtml(g.users_obj?.length ? g.users_obj.length + ' membre(s)' : (g.num_pk ? g.num_pk + ' membre(s)' : '—'))}</div>
+        <div style="font-size:9px;color:var(--text3)">${(g.users ?? g.users_obj?.length ?? 0)} membre(s)</div>
       </div>
       ${g.is_superuser ? '<span class="badge badge-warn" style="font-size:7px">SUPER</span>' : ''}
     </div>`).join('');
