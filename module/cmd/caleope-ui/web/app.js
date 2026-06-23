@@ -1320,12 +1320,17 @@ async function loadSettings() {
       <div class="setting-row"><span>CANAL</span><span class="badge ${data?.channel === 'alpha' ? 'badge-warn' : 'badge-run'}"><span style="width:5px;height:5px;background:${data?.channel === 'alpha' ? 'var(--warn)' : 'var(--vio-b)'};display:inline-block"></span>&nbsp;${(data?.channel || 'stable').toUpperCase()}</span></div>
       <div class="setting-row"><span>BASE DIR</span><span class="setting-val">/opt/gaiver-it/caleope</span></div>
     </div>
-    <div class="settings-card">
+    <div class="settings-card" id="upgrade-card">
       <div class="settings-title">MISE À JOUR</div>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:10px;color:var(--text3)">VERSION ACTUELLE : <span class="setting-val">${data?.version || '—'}</span></div>
-        <button class="btn" onclick="checkUpgrade()"><i class="ti ti-refresh"></i>VÉRIFIER</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:10px;color:var(--text3)">VERSION : <span class="setting-val">${data?.version || '—'}</span> &nbsp; CANAL : <span class="badge ${data?.channel === 'alpha' ? 'badge-warn' : 'badge-run'}"><span style="width:5px;height:5px;background:${data?.channel === 'alpha' ? 'var(--warn)' : 'var(--vio-b)'};display:inline-block"></span>&nbsp;${(data?.channel || 'stable').toUpperCase()}</span></div>
       </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn" onclick="checkUpgrade()"><i class="ti ti-refresh"></i>VÉRIFIER</button>
+        <button class="btn" id="btn-upgrade" onclick="runUpgrade()" style="display:none"><i class="ti ti-arrow-up"></i>METTRE À JOUR</button>
+        <button class="btn" onclick="runUpdate()"><i class="ti ti-refresh-dot"></i>SYNC STORE</button>
+      </div>
+      <div id="upgrade-log" style="display:none;margin-top:10px;background:var(--bg1);border:1px solid var(--border1);padding:8px 10px;font-size:10px;font-family:monospace;color:var(--text2);max-height:160px;overflow-y:auto;line-height:1.7"></div>
     </div>
     <div class="settings-card">
       <div class="settings-title">LOGO DE L'INTERFACE</div>
@@ -1394,11 +1399,86 @@ async function resetLogo() {
 async function checkUpgrade() {
   notify('Vérification des mises à jour...', 'info');
   const r = await api.post('/api/v1/upgrade?check=true');
-  if (r?.update_available) {
-    notify(`Mise à jour disponible : ${r.latest_version}`, 'ok');
+  if (r?.data?.status === 'update_available' || r?.update_available) {
+    const latest = r?.data?.latest || r?.latest_version;
+    notify(`Mise à jour disponible : ${latest}`, 'ok');
+    const btn = document.getElementById('btn-upgrade');
+    if (btn) btn.style.display = '';
   } else {
     notify('Caleope est à jour', 'ok');
   }
+}
+
+async function runUpgrade() {
+  const log = document.getElementById('upgrade-log');
+  const btn = document.getElementById('btn-upgrade');
+  if (!log) return;
+  log.style.display = '';
+  log.innerHTML = '';
+  if (btn) btn.disabled = true;
+
+  const addLog = (msg) => {
+    log.innerHTML += msg + '\n';
+    log.scrollTop = log.scrollHeight;
+  };
+
+  addLog('▶ Lancement de la mise à jour...');
+  notify('Mise à jour en cours...', 'info');
+
+  try {
+    const r = await api.post('/api/v1/upgrade');
+    const d = r?.data || r || {};
+    if (d.status === 'up_to_date') {
+      addLog('✓ Déjà à jour : ' + d.version);
+      notify('Déjà à jour', 'ok');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    addLog('✓ Binaires installés : ' + d.from + ' → ' + d.to);
+    addLog('⟳ Redémarrage des services...');
+    notify('Redémarrage en cours...', 'info');
+  } catch(e) {
+    // La connexion peut couper pendant le restart — c'est attendu
+    addLog('⟳ Connexion coupée — redémarrage en cours...');
+  }
+
+  // Attendre que le daemon revienne, puis recharger
+  addLog('⟳ Reconnexion dans quelques secondes...');
+  let attempts = 0;
+  const poll = setInterval(async () => {
+    attempts++;
+    try {
+      const ping = await fetch('/auth/check', { signal: AbortSignal.timeout(3000) });
+      if (ping.status === 200 || ping.status === 401) {
+        clearInterval(poll);
+        addLog('✓ Service redémarré — rechargement...');
+        setTimeout(() => location.reload(), 1000);
+      }
+    } catch(_) {
+      if (attempts < 30) {
+        addLog('  · attente (' + attempts + '/30)...');
+      }
+    }
+    if (attempts >= 30) {
+      clearInterval(poll);
+      addLog('✗ Timeout — vérifier manuellement le service');
+      notify('Timeout reconnexion', 'err');
+      if (btn) btn.disabled = false;
+    }
+  }, 2000);
+}
+
+async function runUpdate() {
+  notify('Synchronisation du store...', 'info');
+  const log = document.getElementById('upgrade-log');
+  if (log) {
+    log.style.display = '';
+    log.innerHTML += '▶ Synchronisation du store...\n';
+  }
+  const r = await api.post('/api/v1/update');
+  const msg = r?.data?.message || 'Store synchronisé';
+  if (log) log.innerHTML += '✓ ' + msg + '\n';
+  notify(msg, 'ok');
 }
 
 // ── SECTION: DASHBOARD ────────────────────────────────────────────────────────

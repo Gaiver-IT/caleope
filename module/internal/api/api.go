@@ -979,10 +979,13 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		}, nil
 	}
 
+	// Étapes numérotées pour feedback CLI
+	fmt.Printf("[1/8] Vérification de la version sur GitHub...\n")
+
 	// Télécharger et remplacer les binaires
 	baseURL := fmt.Sprintf("https://github.com/gaiver-it/caleope/releases/download/%s", latest)
 
-	fmt.Printf("→ Téléchargement de Caleope %s...\n", latest)
+	fmt.Printf("[2/8] Téléchargement des binaires (caleoped, caleope, caleope-ui)...\n")
 
 	for _, bin := range []struct{ name, dest string }{
 		{"caleoped-linux-amd64", "/usr/local/bin/caleoped.new"},
@@ -1002,6 +1005,8 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		}
 	}
 
+	fmt.Printf("[3/8] Installation des binaires...\n")
+
 	// Remplacer les binaires (move atomique)
 	for _, pair := range []struct{ src, dst string }{
 		{"/usr/local/bin/caleoped.new", "/usr/local/bin/caleoped"},
@@ -1016,8 +1021,12 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// Symlink de compatibilité : caleope-store → caleope
 	_ = exec.Command("ln", "-sf", "/usr/local/bin/caleope", "/usr/local/bin/caleope-store").Run()
 
+	fmt.Printf("[4/8] Configuration Traefik / systemd...\n")
+
 	// S'assurer que caleope-ui.service et sa config Traefik sont en place
 	s.EnsureUISetup()
+
+	fmt.Printf("[5/8] Mise à jour de la configuration...\n")
 
 	// Mettre à jour caleope.conf
 	confPath := fmt.Sprintf("%s/caleope.conf", s.baseDir)
@@ -1030,21 +1039,22 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	fmt.Printf("✅ Caleope mis à jour vers %s\n", latest)
 
+	fmt.Printf("[6/8] Synchronisation du store...\n")
+
 	// Synchroniser les dépôts du store en même temps que le binaire,
 	// pour que les nouvelles définitions d'apps soient disponibles immédiatement.
-	fmt.Println("→ Synchronisation des dépôts...")
 	if err := s.handleUpdate(nil); err != nil {
 		fmt.Printf("⚠️  Sync store partiel : %v\n", err)
-	} else {
-		fmt.Println("✅ Dépôts synchronisés")
 	}
+
+	fmt.Printf("[7/8] Vérification des composants core...\n")
 
 	// Installer les composants essentiels s'ils sont absents.
 	// Ces apps font partie de l'infrastructure Caleope et doivent être présentes
 	// sur toute installation complète.
 	s.ensureCoreApps()
 
-	fmt.Println("→ Redémarrage du daemon dans 2 secondes...")
+	fmt.Printf("[8/8] Redémarrage des services dans 2 secondes...\n")
 
 	// Redémarrer via un script shell indépendant de ce processus.
 	// On ne peut pas faire les deux restarts dans une goroutine : quand

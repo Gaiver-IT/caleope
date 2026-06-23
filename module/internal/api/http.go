@@ -23,6 +23,7 @@
 //   GET    /api/v1/stats                ?disk=true
 //   GET    /api/v1/store                ?q=terme
 //   POST   /api/v1/upgrade              ?check=true
+//   POST   /api/v1/update
 //   GET    /api/v1/token               (localhost seulement)
 //   GET    /api/v1/tasks
 //   POST   /api/v1/tasks               body JSON: Task
@@ -141,6 +142,19 @@ func (s *Server) StartHTTP(port int) error {
 			return
 		}
 		s.httpUpgradeApp(w, r)
+	})))
+
+	// POST /api/v1/update — synchroniser le store (git pull sur les dépôts)
+	mux.Handle("/api/v1/update", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			s.httpError(w, "méthode non supportée", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := s.handleUpdate(map[string]string{}); err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "ok", "message": "Store synchronisé"})
 	})))
 
 	// GET /api/v1/events?app=jellyfin&limit=50&type=app.installed
