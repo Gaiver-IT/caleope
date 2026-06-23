@@ -389,7 +389,7 @@ type Config struct {
 	Email     string // email Let's Encrypt
 	Version   string
 	Channel   string // "stable" ou "alpha"
-	// Relai SMTP externe (Orange, Gmail, Proton…)
+	// SMTP global — transmis automatiquement aux apps qui supportent l'email
 	SMTPHost string
 	SMTPPort string
 	SMTPUser string

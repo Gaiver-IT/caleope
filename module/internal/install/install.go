@@ -660,6 +660,7 @@ func (i *Installer) rollback(appID, composeDir string, hostPort int) {
 	_ = i.rt.RemoveApp(appID)
 
 	_ = i.emitter.AppError(appID, "installation échouée, rollback effectué")
+	audit.Log(audit.ActionInstall, appID, "ERREUR: rollback effectué")
 
 	fmt.Println("  ✓ Rollback terminé")
 }
@@ -814,8 +815,10 @@ func (i *Installer) Reconfigure(appID string, updates map[string]string) error {
 
 	fmt.Printf("→ Démarrage de la stack '%s'...\n", appID)
 	if err := i.docker.Up(composeDir); err != nil {
+		audit.Log(audit.ActionConfigure, appID, "ERREUR: "+err.Error())
 		return err
 	}
+	audit.Log(audit.ActionConfigure, appID, "OK")
 
 	// ── 4. Mettre à jour post-install.txt (si présent) ──
 	// setup.sh génère ce fichier AVANT que le wizard VPN tourne,

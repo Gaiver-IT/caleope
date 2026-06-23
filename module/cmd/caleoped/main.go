@@ -119,6 +119,7 @@ func main() {
 	// Indispensable après un upgrade : c'est le nouvel exécutable qui reécrit la config,
 	// pas l'ancien daemon qui se remplaçait lui-même.
 	server.EnsureUISetup()
+	server.EnsureSecurityHeaders()
 
 	// Planificateur de tâches (backup auto, upgrade, update store)
 	sched := scheduler.New(*baseDir, server)

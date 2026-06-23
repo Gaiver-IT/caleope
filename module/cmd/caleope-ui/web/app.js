@@ -10,6 +10,7 @@ const S = {
   apps: [],
   catalog: [],
   stats: {},
+  sysinfo: {},
   locations: [],
   logApp: null,
   logStream: null,
@@ -534,6 +535,15 @@ function appCard(app) {
                 <span class="btn-label">DÉMARRER</span>
                </button>`
           }
+          <button class="action-btn" onclick="triggerAppBackup('${app.id}')" title="Sauvegarder">
+            <i class="ti ti-device-floppy"></i>
+            <span class="btn-label">BACKUP</span>
+          </button>
+          ${HARDCODED_PARAMS[app.id] ? `
+          <button class="action-btn" onclick="openReconfigureModal('${app.id}')" title="Reconfigurer">
+            <i class="ti ti-settings"></i>
+            <span class="btn-label">CONFIG</span>
+          </button>` : ''}
           <button class="action-btn danger" onclick="removeApp('${app.id}')" title="Supprimer">
             <i class="ti ti-trash"></i>
             <span class="btn-label">SUPPRIMER</span>
@@ -597,6 +607,39 @@ async function removeApp(id) {
   }
 }
 
+async function triggerAppBackup(id) {
+  notify(`Sauvegarde de ${id}...`, 'info');
+  const r = await api.post(`/api/v1/apps/${id}/backup`);
+  if (r && r.success !== false) {
+    notify(`${id} — sauvegarde créée`, 'ok');
+  } else {
+    notify(r?.error || 'Erreur backup', 'err');
+  }
+}
+
+async function openReconfigureModal(appId) {
+  S.installTarget = appId;
+  const app = S.apps.find(a => a.id === appId);
+  const params = HARDCODED_PARAMS[appId] || [];
+
+  // Précharger les emplacements
+  if (params.some(p => p.type === 'location') && S.locations.length === 0) {
+    const locData = await api.get('/api/v1/locations');
+    S.locations = Array.isArray(locData?.data) ? locData.data : [];
+  }
+
+  S.installParams = params;
+  document.getElementById('modal-app-name').textContent = appId.toUpperCase() + ' — RECONFIGURER';
+  const paramsEl = document.getElementById('modal-params');
+  paramsEl.innerHTML = params.length === 0
+    ? `<div style="font-size:10px;color:var(--text3)">Aucun paramètre reconfigurable pour cette app.</div>`
+    : params.map(p => renderParamField(p)).join('');
+
+  updateParamVisibility();
+  document.getElementById('install-modal').classList.add('open');
+  document.getElementById('install-modal').dataset.mode = 'reconfigure';
+}
+
 // ── Install modal ─────────────────────────────────────────────────────────────
 async function openInstallModal(appId) {
   S.installTarget = appId;
@@ -621,44 +664,47 @@ async function openInstallModal(appId) {
   const paramsEl = document.getElementById('modal-params');
   paramsEl.innerHTML = S.installParams.length === 0
     ? `<div style="font-size:10px;color:var(--text3)">Aucun paramètre configurable — installation avec les valeurs par défaut.</div>`
-    : S.installParams.map(p => {
-        let inner;
-        if (p.type === 'bool') {
-          inner = `
-            <div style="display:flex;gap:6px">
-              <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
-                <input type="radio" name="param-${p.id}" id="param-${p.id}-on" value="true" ${p.default !== 'false' ? 'checked' : ''} style="accent-color:var(--vio)" onclick="updateParamVisibility()">ACTIVÉ
-              </label>
-              <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
-                <input type="radio" name="param-${p.id}" id="param-${p.id}-off" value="false" ${p.default === 'false' ? 'checked' : ''} style="accent-color:var(--vio)" onclick="updateParamVisibility()">DÉSACTIVÉ
-              </label>
-            </div>`;
-        } else if (p.type === 'location') {
-          const systemOpt = `<option value="${p.default}">SYSTÈME — ${p.default}</option>`;
-          const locOpts = S.locations.map(l =>
-            `<option value="${l.mount_point || l.path}">${escapeHtml(l.name)} — ${escapeHtml(l.mount_point || l.path)}</option>`
-          ).join('');
-          inner = `<select class="field-input" id="param-${p.id}" onchange="updateParamVisibility()">
-              ${systemOpt}${locOpts}
-            </select>
-            <div style="font-size:9px;color:var(--text3);margin-top:2px">${p.description || ''} — <span style="color:var(--blue)">Emplacements dans EMPLACEMENTS</span></div>`;
-        } else if (p.type === 'select' && p.options) {
-          inner = `<select class="field-input" id="param-${p.id}" onchange="updateParamVisibility()">
-              ${p.options.map(o => `<option value="${o}" ${o === p.default ? 'selected' : ''}>${o}</option>`).join('')}
-            </select>`;
-        } else {
-          inner = `<input class="field-input" id="param-${p.id}" type="${p.type === 'secret' ? 'password' : 'text'}"
-            placeholder="${p.description || ''}" value="${p.default || ''}" />`;
-        }
-        const desc = (p.type !== 'location' && p.description) ? `<div style="font-size:9px;color:var(--text3);margin-top:2px">${p.description}</div>` : '';
-        return `<div id="param-wrap-${p.id}" class="field full">
-          <div class="field-label">${escapeHtml(p.label).toUpperCase()}${p.required ? ' *' : ''}</div>
-          ${inner}${desc}
-        </div>`;
-      }).join('');
+    : S.installParams.map(p => renderParamField(p)).join('');
 
   updateParamVisibility();
   document.getElementById('install-modal').classList.add('open');
+}
+
+// Rendu d'un champ de paramètre dans le modal install/reconfigure.
+function renderParamField(p) {
+  let inner;
+  if (p.type === 'bool') {
+    inner = `
+      <div style="display:flex;gap:6px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
+          <input type="radio" name="param-${p.id}" id="param-${p.id}-on" value="true" ${p.default !== 'false' ? 'checked' : ''} style="accent-color:var(--vio)" onclick="updateParamVisibility()">ACTIVÉ
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
+          <input type="radio" name="param-${p.id}" id="param-${p.id}-off" value="false" ${p.default === 'false' ? 'checked' : ''} style="accent-color:var(--vio)" onclick="updateParamVisibility()">DÉSACTIVÉ
+        </label>
+      </div>`;
+  } else if (p.type === 'location') {
+    const systemOpt = `<option value="${p.default}">SYSTÈME — ${p.default}</option>`;
+    const locOpts = S.locations.map(l =>
+      `<option value="${l.mount_point || l.path}">${escapeHtml(l.name)} — ${escapeHtml(l.mount_point || l.path)}</option>`
+    ).join('');
+    inner = `<select class="field-input" id="param-${p.id}" onchange="updateParamVisibility()">
+        ${systemOpt}${locOpts}
+      </select>
+      <div style="font-size:9px;color:var(--text3);margin-top:2px">${p.description || ''} — <span style="color:var(--blue)">Emplacements dans EMPLACEMENTS</span></div>`;
+  } else if (p.type === 'select' && p.options) {
+    inner = `<select class="field-input" id="param-${p.id}" onchange="updateParamVisibility()">
+        ${p.options.map(o => `<option value="${o}" ${o === p.default ? 'selected' : ''}>${o}</option>`).join('')}
+      </select>`;
+  } else {
+    inner = `<input class="field-input" id="param-${p.id}" type="${p.type === 'secret' ? 'password' : 'text'}"
+      placeholder="${p.description || ''}" value="${p.default || ''}" />`;
+  }
+  const desc = (p.type !== 'location' && p.description) ? `<div style="font-size:9px;color:var(--text3);margin-top:2px">${p.description}</div>` : '';
+  return `<div id="param-wrap-${p.id}" class="field full">
+    <div class="field-label">${escapeHtml(p.label).toUpperCase()}${p.required ? ' *' : ''}</div>
+    ${inner}${desc}
+  </div>`;
 }
 
 // ── Visibilité conditionnelle des params (depends_on) ─────────────────────────
@@ -687,7 +733,6 @@ function updateParamVisibility() {
 async function confirmInstall() {
   const params = {};
   S.installParams.forEach(p => {
-    // Ne pas envoyer les champs masqués par depends_on
     const wrap = document.getElementById(`param-wrap-${p.id}`);
     if (wrap && wrap.style.display === 'none') return;
     if (p.type === 'bool') {
@@ -699,15 +744,29 @@ async function confirmInstall() {
     }
   });
 
-  document.getElementById('install-modal').classList.remove('open');
+  const modal = document.getElementById('install-modal');
+  const mode = modal.dataset.mode || 'install';
+  modal.classList.remove('open');
+  delete modal.dataset.mode;
+
   const appLabel = S.catalog.find(a => a.id === S.installTarget)?.name || S.installTarget;
+
+  if (mode === 'reconfigure') {
+    const taskId = taskAdd('install', S.installTarget, `Reconfiguration — ${appLabel}`);
+    const r = await api.post(`/api/v1/apps/${S.installTarget}/reconfigure`, { params });
+    if (r && r.success !== false) {
+      taskDone(taskId, 'Reconfiguration terminée', true);
+      notify(`${S.installTarget} — reconfiguration terminée`, 'ok');
+      setTimeout(loadApps, 1000);
+    } else {
+      taskDone(taskId, r?.error || 'Erreur inconnue', false);
+      notify(r?.error || 'Erreur reconfiguration', 'err');
+    }
+    return;
+  }
+
   const taskId = taskAdd('install', S.installTarget, `Installation — ${appLabel}`);
-
-  const r = await api.post(`/api/v1/apps/${S.installTarget}/install`, {
-    params,
-    async: true,
-  });
-
+  const r = await api.post(`/api/v1/apps/${S.installTarget}/install`, { params, async: true });
   if (r && r.success !== false) {
     taskDone(taskId, 'Installation terminée', true);
     notify(`${S.installTarget} — installation terminée`, 'ok');
@@ -1270,8 +1329,12 @@ async function removeLocation(id) {
 
 // ── SECTION: STATS (dashboard) ────────────────────────────────────────────────
 async function loadStats() {
-  const data = await api.get('/api/v1/stats?disk=true');
-  S.stats = data?.data || {};
+  const [statsResp, sysResp] = await Promise.all([
+    api.get('/api/v1/stats?disk=true'),
+    api.get('/api/v1/system'),
+  ]);
+  S.stats  = statsResp?.data || {};
+  S.sysinfo = sysResp?.data  || {};
   renderStats();
 }
 
@@ -1285,10 +1348,19 @@ function renderStats() {
   const disk = S.stats.disk_total_gb ? Math.round(S.stats.disk_used_gb / S.stats.disk_total_gb * 100) : 0;
   const diskUsedGb  = S.stats.disk_used_gb  ? S.stats.disk_used_gb.toFixed(1)  : '—';
   const diskTotalGb = S.stats.disk_total_gb ? S.stats.disk_total_gb.toFixed(1) : '—';
+  const sys = S.sysinfo || {};
 
   c.innerHTML = `
     <div class="settings-card">
-      <div class="settings-title">RESSOURCES SYSTÈME</div>
+      <div class="settings-title">HÔTE</div>
+      <div class="setting-row"><span>HOSTNAME</span><span class="setting-val">${escapeHtml(sys.hostname || '—')}</span></div>
+      <div class="setting-row"><span>UPTIME</span><span class="setting-val">${escapeHtml(sys.uptime || '—')}</span></div>
+      <div class="setting-row"><span>OS</span><span class="setting-val">${escapeHtml(sys.os || '—')}</span></div>
+      <div class="setting-row"><span>KERNEL</span><span class="setting-val">${escapeHtml(sys.kernel || '—')}</span></div>
+      <div class="setting-row"><span>CPU</span><span class="setting-val">${sys.cpu_count ? sys.cpu_count + ' cœur(s)' : '—'}</span></div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">RESSOURCES</div>
       <div class="seg-wrap">
         <div class="seg-meta"><span>RAM</span><span>${ramUsedGb}G / ${ramTotalGb}G</span></div>
         <div class="seg-bar">${segBar(ram)}</div>
@@ -1320,12 +1392,17 @@ async function loadSettings() {
       <div class="setting-row"><span>CANAL</span><span class="badge ${data?.channel === 'alpha' ? 'badge-warn' : 'badge-run'}"><span style="width:5px;height:5px;background:${data?.channel === 'alpha' ? 'var(--warn)' : 'var(--vio-b)'};display:inline-block"></span>&nbsp;${(data?.channel || 'stable').toUpperCase()}</span></div>
       <div class="setting-row"><span>BASE DIR</span><span class="setting-val">/opt/gaiver-it/caleope</span></div>
     </div>
-    <div class="settings-card">
+    <div class="settings-card" id="upgrade-card">
       <div class="settings-title">MISE À JOUR</div>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:10px;color:var(--text3)">VERSION ACTUELLE : <span class="setting-val">${data?.version || '—'}</span></div>
-        <button class="btn" onclick="checkUpgrade()"><i class="ti ti-refresh"></i>VÉRIFIER</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:10px;color:var(--text3)">VERSION : <span class="setting-val">${data?.version || '—'}</span> &nbsp; CANAL : <span class="badge ${data?.channel === 'alpha' ? 'badge-warn' : 'badge-run'}"><span style="width:5px;height:5px;background:${data?.channel === 'alpha' ? 'var(--warn)' : 'var(--vio-b)'};display:inline-block"></span>&nbsp;${(data?.channel || 'stable').toUpperCase()}</span></div>
       </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn" onclick="checkUpgrade()"><i class="ti ti-refresh"></i>VÉRIFIER</button>
+        <button class="btn" id="btn-upgrade" onclick="runUpgrade()" style="display:none"><i class="ti ti-arrow-up"></i>METTRE À JOUR</button>
+        <button class="btn" onclick="runUpdate()"><i class="ti ti-refresh-dot"></i>SYNC STORE</button>
+      </div>
+      <div id="upgrade-log" style="display:none;margin-top:10px;background:var(--bg1);border:1px solid var(--border1);padding:8px 10px;font-size:10px;font-family:monospace;color:var(--text2);max-height:160px;overflow-y:auto;line-height:1.7"></div>
     </div>
     <div class="settings-card">
       <div class="settings-title">LOGO DE L'INTERFACE</div>
@@ -1394,11 +1471,86 @@ async function resetLogo() {
 async function checkUpgrade() {
   notify('Vérification des mises à jour...', 'info');
   const r = await api.post('/api/v1/upgrade?check=true');
-  if (r?.update_available) {
-    notify(`Mise à jour disponible : ${r.latest_version}`, 'ok');
+  if (r?.data?.status === 'update_available' || r?.update_available) {
+    const latest = r?.data?.latest || r?.latest_version;
+    notify(`Mise à jour disponible : ${latest}`, 'ok');
+    const btn = document.getElementById('btn-upgrade');
+    if (btn) btn.style.display = '';
   } else {
     notify('Caleope est à jour', 'ok');
   }
+}
+
+async function runUpgrade() {
+  const log = document.getElementById('upgrade-log');
+  const btn = document.getElementById('btn-upgrade');
+  if (!log) return;
+  log.style.display = '';
+  log.innerHTML = '';
+  if (btn) btn.disabled = true;
+
+  const addLog = (msg) => {
+    log.innerHTML += msg + '\n';
+    log.scrollTop = log.scrollHeight;
+  };
+
+  addLog('▶ Lancement de la mise à jour...');
+  notify('Mise à jour en cours...', 'info');
+
+  try {
+    const r = await api.post('/api/v1/upgrade');
+    const d = r?.data || r || {};
+    if (d.status === 'up_to_date') {
+      addLog('✓ Déjà à jour : ' + d.version);
+      notify('Déjà à jour', 'ok');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    addLog('✓ Binaires installés : ' + d.from + ' → ' + d.to);
+    addLog('⟳ Redémarrage des services...');
+    notify('Redémarrage en cours...', 'info');
+  } catch(e) {
+    // La connexion peut couper pendant le restart — c'est attendu
+    addLog('⟳ Connexion coupée — redémarrage en cours...');
+  }
+
+  // Attendre que le daemon revienne, puis recharger
+  addLog('⟳ Reconnexion dans quelques secondes...');
+  let attempts = 0;
+  const poll = setInterval(async () => {
+    attempts++;
+    try {
+      const ping = await fetch('/auth/check', { signal: AbortSignal.timeout(3000) });
+      if (ping.status === 200 || ping.status === 401) {
+        clearInterval(poll);
+        addLog('✓ Service redémarré — rechargement...');
+        setTimeout(() => location.reload(), 1000);
+      }
+    } catch(_) {
+      if (attempts < 30) {
+        addLog('  · attente (' + attempts + '/30)...');
+      }
+    }
+    if (attempts >= 30) {
+      clearInterval(poll);
+      addLog('✗ Timeout — vérifier manuellement le service');
+      notify('Timeout reconnexion', 'err');
+      if (btn) btn.disabled = false;
+    }
+  }, 2000);
+}
+
+async function runUpdate() {
+  notify('Synchronisation du store...', 'info');
+  const log = document.getElementById('upgrade-log');
+  if (log) {
+    log.style.display = '';
+    log.innerHTML += '▶ Synchronisation du store...\n';
+  }
+  const r = await api.post('/api/v1/update');
+  const msg = r?.data?.message || 'Store synchronisé';
+  if (log) log.innerHTML += '✓ ' + msg + '\n';
+  notify(msg, 'ok');
 }
 
 // ── SECTION: DASHBOARD ────────────────────────────────────────────────────────
@@ -1413,20 +1565,23 @@ async function loadDashboard() {
     await loadApps();
   }
 
+  // Charger stats + sysinfo si absent
+  if (!S.stats.mem_total_mb) await loadStats();
+
   const running = S.apps.filter(a => a.status === 'running').length;
   const stopped = S.apps.length - running;
   const ram  = S.stats.mem_total_mb ? Math.round(S.stats.mem_used_mb / S.stats.mem_total_mb * 100) : 0;
   const disk = S.stats.disk_total_gb ? Math.round(S.stats.disk_used_gb / S.stats.disk_total_gb * 100) : 0;
 
   const shortcuts = [
-    { id: 'apps',      icon: 'ti-layout-grid', label: 'APPLICATIONS', val: `${S.apps.length} installées` },
-    { id: 'logs',      icon: 'ti-terminal-2',  label: 'LOGS',         val: 'Temps réel' },
-    { id: 'backups',   icon: 'ti-archive',      label: 'SAUVEGARDES',  val: 'Restic SFTP' },
-    { id: 'secrets',   icon: 'ti-lock',         label: 'SECRETS',      val: 'AES-256-GCM' },
-    { id: 'locations', icon: 'ti-network',      label: 'EMPLACEMENTS', val: 'NFS / SMB' },
-    { id: 'audit',     icon: 'ti-clipboard-list',label: 'AUDIT',       val: 'Historique' },
-    { id: 'stats',     icon: 'ti-chart-bar',    label: 'SYSTÈME',      val: ram ? `RAM ${ram}%` : '—' },
-    { id: 'settings',  icon: 'ti-settings',     label: 'PARAMÈTRES',   val: `v${S.stats.version || '—'}` },
+    { id: 'apps',      icon: 'ti-layout-grid',    label: 'APPLICATIONS', val: `${S.apps.length} installées` },
+    { id: 'logs',      icon: 'ti-terminal-2',     label: 'LOGS',         val: 'Temps réel' },
+    { id: 'backups',   icon: 'ti-archive',         label: 'SAUVEGARDES',  val: 'Restic SFTP' },
+    { id: 'secrets',   icon: 'ti-lock',            label: 'SECRETS',      val: 'AES-256-GCM' },
+    { id: 'events',    icon: 'ti-history',         label: 'ÉVÉNEMENTS',   val: 'Historique' },
+    { id: 'audit',     icon: 'ti-clipboard-list',  label: 'AUDIT',        val: 'Journal sécurisé' },
+    { id: 'stats',     icon: 'ti-chart-bar',       label: 'SYSTÈME',      val: ram ? `RAM ${ram}%` : '—' },
+    { id: 'settings',  icon: 'ti-settings',        label: 'PARAMÈTRES',   val: `v${S.stats.version || '—'}` },
   ];
 
   c.innerHTML = `
@@ -1481,6 +1636,17 @@ async function loadDashboard() {
             </div>
           </div>`;
         }).join('')}
+      </div>
+    ` : ''}
+
+    ${S.sysinfo?.hostname ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// HÔTE</div>
+      <div class="settings-card" style="padding:8px 12px">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+          <div><div style="font-size:8px;color:var(--text3)">HOSTNAME</div><div style="font-size:10px;font-weight:700">${escapeHtml(S.sysinfo.hostname)}</div></div>
+          <div><div style="font-size:8px;color:var(--text3)">UPTIME</div><div style="font-size:10px;font-weight:700">${escapeHtml(S.sysinfo.uptime || '—')}</div></div>
+          <div><div style="font-size:8px;color:var(--text3)">CPU</div><div style="font-size:10px;font-weight:700">${S.sysinfo.cpu_count || '—'} cœur(s)</div></div>
+        </div>
       </div>
     ` : ''}
   `;
@@ -1631,14 +1797,15 @@ const SECTIONS = {
   secrets:   { label: 'SECRETS',         num: '/04', load: loadSecrets,    content: 'content-secrets',    btn: { icon: 'ti-lock-open',     label: 'DÉVERROUILLER', action: "unlockSecrets()" } },
   locations: { label: 'EMPLACEMENTS',    num: '/05', load: loadLocations,  content: 'content-locations',  btn: { icon: 'ti-plus',          label: 'AJOUTER',       action: "openAddLocationModal()" } },
   tasks:     { label: 'TÂCHES',           num: '/06', load: loadTasks,      content: 'content-tasks',      btn: { icon: 'ti-plus', label: 'NOUVELLE TÂCHE', action: 'openTaskModal()' } },
-  audit:     { label: 'AUDIT',           num: '/07', load: loadAudit,      content: 'content-audit',      btn: null },
-  settings:  { label: 'PARAMÈTRES',      num: '/08', load: loadSettings,   content: 'content-settings',   btn: null },
-  stats:     { label: 'SYSTÈME',         num: '/09', load: loadStats,      content: 'content-stats',      btn: null },
-  terminal:  { label: 'TERMINAL',        num: '/10', load: loadTerminal,   content: 'content-terminal',   btn: null },
-  services:  { label: 'SERVICES',        num: '/11', load: loadServices,   content: 'content-services',   btn: null },
-  network:   { label: 'RÉSEAU',          num: '/12', load: loadNetwork,    content: 'content-network',    btn: null },
-  storage:   { label: 'STOCKAGE',        num: '/13', load: loadStorage,    content: 'content-storage',    btn: null },
-  journal:   { label: 'JOURNAL',         num: '/14', load: loadJournal,    content: 'content-journal',    btn: null },
+  events:    { label: 'ÉVÉNEMENTS',       num: '/07', load: loadEvents,     content: 'content-events',     btn: null },
+  audit:     { label: 'AUDIT',           num: '/08', load: loadAudit,      content: 'content-audit',      btn: null },
+  settings:  { label: 'PARAMÈTRES',      num: '/09', load: loadSettings,   content: 'content-settings',   btn: null },
+  stats:     { label: 'SYSTÈME',         num: '/10', load: loadStats,      content: 'content-stats',      btn: null },
+  terminal:  { label: 'TERMINAL',        num: '/11', load: loadTerminal,   content: 'content-terminal',   btn: null },
+  services:  { label: 'SERVICES',        num: '/12', load: loadServices,   content: 'content-services',   btn: null },
+  network:   { label: 'RÉSEAU',          num: '/13', load: loadNetwork,    content: 'content-network',    btn: null },
+  storage:   { label: 'STOCKAGE',        num: '/14', load: loadStorage,    content: 'content-storage',    btn: null },
+  journal:   { label: 'JOURNAL',         num: '/15', load: loadJournal,    content: 'content-journal',    btn: null },
 };
 
 // ── Intégrations apps (panels embarqués) ─────────────────────────────────────
@@ -1652,8 +1819,40 @@ const APP_PANELS = {
       { id: 'panel-authentik-groups', label: 'GROUPES',    icon: 'ti-sitemap', load: loadAuthentikGroups },
     ],
   },
-  'azuracast': {
+  'nextcloud': {
+    group: '// CLOUD',
+    icon: 'ti-cloud',
+    panels: [
+      { id: 'panel-nextcloud-files', label: 'FICHIERS', icon: 'ti-files',      load: loadNextcloudFiles },
+      { id: 'panel-nextcloud-users', label: 'COMPTES',  icon: 'ti-users',      load: loadNextcloudUsers },
+    ],
+  },
+  'gitea': {
+    group: '// DEV',
+    icon: 'ti-git-merge',
+    panels: [
+      { id: 'panel-gitea-repos',  label: 'DÉPÔTS',  icon: 'ti-book',       load: loadGiteaRepos  },
+      { id: 'panel-gitea-issues', label: 'ISSUES',  icon: 'ti-circle-dot', load: loadGiteaIssues },
+    ],
+  },
+  'vaultwarden': {
+    group: '// SÉCURITÉ',
+    icon: 'ti-lock',
+    panels: [
+      { id: 'panel-vaultwarden-users', label: 'COMPTES', icon: 'ti-users', load: loadVaultwardenUsers },
+    ],
+  },
+  'arr-stack': {
     group: '// MÉDIAS',
+    icon: 'ti-movie',
+    panels: [
+      { id: 'panel-arr-queue',  label: 'QUEUE',   icon: 'ti-list',        load: loadArrQueue  },
+      { id: 'panel-arr-series', label: 'SÉRIES',  icon: 'ti-device-tv',   load: loadArrSeries },
+      { id: 'panel-arr-films',  label: 'FILMS',   icon: 'ti-movie',       load: loadArrFilms  },
+    ],
+  },
+  'azuracast': {
+    group: '// RADIO',
     icon: 'ti-radio',
     panels: [
       { id: 'panel-azuracast', label: 'RADIO', icon: 'ti-broadcast', load: loadAzuraCast },
@@ -1723,7 +1922,9 @@ async function loadAuthentikUsers() {
     return;
   }
   const data = await r.json();
-  const users = data.results || [];
+  // Filtrer les comptes de service Authentik (outposts, etc.)
+  const users = (data.results || []).filter(u => u.type !== 'internal_service_account');
+  const total = data.pagination?.count ?? data.results?.length ?? 0;
 
   if (!users.length) {
     c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-users"></i></div>
@@ -1760,7 +1961,7 @@ async function loadAuthentikUsers() {
     <div class="settings-card" style="padding:0">
       <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
         <i class="ti ti-users" style="font-size:12px"></i> UTILISATEURS
-        <span style="color:var(--text3);font-size:9px">${users.length} / ${data.pagination?.count || users.length}</span>
+        <span style="color:var(--text3);font-size:9px">${users.length}</span>
         ${adminLink}
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
@@ -1796,7 +1997,7 @@ async function loadAuthentikGroups() {
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:10px;font-weight:700">${escapeHtml(g.name || '—')}</div>
-        <div style="font-size:9px;color:var(--text3)">${escapeHtml(g.users_obj?.length ? g.users_obj.length + ' membre(s)' : (g.num_pk ? g.num_pk + ' membre(s)' : '—'))}</div>
+        <div style="font-size:9px;color:var(--text3)">${(g.users?.length ?? g.users_obj?.length ?? 0)} membre(s)</div>
       </div>
       ${g.is_superuser ? '<span class="badge badge-warn" style="font-size:7px">SUPER</span>' : ''}
     </div>`).join('');
@@ -1814,6 +2015,440 @@ async function loadAuthentikGroups() {
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
     </div>`;
+}
+
+// ── Nextcloud — Fichiers récents ──────────────────────────────────────────────
+async function loadNextcloudFiles() {
+  const c = document.getElementById('content-panel-nextcloud-files');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT FICHIERS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'nextcloud')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR</a>` : '';
+
+  // OCS Files API — activité récente
+  const r = await fetch('/ui/proxy/nextcloud/ocs/v2.php/apps/activity/api/v2/activity/all?limit=20&format=json', {
+    headers: { 'OCS-APIRequest': 'true' },
+  });
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-files"></i></div>
+      <div class="empty-title">FICHIERS INDISPONIBLES</div>
+      <div class="empty-sub">API activité Nextcloud non accessible.</div>
+      <div style="margin-top:12px">${adminLink}</div></div>`;
+    return;
+  }
+  const data = await r.json();
+  const activities = data?.ocs?.data || [];
+  if (!activities.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-files"></i></div>
+      <div class="empty-title">AUCUNE ACTIVITÉ</div></div>`;
+    return;
+  }
+
+  const rows = activities.map(a => {
+    const icon = a.type === 'file_created' ? 'ti-file-plus' : a.type === 'file_deleted' ? 'ti-file-minus' : 'ti-file';
+    const color = a.type === 'file_created' ? 'var(--ok)' : a.type === 'file_deleted' ? 'var(--err)' : 'var(--text2)';
+    const ts = a.datetime ? new Date(a.datetime).toLocaleDateString('fr-FR') : '';
+    const subject = a.subject || a.message || '—';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ${escapeHtml(icon)}" style="font-size:11px;color:${color}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(subject)}</div>
+        <div style="font-size:8px;color:var(--text3)">${escapeHtml(a.user || '—')}</div>
+      </div>
+      <div style="font-size:8px;color:var(--text3);flex-shrink:0">${escapeHtml(ts)}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-files" style="font-size:12px"></i> ACTIVITÉ RÉCENTE
+      <span style="color:var(--text3);font-size:9px">${activities.length} actions</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Nextcloud — Utilisateurs ──────────────────────────────────────────────────
+async function loadNextcloudUsers() {
+  const c = document.getElementById('content-panel-nextcloud-users');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT COMPTES...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'nextcloud')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/index.php/settings/users" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>GÉRER</a>` : '';
+
+  const r = await fetch('/ui/proxy/nextcloud/ocs/v1.php/cloud/users?limit=50&format=json', {
+    headers: { 'OCS-APIRequest': 'true' },
+  });
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-users"></i></div>
+      <div class="empty-title">COMPTES INDISPONIBLES</div></div>`;
+    return;
+  }
+  const data = await r.json();
+  const users = data?.ocs?.data?.users || [];
+
+  const rows = users.map(u => `
+    <div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--vio-dim);color:var(--vio-b);
+        display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">
+        ${escapeHtml((u[0]||'?').toUpperCase())}</div>
+      <div style="font-size:10px;font-weight:700">${escapeHtml(u)}</div>
+    </div>`).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-users" style="font-size:12px"></i> COMPTES
+      <span style="color:var(--text3);font-size:9px">${users.length}</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Gitea — Dépôts ────────────────────────────────────────────────────────────
+async function loadGiteaRepos() {
+  const c = document.getElementById('content-panel-gitea-repos');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT DÉPÔTS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'gitea')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/explore/repos" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>EXPLORER</a>` : '';
+
+  const r = await fetch('/ui/proxy/gitea/api/v1/repos/search?limit=30&sort=updated');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-book"></i></div>
+      <div class="empty-title">DÉPÔTS INDISPONIBLES</div>
+      <div class="empty-sub">API Gitea non accessible.</div></div>`;
+    return;
+  }
+  const data = await r.json();
+  const repos = data?.data || [];
+
+  if (!repos.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-book"></i></div>
+      <div class="empty-title">AUCUN DÉPÔT</div></div>`;
+    return;
+  }
+
+  const rows = repos.map(r => {
+    const updated = r.updated ? new Date(r.updated).toLocaleDateString('fr-FR') : '—';
+    const lang = r.language ? `<span style="font-size:7px;padding:1px 4px;border-radius:1px;background:var(--bg3);color:var(--text2)">${escapeHtml(r.language)}</span>` : '';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ${r.fork ? 'ti-git-fork' : 'ti-book'}" style="font-size:11px;color:var(--text2)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.full_name || r.name || '—')}</div>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:2px">${lang}
+          ${r.private ? '<span style="font-size:7px;padding:1px 4px;background:var(--warn-dim);color:var(--warn-b);border-radius:1px">PRIVÉ</span>' : ''}
+          <span style="font-size:8px;color:var(--text3)">${r.stars_count||0} ★</span>
+        </div>
+      </div>
+      <div style="font-size:8px;color:var(--text3);flex-shrink:0">${escapeHtml(updated)}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-book" style="font-size:12px"></i> DÉPÔTS
+      <span style="color:var(--text3);font-size:9px">${repos.length}</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Gitea — Issues ouvertes ───────────────────────────────────────────────────
+async function loadGiteaIssues() {
+  const c = document.getElementById('content-panel-gitea-issues');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT ISSUES...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'gitea')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/issues" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>VOIR TOUT</a>` : '';
+
+  const r = await fetch('/ui/proxy/gitea/api/v1/repos/search?limit=50&token=');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-circle-dot"></i></div>
+      <div class="empty-title">ISSUES INDISPONIBLES</div></div>`;
+    return;
+  }
+  const reposData = await r.json();
+  const repos = reposData?.data || [];
+
+  // Récupérer les issues ouvertes de tous les dépôts en parallèle (max 10)
+  const issueResults = await Promise.all(
+    repos.slice(0, 10).map(repo =>
+      fetch(`/ui/proxy/gitea/api/v1/repos/${encodeURIComponent(repo.full_name)}/issues?state=open&limit=5&type=issues`)
+        .then(r => r.ok ? r.json() : [])
+        .catch(() => [])
+    )
+  );
+  const issues = issueResults.flat().filter(Boolean);
+
+  if (!issues.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-circle-check"></i></div>
+      <div class="empty-title">AUCUNE ISSUE OUVERTE</div></div>`;
+    return;
+  }
+
+  const rows = issues.slice(0, 30).map(i => {
+    const ts = i.created_at ? new Date(i.created_at).toLocaleDateString('fr-FR') : '—';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--ok-dim);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ti-circle-dot" style="font-size:11px;color:var(--ok)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(i.title||'—')}</div>
+        <div style="font-size:8px;color:var(--text3)">${escapeHtml(i.repository?.full_name||'—')} · #${i.number}</div>
+      </div>
+      <div style="font-size:8px;color:var(--text3);flex-shrink:0">${escapeHtml(ts)}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+      <i class="ti ti-circle-dot" style="font-size:12px;color:var(--ok)"></i> ISSUES OUVERTES
+      <span style="color:var(--text3);font-size:9px">${issues.length}</span>
+      ${adminLink}
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Vaultwarden — Comptes ────────────────────────────────────────────────────
+async function loadVaultwardenUsers() {
+  const c = document.getElementById('content-panel-vaultwarden-users');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT COMPTES...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'vaultwarden')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/admin" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>ADMIN</a>` : '';
+
+  try {
+    const r = await fetch('/ui/proxy/vaultwarden/admin/users/overview');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+    const html = await r.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const emailRx = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/;
+    const rows = [...doc.querySelectorAll('table tbody tr')];
+    const users = rows.map(tr => {
+      const cells = tr.querySelectorAll('td');
+      if (cells.length < 2) return null;
+      // Chercher l'email dans les 3 premières cellules via regex
+      let email = '', name = '';
+      for (let i = 0; i < Math.min(cells.length, 3); i++) {
+        const text = cells[i]?.textContent || '';
+        const m = text.match(emailRx);
+        if (m && !email) {
+          email = m[0];
+          // Le nom est la ligne de texte avant l'email dans la même cellule
+          const lines = text.split(/[\n\r]+/).map(l => l.trim()).filter(l => l && !l.includes('@'));
+          name = lines[0] || '';
+        }
+      }
+      const statusText = [...cells].slice(0, 5).map(td => td.textContent).join(' ');
+      const status = /invited/i.test(statusText) ? 'invited' : /disabled/i.test(statusText) ? 'disabled' : 'active';
+      return email ? { email, name, status } : null;
+    }).filter(Boolean);
+
+    if (!users.length) {
+      c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
+        <div class="empty-title">AUCUN COMPTE</div>
+        <div style="margin-top:12px">${adminLink}</div></div>`;
+      return;
+    }
+
+    const rowsHtml = users.map(u => {
+      const initials = (u.email[0] || '?').toUpperCase();
+      return `<div class="loc-row" style="gap:10px">
+        <div style="width:26px;height:26px;border-radius:2px;background:var(--vio-dim);color:var(--vio-b);
+          display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">
+          ${escapeHtml(initials)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:10px;font-weight:700">${escapeHtml(u.email)}</div>
+          ${u.name ? `<div style="font-size:8px;color:var(--text3)">${escapeHtml(u.name)}</div>` : ''}
+        </div>
+        <div>
+          ${u.status === 'active'
+            ? '<span class="badge badge-run" style="font-size:7px">ACTIF</span>'
+            : u.status === 'invited'
+            ? '<span class="badge" style="font-size:7px;background:var(--warn-dim);color:var(--warn-b)">INVITÉ</span>'
+            : '<span class="badge badge-err" style="font-size:7px">DÉSACTIVÉ</span>'}
+        </div>
+      </div>`;
+    }).join('');
+
+    c.innerHTML = `<div class="settings-card" style="padding:0">
+      <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+        <i class="ti ti-lock" style="font-size:12px"></i> COMPTES VAULTWARDEN
+        <span style="color:var(--text3);font-size:9px">${users.length}</span>
+        ${adminLink}
+      </div>
+      <div style="padding:0 12px 12px">${rowsHtml}</div>
+    </div>`;
+  } catch (err) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-lock"></i></div>
+      <div class="empty-title">COMPTES INDISPONIBLES</div>
+      <div class="empty-sub">${escapeHtml(String(err.message))}</div>
+      <div style="margin-top:12px">${adminLink}</div></div>`;
+  }
+}
+
+// ── Arr-stack — Queue de téléchargement ──────────────────────────────────────
+async function loadArrQueue() {
+  const c = document.getElementById('content-panel-arr-queue');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT QUEUE...</div>`;
+
+  // Récupère les queues Sonarr + Radarr en parallèle
+  const [sonarrQ, radarrQ] = await Promise.all([
+    fetch('/ui/proxy/arr-sonarr/api/v3/queue?pageSize=20').then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/ui/proxy/arr-radarr/api/v3/queue?pageSize=20').then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+
+  const sonarrItems = (sonarrQ?.records || []).map(i => ({...i, _src: 'SONARR'}));
+  const radarrItems = (radarrQ?.records || []).map(i => ({...i, _src: 'RADARR'}));
+  const all = [...sonarrItems, ...radarrItems];
+
+  if (!all.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-check"></i></div>
+      <div class="empty-title">QUEUE VIDE</div>
+      <div class="empty-sub">Aucun téléchargement en cours.</div></div>`;
+    return;
+  }
+
+  const rows = all.map(i => {
+    const pct = i.sizeleft != null && i.size ? Math.round((1 - i.sizeleft / i.size) * 100) : 0;
+    const status = i.status || '—';
+    const statusColor = status === 'downloading' ? 'var(--ok)' : status === 'queued' ? 'var(--text3)' : 'var(--warn)';
+    const title = i.title || i.series?.title || i.movie?.title || '—';
+    return `<div class="loc-row" style="gap:10px;flex-direction:column;align-items:stretch;padding:6px 0">
+      <div style="display:flex;gap:10px;align-items:center">
+        <span style="font-size:7px;padding:1px 4px;background:var(--bg3);color:var(--text3);border-radius:1px;flex-shrink:0">${escapeHtml(i._src)}</span>
+        <div style="flex:1;min-width:0;font-size:9px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(title)}</div>
+        <span style="font-size:8px;color:${statusColor};flex-shrink:0">${escapeHtml(status)}</span>
+      </div>
+      <div style="height:3px;background:var(--bg3);border-radius:1px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:var(--ok);border-radius:1px;transition:.3s"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="padding:10px 12px">
+      <i class="ti ti-list" style="font-size:12px"></i> QUEUE
+      <span style="color:var(--text3);font-size:9px">${all.length} élément(s)</span>
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Arr-stack — Séries surveillées (Sonarr) ───────────────────────────────────
+async function loadArrSeries() {
+  const c = document.getElementById('content-panel-arr-series');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT SÉRIES...</div>`;
+
+  const r = await fetch('/ui/proxy/arr-sonarr/api/v3/series?sortKey=added&sortDir=desc');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-device-tv"></i></div>
+      <div class="empty-title">SONARR INDISPONIBLE</div></div>`;
+    return;
+  }
+  const series = await r.json();
+  if (!series.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-device-tv"></i></div>
+      <div class="empty-title">AUCUNE SÉRIE</div></div>`;
+    return;
+  }
+
+  const rows = series.slice(0, 30).map(s => {
+    const pct = s.episodeCount > 0 ? Math.round(s.episodeFileCount / s.episodeCount * 100) : 0;
+    const statusColor = s.monitored ? 'var(--ok)' : 'var(--text3)';
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ti-device-tv" style="font-size:11px;color:${statusColor}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.title||'—')}</div>
+        <div style="font-size:8px;color:var(--text3)">${s.episodeFileCount||0}/${s.episodeCount||0} épisodes · ${pct}%</div>
+      </div>
+      <span style="font-size:7px;padding:1px 4px;background:var(--bg3);color:var(--text3);border-radius:1px;flex-shrink:0">${s.seasons?.length||0} S</span>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="padding:10px 12px">
+      <i class="ti ti-device-tv" style="font-size:12px"></i> SÉRIES
+      <span style="color:var(--text3);font-size:9px">${series.length}</span>
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
+// ── Arr-stack — Films surveillés (Radarr) ─────────────────────────────────────
+async function loadArrFilms() {
+  const c = document.getElementById('content-panel-arr-films');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT FILMS...</div>`;
+
+  const r = await fetch('/ui/proxy/arr-radarr/api/v3/movie?sortKey=added&sortDir=desc');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-movie"></i></div>
+      <div class="empty-title">RADARR INDISPONIBLE</div></div>`;
+    return;
+  }
+  const movies = await r.json();
+  if (!movies.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-movie"></i></div>
+      <div class="empty-title">AUCUN FILM</div></div>`;
+    return;
+  }
+
+  const downloaded = movies.filter(m => m.hasFile);
+  const missing = movies.filter(m => m.monitored && !m.hasFile);
+
+  const renderFilm = m => {
+    const year = m.year ? ` (${m.year})` : '';
+    const hasFile = m.hasFile;
+    return `<div class="loc-row" style="gap:10px">
+      <div style="width:26px;height:26px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ti-movie" style="font-size:11px;color:${hasFile ? 'var(--ok)' : 'var(--warn)'}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml((m.title||'—')+year)}</div>
+        <div style="font-size:8px;color:var(--text3)">${escapeHtml(m.studio||m.genres?.[0]||'—')}</div>
+      </div>
+      <span class="badge ${hasFile ? 'badge-run' : 'badge-warn'}" style="font-size:7px;flex-shrink:0">${hasFile ? 'OK' : 'MANQUANT'}</span>
+    </div>`;
+  };
+
+  const allRows = [...missing.slice(0,10), ...downloaded.slice(0,20)].map(renderFilm).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="padding:10px 12px">
+      <i class="ti ti-movie" style="font-size:12px"></i> FILMS
+      <span style="color:var(--text3);font-size:9px">${downloaded.length} dispo · ${missing.length} manquants</span>
+    </div>
+    <div style="padding:0 12px 12px">${allRows}</div>
+  </div>`;
 }
 
 // ── AzuraCast — Stations ──────────────────────────────────────────────────────
@@ -1924,6 +2559,64 @@ function goSection(id) {
   if (sec?.load) sec.load();
 }
 
+// ── SECTION: ÉVÉNEMENTS ──────────────────────────────────────────────────────
+
+const EVENT_ICONS = {
+  'app.installed':   'ti-package',
+  'app.removed':     'ti-trash',
+  'app.started':     'ti-player-play',
+  'app.stopped':     'ti-player-stop',
+  'app.restarted':   'ti-refresh',
+  'app.backed_up':   'ti-device-floppy',
+  'app.restored':    'ti-history',
+  'app.failed':      'ti-alert-circle',
+};
+
+async function loadEvents() {
+  const c = document.getElementById('content-events');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const resp = await api.get('/api/v1/events?limit=100');
+  const evts = resp?.data || [];
+
+  if (!evts.length) {
+    c.innerHTML = `<div class="empty-state">
+      <div class="empty-icon"><i class="ti ti-history"></i></div>
+      <div class="empty-title">AUCUN ÉVÉNEMENT</div>
+      <div class="empty-sub">Les installations, suppressions, démarrages et arrêts d'applications apparaîtront ici.</div>
+    </div>`;
+    return;
+  }
+
+  const rows = [...evts].reverse().map(e => {
+    const type = e.event || e.type || '';
+    const appId = e.app || e.app_id || e.appId || '';
+    const ico = EVENT_ICONS[type] || 'ti-circle';
+    const isErr = type.includes('failed') || type.includes('error');
+    const dotCls = isErr ? 'var(--err)' : type.includes('removed') ? 'var(--warn)' : 'var(--ok)';
+    const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('fr-FR') : '';
+    return `<div class="loc-row" style="gap:12px">
+      <div style="width:30px;height:30px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ${ico}" style="font-size:13px;color:${dotCls}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(type || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(appId || '—')}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;font-size:8px;color:var(--text3)">${escapeHtml(ts)}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="padding:10px 12px">HISTORIQUE DES ÉVÉNEMENTS
+      <span style="color:var(--text3);font-size:9px;margin-left:6px">${evts.length}</span>
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
+}
+
 // ── Audit ────────────────────────────────────────────────────────────────────
 async function loadAudit() {
   const c = document.getElementById('content-audit');
@@ -1964,11 +2657,19 @@ function showLogin() {
   document.getElementById('login-screen').style.display = 'flex';
 }
 
+let _dashRefreshInterval = null;
+
 function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').classList.add('visible');
   startClock();
   goSection('dashboard');
+  // Auto-refresh dashboard + stats toutes les 30s
+  if (_dashRefreshInterval) clearInterval(_dashRefreshInterval);
+  _dashRefreshInterval = setInterval(() => {
+    if (S.section === 'dashboard') loadDashboard();
+    else if (S.section === 'stats') loadStats();
+  }, 30000);
 }
 
 function refreshSection() {

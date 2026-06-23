@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
 	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
@@ -923,6 +924,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// Parser le JSON de la release (format différent selon le canal)
 	type releaseInfo struct {
 		TagName    string `json:"tag_name"`
+		Name       string `json:"name"`
 		HTMLURL    string `json:"html_url"`
 		Prerelease bool   `json:"prerelease"`
 	}
@@ -932,7 +934,6 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		if err := json.Unmarshal(out, &releases); err != nil {
 			return nil, fmt.Errorf("réponse GitHub invalide (canal alpha): %w", err)
 		}
-		// Prendre uniquement la première pre-release — évite de rétrogader vers une release stable
 		found := false
 		for _, r := range releases {
 			if r.Prerelease {
@@ -948,7 +949,6 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 				"message": "Aucune pré-release alpha disponible sur GitHub",
 			}, nil
 		}
-		release = releases[0]
 	} else {
 		if err := json.Unmarshal(out, &release); err != nil {
 			return nil, fmt.Errorf("réponse GitHub invalide: %w", err)
@@ -958,8 +958,26 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	latest := release.TagName
 	current := version.Version
 
-	// Comparer les versions
-	if latest == current {
+	// Pour le canal alpha, comparer par commit (release.Name = "Caleope alpha (abc1234)")
+	// car le tag est toujours "alpha-latest" — la version semver n'est pas comparable.
+	if channel == "alpha" {
+		latestCommit := ""
+		if n := release.Name; len(n) > 0 {
+			// Extraire le hash entre parenthèses : "Caleope alpha (f085075)" → "f085075"
+			if start := strings.LastIndex(n, "("); start >= 0 {
+				if end := strings.LastIndex(n, ")"); end > start {
+					latestCommit = n[start+1 : end]
+				}
+			}
+		}
+		if latestCommit != "" && latestCommit == version.Commit {
+			return map[string]string{
+				"status":  "up_to_date",
+				"version": current,
+				"message": "Caleope est déjà à jour",
+			}, nil
+		}
+	} else if latest == current {
 		return map[string]string{
 			"status":  "up_to_date",
 			"version": current,
@@ -978,10 +996,13 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		}, nil
 	}
 
+	// Étapes numérotées pour feedback CLI
+	fmt.Printf("[1/8] Vérification de la version sur GitHub...\n")
+
 	// Télécharger et remplacer les binaires
 	baseURL := fmt.Sprintf("https://github.com/gaiver-it/caleope/releases/download/%s", latest)
 
-	fmt.Printf("→ Téléchargement de Caleope %s...\n", latest)
+	fmt.Printf("[2/8] Téléchargement des binaires (caleoped, caleope, caleope-ui)...\n")
 
 	for _, bin := range []struct{ name, dest string }{
 		{"caleoped-linux-amd64", "/usr/local/bin/caleoped.new"},
@@ -1001,6 +1022,8 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		}
 	}
 
+	fmt.Printf("[3/8] Installation des binaires...\n")
+
 	// Remplacer les binaires (move atomique)
 	for _, pair := range []struct{ src, dst string }{
 		{"/usr/local/bin/caleoped.new", "/usr/local/bin/caleoped"},
@@ -1015,8 +1038,13 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// Symlink de compatibilité : caleope-store → caleope
 	_ = exec.Command("ln", "-sf", "/usr/local/bin/caleope", "/usr/local/bin/caleope-store").Run()
 
+	fmt.Printf("[4/8] Configuration Traefik / systemd...\n")
+
 	// S'assurer que caleope-ui.service et sa config Traefik sont en place
 	s.EnsureUISetup()
+	s.EnsureSecurityHeaders()
+
+	fmt.Printf("[5/8] Mise à jour de la configuration...\n")
 
 	// Mettre à jour caleope.conf
 	confPath := fmt.Sprintf("%s/caleope.conf", s.baseDir)
@@ -1029,28 +1057,33 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	fmt.Printf("✅ Caleope mis à jour vers %s\n", latest)
 
+	fmt.Printf("[6/8] Synchronisation du store...\n")
+
 	// Synchroniser les dépôts du store en même temps que le binaire,
 	// pour que les nouvelles définitions d'apps soient disponibles immédiatement.
-	fmt.Println("→ Synchronisation des dépôts...")
 	if err := s.handleUpdate(nil); err != nil {
 		fmt.Printf("⚠️  Sync store partiel : %v\n", err)
-	} else {
-		fmt.Println("✅ Dépôts synchronisés")
 	}
+
+	fmt.Printf("[7/8] Vérification des composants core...\n")
 
 	// Installer les composants essentiels s'ils sont absents.
 	// Ces apps font partie de l'infrastructure Caleope et doivent être présentes
 	// sur toute installation complète.
 	s.ensureCoreApps()
 
-	fmt.Println("→ Redémarrage du daemon dans 2 secondes...")
+	fmt.Printf("[8/8] Redémarrage des services dans 2 secondes...\n")
 
 	// Redémarrer via un script shell indépendant de ce processus.
 	// On ne peut pas faire les deux restarts dans une goroutine : quand
 	// "systemctl restart caleoped" s'exécute, il tue ce processus et la
 	// goroutine meurt avec lui — caleope-ui ne serait jamais redémarré.
+	// caleoped d'abord : Requires=caleoped dans caleope-ui.service
+	// implique que si caleoped s'arrête, caleope-ui s'arrête aussi.
+	// En redémarrant caleoped en premier puis caleope-ui ensuite, on évite
+	// que le restart de caleoped ne stoppe caleope-ui sans le relancer.
 	_ = exec.Command("bash", "-c",
-		"sleep 2 && systemctl restart caleope-ui && systemctl restart caleoped",
+		"sleep 2 && systemctl restart caleoped && sleep 2 && systemctl restart caleope-ui",
 	).Start()
 
 	return map[string]string{
@@ -1427,6 +1460,124 @@ func getDockerGateway(network string) string {
 		return ""
 	}
 	return ip
+}
+
+// ─────────────────────────────────────────────
+// SYSTEM INFO
+// ─────────────────────────────────────────────
+
+// handleSystemInfo retourne les informations système du serveur hôte.
+func (s *Server) handleSystemInfo() (map[string]interface{}, error) {
+	hostname, _ := os.Hostname()
+
+	// Uptime depuis /proc/uptime
+	var uptimeSec float64
+	if raw, err := os.ReadFile("/proc/uptime"); err == nil {
+		fmt.Sscanf(strings.TrimSpace(string(raw)), "%f", &uptimeSec)
+	}
+	days := int(uptimeSec / 86400)
+	hours := int(uptimeSec/3600) % 24
+	mins := int(uptimeSec/60) % 60
+
+	// OS depuis /etc/os-release
+	osName := ""
+	if raw, err := os.ReadFile("/etc/os-release"); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "PRETTY_NAME=") {
+				osName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), `"`)
+				break
+			}
+		}
+	}
+
+	// Nombre de CPU depuis /proc/cpuinfo
+	cpuCount := 0
+	if raw, err := os.ReadFile("/proc/cpuinfo"); err == nil {
+		cpuCount = strings.Count(string(raw), "processor\t:")
+	}
+
+	// Version du kernel
+	kernel := ""
+	if out, err := exec.Command("uname", "-r").Output(); err == nil {
+		kernel = strings.TrimSpace(string(out))
+	}
+
+	return map[string]interface{}{
+		"hostname":        hostname,
+		"uptime_seconds":  uptimeSec,
+		"uptime":          fmt.Sprintf("%dd %dh %dm", days, hours, mins),
+		"os":              osName,
+		"cpu_count":       cpuCount,
+		"kernel":          kernel,
+	}, nil
+}
+
+// ─────────────────────────────────────────────
+// RECONFIGURE
+// ─────────────────────────────────────────────
+
+// handleReconfigure relance setup.sh sur une app déjà installée pour appliquer
+// de nouveaux paramètres sans réinstaller (pas de suppression des données).
+func (s *Server) handleReconfigure(args map[string]string) (interface{}, error) {
+	appID := args["app"]
+	if appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	app, err := s.rt.GetApp(appID)
+	if err != nil {
+		return nil, fmt.Errorf("application '%s' non trouvée", appID)
+	}
+
+	// Extraire les nouveaux paramètres (format param_KEY=VALUE)
+	params := map[string]string{}
+	for k, v := range args {
+		if strings.HasPrefix(k, "param_") {
+			params[strings.TrimPrefix(k, "param_")] = v
+		}
+	}
+
+	opts := install.InstallOptions{
+		AppID:   appID,
+		Domain:  app.Domain,
+		Channel: app.Channel,
+		Params:  params,
+		Force:   true,
+	}
+
+	if err := s.installer.Install(opts); err != nil {
+		audit.Log(audit.ActionConfigure, appID, "ERROR:"+err.Error())
+		return nil, fmt.Errorf("reconfiguration '%s': %w", appID, err)
+	}
+	audit.Log(audit.ActionConfigure, appID, "OK")
+	return map[string]string{"status": "reconfigured", "app": appID}, nil
+}
+
+// EnsureSecurityHeaders écrit un middleware Traefik avec les en-têtes de sécurité HTTP.
+// Le middleware "secure-headers" est disponible pour toutes les apps qui l'activent.
+// Idempotent — peut être appelé à chaque démarrage.
+func (s *Server) EnsureSecurityHeaders() {
+	traefikDir := filepath.Join(s.baseDir, "data", "traefik", "dynamic")
+	if err := os.MkdirAll(traefikDir, 0755); err != nil {
+		return
+	}
+	content := `http:
+  middlewares:
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+        customResponseHeaders:
+          X-Powered-By: ""
+          Server: ""
+`
+	_ = os.WriteFile(filepath.Join(traefikDir, "security-headers.yml"), []byte(content), 0644)
 }
 
 // coreApps liste les composants essentiels installés automatiquement sur toute instance Caleope.

@@ -71,7 +71,7 @@ CALEOPE_DOMAIN="${CALEOPE_DOMAIN:-}"
 CALEOPE_EMAIL="${CALEOPE_EMAIL:-}"
 CALEOPE_PROXY_MODE="${CALEOPE_PROXY_MODE:-}"   # "npm" = NPM en amont, "traefik" = Traefik gère les certs
 CALEOPE_CHANNEL="${CALEOPE_CHANNEL:-}"          # "stable" = releases officielles, "alpha" = pré-releases
-# SMTP externe (optionnel — pour les notifications des apps)
+# SMTP global — transmis automatiquement aux apps compatibles (optionnel)
 CALEOPE_SMTP_HOST="${CALEOPE_SMTP_HOST:-}"
 CALEOPE_SMTP_PORT="${CALEOPE_SMTP_PORT:-587}"
 CALEOPE_SMTP_USER="${CALEOPE_SMTP_USER:-}"
@@ -242,7 +242,7 @@ ask_config() {
         done
     fi
 
-    # ── SMTP externe (optionnel) ──
+    # ── SMTP global (optionnel) ──
     echo ""
     echo -e "${BLUE}  Relai SMTP (optionnel)${NC}"
     echo -e "  ${GRAY}Permet aux apps d'envoyer des emails (notifications, réinitialisation mdp...).${NC}"
@@ -386,6 +386,12 @@ install_prerequisites() {
         sshfs \
         fuse3
 
+    log_step "Installation des outils sécurité..."
+    run_cmd apt-get install -y \
+        ufw \
+        fail2ban \
+        unattended-upgrades
+
     log_success "Prérequis installés"
 }
 
@@ -433,6 +439,47 @@ install_docker() {
     usermod -aG docker "${CALEOPE_USER}"
 
     log_success "Docker installé : $(docker --version)"
+}
+
+# =============================================================================
+# SÉCURITÉ — UFW + fail2ban + unattended-upgrades
+# =============================================================================
+
+setup_security() {
+    log_section "Configuration de la sécurité"
+
+    # ── UFW ──
+    log_step "Configuration du pare-feu UFW..."
+    ufw --force reset >/dev/null 2>&1 || true
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow 22/tcp comment "SSH"
+    ufw allow 80/tcp comment "HTTP Traefik"
+    ufw allow 443/tcp comment "HTTPS Traefik"
+    ufw --force enable
+    log_success "UFW actif (SSH + HTTP/HTTPS autorisés)"
+
+    # ── fail2ban ──
+    log_step "Activation fail2ban..."
+    systemctl enable fail2ban >/dev/null 2>&1 || true
+    systemctl start fail2ban 2>/dev/null || true
+    log_success "fail2ban actif"
+
+    # ── unattended-upgrades ──
+    log_step "Activation des mises à jour automatiques de sécurité..."
+    cat > /etc/apt/apt.conf.d/20auto-upgrades << 'EOF_APT'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF_APT
+    systemctl enable unattended-upgrades >/dev/null 2>&1 || true
+    systemctl start unattended-upgrades 2>/dev/null || true
+    log_success "Mises à jour de sécurité automatiques activées"
+
+    # ── Créer le dossier de logs Caleope ──
+    mkdir -p /var/log/caleope
+    chmod 750 /var/log/caleope
+    chown root:caleope /var/log/caleope 2>/dev/null || true
 }
 
 # =============================================================================
@@ -1113,7 +1160,7 @@ CALEOPE_EMAIL=${CALEOPE_EMAIL}
 CALEOPE_CHANNEL=${CALEOPE_CHANNEL}
 CALEOPE_VERSION=0.1.0
 
-# SMTP externe (relai pour les notifications des apps)
+# SMTP global — transmis automatiquement aux apps compatibles
 CALEOPE_SMTP_HOST=${CALEOPE_SMTP_HOST}
 CALEOPE_SMTP_PORT=${CALEOPE_SMTP_PORT}
 CALEOPE_SMTP_USER=${CALEOPE_SMTP_USER}
@@ -1136,48 +1183,6 @@ EOF
     log_success "Config sauvegardée dans ${CALEOPE_ROOT}/caleope.conf"
     log_debug "  CALEOPE_DOMAIN=${CALEOPE_DOMAIN}"
     log_debug "  CALEOPE_PROXY_MODE=${CALEOPE_PROXY_MODE}"
-}
-
-# =============================================================================
-# SÉCURITÉ SYSTÈME (UFW, fail2ban, unattended-upgrades)
-# =============================================================================
-
-setup_security() {
-    log_section "Sécurité système"
-
-    # ── UFW ──
-    log_step "Configuration du pare-feu UFW..."
-    run_cmd apt-get install -y ufw
-    ufw --force reset >/dev/null 2>&1 || true
-    ufw default deny incoming >/dev/null 2>&1
-    ufw default allow outgoing >/dev/null 2>&1
-    ufw allow 22/tcp comment "SSH" >/dev/null 2>&1
-    ufw allow 80/tcp comment "HTTP" >/dev/null 2>&1
-    ufw allow 443/tcp comment "HTTPS" >/dev/null 2>&1
-    echo "y" | ufw enable >/dev/null 2>&1 || true
-    log_success "UFW actif (22/80/443 ouverts)"
-
-    # ── fail2ban ──
-    log_step "Installation de fail2ban..."
-    run_cmd apt-get install -y fail2ban
-    run_cmd systemctl enable fail2ban
-    run_cmd systemctl start fail2ban
-    log_success "fail2ban actif"
-
-    # ── unattended-upgrades ──
-    log_step "Mises à jour automatiques de sécurité..."
-    run_cmd apt-get install -y unattended-upgrades
-    echo 'Unattended-Upgrade::Automatic-Reboot "false";' \
-        > /etc/apt/apt.conf.d/51caleope-no-reboot 2>/dev/null || true
-    run_cmd systemctl enable unattended-upgrades
-    run_cmd systemctl start unattended-upgrades
-    log_success "unattended-upgrades actif"
-
-    # ── Répertoire journal audit ──
-    mkdir -p /var/log/caleope
-    chmod 750 /var/log/caleope
-    chown "${CALEOPE_USER}:${CALEOPE_GROUP}" /var/log/caleope 2>/dev/null || true
-    log_success "Répertoire /var/log/caleope créé"
 }
 
 # =============================================================================

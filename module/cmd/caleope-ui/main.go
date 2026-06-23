@@ -16,6 +16,7 @@ package main
 import (
 	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -27,6 +28,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -44,6 +46,15 @@ type sessions struct {
 	mu   sync.RWMutex
 	data map[string]time.Time
 }
+
+// vwSessionCache : cookie VW_ADMIN mis en cache pour éviter le rate-limit (Max-Age=1200s)
+type vwSessionCache struct {
+	mu      sync.Mutex
+	cookie  string
+	expires time.Time
+}
+
+var vwCache = &vwSessionCache{}
 
 func newSessions() *sessions { return &sessions{data: make(map[string]time.Time)} }
 
@@ -267,16 +278,72 @@ func main() {
 
 	// ── Proxy vers les APIs des apps installées ──────────────────────────────
 	// GET|POST /ui/proxy/{appid}/{path...}
-	// Lit le token depuis app-config/{appid}/secrets.env,
-	// lit le port depuis runtime/apps/{appid}.json et forward en HTTP local.
+	//
+	// Supporte plusieurs modes d'auth et de résolution d'adresse :
+	//   - Bearer / X-Api-Key : token statique dans secrets.env
+	//   - Basic : username + password encodés en base64
+	//   - GitToken : Authorization: token TOKEN (Gitea API)
+	//   - VaultwardenAdmin : POST /admin cookie flow
+	//   - portName : port hôte dans runtime/apps/{appid}.json
+	//   - containerName + containerPort : résolution IP Docker dynamique
 	type appProxyCfg struct {
-		tokenKey   string // clé dans secrets.env
-		authScheme string // "Bearer" ou "X-API-Key"
-		portName   string // nom du port dans RuntimeApp.Ports (ex: "web", "server")
+		tokenKey      string // clé token dans secrets.env (Bearer/X-Api-Key)
+		basicUserKey  string // clé username pour Basic auth
+		basicPassKey  string // clé password pour Basic auth
+		authScheme    string // "Bearer", "X-Api-Key", "Basic", "GitToken", "VaultwardenAdmin"
+		portName      string // port nommé dans runtime JSON (si pas containerName)
+		secretsApp    string // app dont lire les secrets (si différent de appID)
+		containerName string // nom du conteneur Docker à résoudre
+		containerPort int    // port du conteneur (si containerName défini)
+		hostOverride  string // Host header override (ex: nextcloud.domain.com)
+		extraHeaders  map[string]string // headers supplémentaires à ajouter
 	}
+
+	// Lire le domaine depuis caleope.conf pour le Host header Nextcloud
+	caleopeDomain := readEnvKey(filepath.Join(*baseDir, "caleope.conf"), "CALEOPE_DOMAIN")
+
 	appProxyMap := map[string]appProxyCfg{
-		"authentik": {tokenKey: "AUTHENTIK_BOOTSTRAP_TOKEN", authScheme: "Bearer",   portName: "web"},
-		"azuracast": {tokenKey: "AZURACAST_API_KEY",         authScheme: "X-API-Key", portName: "web"},
+		// Apps avec token hôte mappé
+		"authentik": {tokenKey: "AUTHENTIK_BOOTSTRAP_TOKEN", authScheme: "Bearer",    portName: "web"},
+		"azuracast": {tokenKey: "AZURACAST_API_KEY",         authScheme: "X-Api-Key", portName: "web"},
+
+		// Nextcloud — OCS API : Basic auth + Host header requis (trusted_domains)
+		"nextcloud": {basicUserKey: "NEXTCLOUD_ADMIN_USER", basicPassKey: "NEXTCLOUD_ADMIN_PASSWORD",
+			authScheme: "Basic", containerName: "nextcloud", containerPort: 80,
+			hostOverride: "nextcloud." + caleopeDomain,
+			extraHeaders: map[string]string{"OCS-APIRequest": "true"}},
+
+		// Gitea — REST API (token API généré via gitea admin)
+		"gitea": {tokenKey: "GITEA_API_TOKEN", authScheme: "GitToken",
+			containerName: "gitea", containerPort: 3000},
+
+		// Vaultwarden — admin panel (session cookie via POST /admin)
+		"vaultwarden": {tokenKey: "_ADMIN_TOKEN_PLAIN", authScheme: "VaultwardenAdmin",
+			containerName: "vaultwarden", containerPort: 80},
+
+		// Arr-stack : chaque service via IP Docker
+		"arr-sonarr":  {tokenKey: "ARR_API_SONARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "sonarr",  containerPort: 8989},
+		"arr-radarr":  {tokenKey: "ARR_API_RADARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "radarr",  containerPort: 7878},
+		"arr-lidarr":  {tokenKey: "ARR_API_LIDARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "lidarr",  containerPort: 8686},
+		"arr-prowlarr":{tokenKey: "ARR_API_PROWLARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "prowlarr",containerPort: 9696},
+	}
+
+	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
+	resolveDockerIP := func(containerName string) string {
+		out, err := exec.Command("docker", "inspect",
+			"--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}\n{{end}}",
+			containerName,
+		).Output()
+		if err != nil {
+			return ""
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				return line
+			}
+		}
+		return ""
 	}
 
 	// readAppPort lit le port hôte d'une app depuis runtime/apps/{appid}.json.
@@ -299,7 +366,6 @@ func main() {
 				return p.Host
 			}
 		}
-		// Fallback: premier port disponible
 		if len(app.Ports) > 0 {
 			return app.Ports[0].Host
 		}
@@ -322,22 +388,134 @@ func main() {
 			return
 		}
 
-		secretsPath := filepath.Join(*baseDir, "app-config", appID, "secrets.env")
-		token := readEnvKey(secretsPath, cfg.tokenKey)
-		if token == "" {
-			jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible (app installée ?)")
-			return
+		// Résoudre l'app cible (secrets + adresse)
+		secretsAppID := cfg.secretsApp
+		if secretsAppID == "" {
+			secretsAppID = appID
+		}
+		secretsPath := filepath.Join(*baseDir, "app-config", secretsAppID, "secrets.env")
+
+		// Résoudre l'adresse cible
+		var targetBase string
+		if cfg.containerName != "" {
+			ip := resolveDockerIP(cfg.containerName)
+			if ip == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": conteneur introuvable")
+				return
+			}
+			targetBase = fmt.Sprintf("http://%s:%d", ip, cfg.containerPort)
+		} else {
+			port := readAppPort(secretsAppID, cfg.portName)
+			if port == 0 {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": port hôte introuvable")
+				return
+			}
+			targetBase = fmt.Sprintf("http://localhost:%d", port)
 		}
 
-		port := readAppPort(appID, cfg.portName)
-		if port == 0 {
-			jsonErr(w, http.StatusServiceUnavailable, appID+": port hôte introuvable")
-			return
-		}
-
-		targetURL := fmt.Sprintf("http://localhost:%d%s", port, apiPath)
+		targetURL := targetBase + apiPath
 		if r.URL.RawQuery != "" {
 			targetURL += "?" + r.URL.RawQuery
+		}
+
+		client := &http.Client{Timeout: 30 * time.Second}
+
+		// VaultwardenAdmin : session cookie flow avec cache (évite le rate-limit 429)
+		// Le cookie VW_ADMIN a un Max-Age de 1200s (20 min) — on le réutilise jusqu'à expiry.
+		if cfg.authScheme == "VaultwardenAdmin" {
+			adminToken := readEnvKey(secretsPath, cfg.tokenKey)
+			if adminToken == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+				return
+			}
+
+			// Récupérer ou rafraîchir le cookie en cache
+			vwCache.mu.Lock()
+			vwCookie := vwCache.cookie
+			if vwCookie == "" || time.Now().After(vwCache.expires) {
+				formData := strings.NewReader("token=" + url.QueryEscape(adminToken))
+				authReq, _ := http.NewRequest(http.MethodPost, targetBase+"/admin", formData)
+				authReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				noRedir := &http.Client{
+					Timeout: 15 * time.Second,
+					CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+						return http.ErrUseLastResponse
+					},
+				}
+				authResp, err := noRedir.Do(authReq)
+				if err == nil || authResp != nil {
+					if authResp != nil {
+						for _, c := range authResp.Cookies() {
+							if c.Name == "VW_ADMIN" {
+								vwCookie = c.Value
+								vwCache.cookie = vwCookie
+								vwCache.expires = time.Now().Add(18 * time.Minute)
+								break
+							}
+						}
+						authResp.Body.Close()
+					}
+				}
+			}
+			vwCache.mu.Unlock()
+
+			if vwCookie == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "vaultwarden: cookie VW_ADMIN absent (rate-limited ou token invalide)")
+				return
+			}
+
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			outReq.Header.Set("Cookie", "VW_ADMIN="+vwCookie)
+			outReq.Header.Set("Accept", "application/json, text/html")
+			resp, err := client.Do(outReq)
+			if err != nil {
+				jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())
+				return
+			}
+			defer resp.Body.Close()
+			ct := resp.Header.Get("Content-Type")
+			w.Header().Set("Content-Type", ct)
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// Construire le header d'authentification (autres schemes)
+		var authHeader, authValue string
+		switch cfg.authScheme {
+		case "Basic":
+			user := readEnvKey(secretsPath, cfg.basicUserKey)
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
+			if user == "" || pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials non disponibles")
+				return
+			}
+			creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+			authHeader, authValue = "Authorization", "Basic "+creds
+		case "GitToken":
+			token := readEnvKey(secretsPath, cfg.tokenKey)
+			if token == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+				return
+			}
+			authHeader, authValue = "Authorization", "token "+token
+		default:
+			token := readEnvKey(secretsPath, cfg.tokenKey)
+			if token == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+				return
+			}
+			switch cfg.authScheme {
+			case "Bearer":
+				authHeader, authValue = "Authorization", "Bearer "+token
+			default:
+				authHeader, authValue = cfg.authScheme, token
+			}
 		}
 
 		outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
@@ -348,14 +526,17 @@ func main() {
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			outReq.Header.Set("Content-Type", ct)
 		}
-		if cfg.authScheme == "Bearer" {
-			outReq.Header.Set("Authorization", "Bearer "+token)
-		} else {
-			outReq.Header.Set(cfg.authScheme, token)
-		}
+		outReq.Header.Set(authHeader, authValue)
 		outReq.Header.Set("Accept", "application/json")
+		// Host override (ex: Nextcloud trusted_domains)
+		if cfg.hostOverride != "" {
+			outReq.Host = cfg.hostOverride
+		}
+		// Headers supplémentaires (ex: OCS-APIRequest pour Nextcloud)
+		for k, v := range cfg.extraHeaders {
+			outReq.Header.Set(k, v)
+		}
 
-		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(outReq)
 		if err != nil {
 			jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())

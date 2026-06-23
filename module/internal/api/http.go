@@ -11,24 +11,39 @@
 //   GET    /api/v1/ping
 //   GET    /api/v1/apps
 //   GET    /api/v1/apps/{id}
-//   POST   /api/v1/apps/{id}/install    body JSON: {"domain":"...","channel":"stable"}
-//   DELETE /api/v1/apps/{id}            ?keep_data=true
-//   GET    /api/v1/apps/{id}/logs       ?tail=100
+//   POST   /api/v1/apps/{id}/install       body JSON: {"domain":"...","channel":"stable"}
+//   POST   /api/v1/apps/{id}/reconfigure   body JSON: {"params":{...}}
+//   DELETE /api/v1/apps/{id}               ?keep_data=true
+//   GET    /api/v1/apps/{id}/logs          ?tail=100
+//   GET    /api/v1/apps/{id}/logs/stream   SSE — tail=N
 //   POST   /api/v1/apps/{id}/start
 //   POST   /api/v1/apps/{id}/stop
 //   POST   /api/v1/apps/{id}/restart
 //   POST   /api/v1/apps/{id}/backup
-//   POST   /api/v1/apps/{id}/restore    ?timestamp=...
+//   POST   /api/v1/apps/{id}/restore       ?timestamp=...
 //   GET    /api/v1/apps/{id}/backups
-//   GET    /api/v1/stats                ?disk=true
-//   GET    /api/v1/store                ?q=terme
-//   POST   /api/v1/upgrade              ?check=true
-//   GET    /api/v1/token               (localhost seulement)
+//   GET    /api/v1/stats                   ?disk=true
+//   GET    /api/v1/store                   ?q=terme
+//   GET    /api/v1/store/{id}
+//   POST   /api/v1/upgrade                 ?check=true
+//   POST   /api/v1/update
+//   GET    /api/v1/token                   (localhost seulement)
+//   GET    /api/v1/system                  hostname, uptime, OS, CPU
 //   GET    /api/v1/tasks
-//   POST   /api/v1/tasks               body JSON: Task
+//   POST   /api/v1/tasks                   body JSON: Task
 //   DELETE /api/v1/tasks/{id}
-//   POST   /api/v1/tasks/{id}/run      exécution immédiate
-//   PATCH  /api/v1/tasks/{id}/toggle   body JSON: {"enabled": true|false}
+//   POST   /api/v1/tasks/{id}/run          exécution immédiate
+//   PATCH  /api/v1/tasks/{id}/toggle       body JSON: {"enabled": true|false}
+//   GET    /api/v1/events                  ?app=...&type=...&limit=...
+//   GET    /api/v1/secrets
+//   POST   /api/v1/secrets                 body JSON: {"password":"..."}
+//   POST   /api/v1/secrets/{app}
+//   GET    /api/v1/audit                   ?n=50
+//   GET    /api/v1/locations
+//   POST   /api/v1/locations
+//   DELETE /api/v1/locations/{name}
+//   POST   /api/v1/locations/{name}/mount
+//   POST   /api/v1/locations/{name}/unmount
 
 package api
 
@@ -143,6 +158,19 @@ func (s *Server) StartHTTP(port int) error {
 		s.httpUpgradeApp(w, r)
 	})))
 
+	// POST /api/v1/update — synchroniser le store (git pull sur les dépôts)
+	mux.Handle("/api/v1/update", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			s.httpError(w, "méthode non supportée", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := s.handleUpdate(map[string]string{}); err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "ok", "message": "Store synchronisé"})
+	})))
+
 	// GET /api/v1/events?app=jellyfin&limit=50&type=app.installed
 	mux.Handle("/api/v1/events", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -186,6 +214,20 @@ func (s *Server) StartHTTP(port int) error {
 
 	// /api/v1/tasks/{id}[/action]
 	mux.Handle("/api/v1/tasks/", s.auth(http.HandlerFunc(s.routeTask)))
+
+	// GET /api/v1/system — informations système (hostname, uptime, OS, CPU)
+	mux.Handle("/api/v1/system", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		data, err := s.handleSystemInfo()
+		if err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, data)
+	})))
 
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("✓ API REST sur %s\n", addr)
@@ -243,6 +285,8 @@ func (s *Server) routeApp(w http.ResponseWriter, r *http.Request) {
 		s.httpLogsStreamByID(w, r, id)
 	case "POST install":
 		s.httpInstallByID(w, r, id)
+	case "POST reconfigure":
+		s.httpReconfigureByID(w, r, id)
 	case "POST start":
 		s.httpStartByID(w, r, id)
 	case "POST stop":
@@ -477,6 +521,29 @@ func (s *Server) httpInstallByID(w http.ResponseWriter, r *http.Request, id stri
 		}
 	}
 	data, err := s.handleInstall(args)
+	if err != nil {
+		s.httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.httpOK(w, data)
+}
+
+func (s *Server) httpReconfigureByID(w http.ResponseWriter, r *http.Request, id string) {
+	args := map[string]string{"app": id}
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err == nil {
+		if paramsRaw, ok := raw["params"]; ok {
+			var params map[string]interface{}
+			if json.Unmarshal(paramsRaw, &params) == nil {
+				for pk, pv := range params {
+					if sv, ok := pv.(string); ok {
+						args["param_"+pk] = sv
+					}
+				}
+			}
+		}
+	}
+	data, err := s.handleReconfigure(args)
 	if err != nil {
 		s.httpError(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -19,7 +19,13 @@ type Action string
 const (
 	ActionInstall   Action = "INSTALL"
 	ActionRemove    Action = "REMOVE"
+	ActionStart     Action = "START"
+	ActionStop      Action = "STOP"
+	ActionRestart   Action = "RESTART"
 	ActionConfigure Action = "CONFIGURE"
+	ActionUpgrade   Action = "UPGRADE"
+	ActionBackup    Action = "BACKUP"
+	ActionRestore   Action = "RESTORE"
 	ActionSecretsShow Action = "SECRETS_SHOW"
 	ActionStartup   Action = "STARTUP"
 	ActionError     Action = "ERROR"
