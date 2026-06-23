@@ -47,6 +47,15 @@ type sessions struct {
 	data map[string]time.Time
 }
 
+// vwSessionCache : cookie VW_ADMIN mis en cache pour éviter le rate-limit (Max-Age=1200s)
+type vwSessionCache struct {
+	mu      sync.Mutex
+	cookie  string
+	expires time.Time
+}
+
+var vwCache = &vwSessionCache{}
+
 func newSessions() *sessions { return &sessions{data: make(map[string]time.Time)} }
 
 func (s *sessions) create() string {
@@ -411,40 +420,50 @@ func main() {
 
 		client := &http.Client{Timeout: 30 * time.Second}
 
-		// VaultwardenAdmin : session cookie flow (POST /admin → cookie VW_ADMIN)
+		// VaultwardenAdmin : session cookie flow avec cache (évite le rate-limit 429)
+		// Le cookie VW_ADMIN a un Max-Age de 1200s (20 min) — on le réutilise jusqu'à expiry.
 		if cfg.authScheme == "VaultwardenAdmin" {
 			adminToken := readEnvKey(secretsPath, cfg.tokenKey)
 			if adminToken == "" {
 				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
 				return
 			}
-			formData := strings.NewReader("token=" + url.QueryEscape(adminToken))
-			authReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, targetBase+"/admin", formData)
-			authReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			// Ne pas suivre les redirections pour récupérer le cookie
-			noRedirectClient := &http.Client{
-				Timeout: 15 * time.Second,
-				CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			}
-			authResp, err := noRedirectClient.Do(authReq)
-			if err != nil {
-				jsonErr(w, http.StatusBadGateway, "vaultwarden: auth: "+err.Error())
-				return
-			}
-			authResp.Body.Close()
-			var vwCookie string
-			for _, c := range authResp.Cookies() {
-				if c.Name == "VW_ADMIN" {
-					vwCookie = c.Value
-					break
+
+			// Récupérer ou rafraîchir le cookie en cache
+			vwCache.mu.Lock()
+			vwCookie := vwCache.cookie
+			if vwCookie == "" || time.Now().After(vwCache.expires) {
+				formData := strings.NewReader("token=" + url.QueryEscape(adminToken))
+				authReq, _ := http.NewRequest(http.MethodPost, targetBase+"/admin", formData)
+				authReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				noRedir := &http.Client{
+					Timeout: 15 * time.Second,
+					CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+						return http.ErrUseLastResponse
+					},
+				}
+				authResp, err := noRedir.Do(authReq)
+				if err == nil || authResp != nil {
+					if authResp != nil {
+						for _, c := range authResp.Cookies() {
+							if c.Name == "VW_ADMIN" {
+								vwCookie = c.Value
+								vwCache.cookie = vwCookie
+								vwCache.expires = time.Now().Add(18 * time.Minute)
+								break
+							}
+						}
+						authResp.Body.Close()
+					}
 				}
 			}
+			vwCache.mu.Unlock()
+
 			if vwCookie == "" {
-				jsonErr(w, http.StatusServiceUnavailable, "vaultwarden: cookie VW_ADMIN absent (token invalide ?)")
+				jsonErr(w, http.StatusServiceUnavailable, "vaultwarden: cookie VW_ADMIN absent (rate-limited ou token invalide)")
 				return
 			}
+
 			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 			if err != nil {
 				jsonErr(w, http.StatusInternalServerError, err.Error())
