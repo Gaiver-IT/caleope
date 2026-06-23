@@ -2121,7 +2121,7 @@ async function loadGiteaRepos() {
   const adminLink = appDomain ? `<a href="https://${appDomain}/explore/repos" target="_blank" rel="noopener"
     class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>EXPLORER</a>` : '';
 
-  const r = await fetch('/ui/proxy/gitea/api/v1/repos/search?limit=30&sort=newest&token=');
+  const r = await fetch('/ui/proxy/gitea/api/v1/repos/search?limit=30&sort=updated');
   if (!r.ok) {
     c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-book"></i></div>
       <div class="empty-title">DÉPÔTS INDISPONIBLES</div>
