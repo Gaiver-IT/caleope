@@ -924,6 +924,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// Parser le JSON de la release (format différent selon le canal)
 	type releaseInfo struct {
 		TagName    string `json:"tag_name"`
+		Name       string `json:"name"`
 		HTMLURL    string `json:"html_url"`
 		Prerelease bool   `json:"prerelease"`
 	}
@@ -933,7 +934,6 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		if err := json.Unmarshal(out, &releases); err != nil {
 			return nil, fmt.Errorf("réponse GitHub invalide (canal alpha): %w", err)
 		}
-		// Prendre uniquement la première pre-release — évite de rétrogader vers une release stable
 		found := false
 		for _, r := range releases {
 			if r.Prerelease {
@@ -949,7 +949,6 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 				"message": "Aucune pré-release alpha disponible sur GitHub",
 			}, nil
 		}
-		release = releases[0]
 	} else {
 		if err := json.Unmarshal(out, &release); err != nil {
 			return nil, fmt.Errorf("réponse GitHub invalide: %w", err)
@@ -959,8 +958,26 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	latest := release.TagName
 	current := version.Version
 
-	// Comparer les versions
-	if latest == current {
+	// Pour le canal alpha, comparer par commit (release.Name = "Caleope alpha (abc1234)")
+	// car le tag est toujours "alpha-latest" — la version semver n'est pas comparable.
+	if channel == "alpha" {
+		latestCommit := ""
+		if n := release.Name; len(n) > 0 {
+			// Extraire le hash entre parenthèses : "Caleope alpha (f085075)" → "f085075"
+			if start := strings.LastIndex(n, "("); start >= 0 {
+				if end := strings.LastIndex(n, ")"); end > start {
+					latestCommit = n[start+1 : end]
+				}
+			}
+		}
+		if latestCommit != "" && latestCommit == version.Commit {
+			return map[string]string{
+				"status":  "up_to_date",
+				"version": current,
+				"message": "Caleope est déjà à jour",
+			}, nil
+		}
+	} else if latest == current {
 		return map[string]string{
 			"status":  "up_to_date",
 			"version": current,
