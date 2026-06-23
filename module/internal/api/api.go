@@ -1025,6 +1025,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 
 	// S'assurer que caleope-ui.service et sa config Traefik sont en place
 	s.EnsureUISetup()
+	s.EnsureSecurityHeaders()
 
 	fmt.Printf("[5/8] Mise à jour de la configuration...\n")
 
@@ -1442,6 +1443,124 @@ func getDockerGateway(network string) string {
 		return ""
 	}
 	return ip
+}
+
+// ─────────────────────────────────────────────
+// SYSTEM INFO
+// ─────────────────────────────────────────────
+
+// handleSystemInfo retourne les informations système du serveur hôte.
+func (s *Server) handleSystemInfo() (map[string]interface{}, error) {
+	hostname, _ := os.Hostname()
+
+	// Uptime depuis /proc/uptime
+	var uptimeSec float64
+	if raw, err := os.ReadFile("/proc/uptime"); err == nil {
+		fmt.Sscanf(strings.TrimSpace(string(raw)), "%f", &uptimeSec)
+	}
+	days := int(uptimeSec / 86400)
+	hours := int(uptimeSec/3600) % 24
+	mins := int(uptimeSec/60) % 60
+
+	// OS depuis /etc/os-release
+	osName := ""
+	if raw, err := os.ReadFile("/etc/os-release"); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "PRETTY_NAME=") {
+				osName = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), `"`)
+				break
+			}
+		}
+	}
+
+	// Nombre de CPU depuis /proc/cpuinfo
+	cpuCount := 0
+	if raw, err := os.ReadFile("/proc/cpuinfo"); err == nil {
+		cpuCount = strings.Count(string(raw), "processor\t:")
+	}
+
+	// Version du kernel
+	kernel := ""
+	if out, err := exec.Command("uname", "-r").Output(); err == nil {
+		kernel = strings.TrimSpace(string(out))
+	}
+
+	return map[string]interface{}{
+		"hostname":        hostname,
+		"uptime_seconds":  uptimeSec,
+		"uptime":          fmt.Sprintf("%dd %dh %dm", days, hours, mins),
+		"os":              osName,
+		"cpu_count":       cpuCount,
+		"kernel":          kernel,
+	}, nil
+}
+
+// ─────────────────────────────────────────────
+// RECONFIGURE
+// ─────────────────────────────────────────────
+
+// handleReconfigure relance setup.sh sur une app déjà installée pour appliquer
+// de nouveaux paramètres sans réinstaller (pas de suppression des données).
+func (s *Server) handleReconfigure(args map[string]string) (interface{}, error) {
+	appID := args["app"]
+	if appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	app, err := s.rt.GetApp(appID)
+	if err != nil {
+		return nil, fmt.Errorf("application '%s' non trouvée", appID)
+	}
+
+	// Extraire les nouveaux paramètres (format param_KEY=VALUE)
+	params := map[string]string{}
+	for k, v := range args {
+		if strings.HasPrefix(k, "param_") {
+			params[strings.TrimPrefix(k, "param_")] = v
+		}
+	}
+
+	opts := install.InstallOptions{
+		AppID:   appID,
+		Domain:  app.Domain,
+		Channel: app.Channel,
+		Params:  params,
+		Force:   true,
+	}
+
+	if err := s.installer.Install(opts); err != nil {
+		audit.Log(audit.ActionConfigure, appID, "ERROR:"+err.Error())
+		return nil, fmt.Errorf("reconfiguration '%s': %w", appID, err)
+	}
+	audit.Log(audit.ActionConfigure, appID, "OK")
+	return map[string]string{"status": "reconfigured", "app": appID}, nil
+}
+
+// EnsureSecurityHeaders écrit un middleware Traefik avec les en-têtes de sécurité HTTP.
+// Le middleware "secure-headers" est disponible pour toutes les apps qui l'activent.
+// Idempotent — peut être appelé à chaque démarrage.
+func (s *Server) EnsureSecurityHeaders() {
+	traefikDir := filepath.Join(s.baseDir, "data", "traefik", "dynamic")
+	if err := os.MkdirAll(traefikDir, 0755); err != nil {
+		return
+	}
+	content := `http:
+  middlewares:
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+        customResponseHeaders:
+          X-Powered-By: ""
+          Server: ""
+`
+	_ = os.WriteFile(filepath.Join(traefikDir, "security-headers.yml"), []byte(content), 0644)
 }
 
 // coreApps liste les composants essentiels installés automatiquement sur toute instance Caleope.

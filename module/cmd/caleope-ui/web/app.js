@@ -10,6 +10,7 @@ const S = {
   apps: [],
   catalog: [],
   stats: {},
+  sysinfo: {},
   locations: [],
   logApp: null,
   logStream: null,
@@ -1270,8 +1271,12 @@ async function removeLocation(id) {
 
 // ── SECTION: STATS (dashboard) ────────────────────────────────────────────────
 async function loadStats() {
-  const data = await api.get('/api/v1/stats?disk=true');
-  S.stats = data?.data || {};
+  const [statsResp, sysResp] = await Promise.all([
+    api.get('/api/v1/stats?disk=true'),
+    api.get('/api/v1/system'),
+  ]);
+  S.stats  = statsResp?.data || {};
+  S.sysinfo = sysResp?.data  || {};
   renderStats();
 }
 
@@ -1285,10 +1290,19 @@ function renderStats() {
   const disk = S.stats.disk_total_gb ? Math.round(S.stats.disk_used_gb / S.stats.disk_total_gb * 100) : 0;
   const diskUsedGb  = S.stats.disk_used_gb  ? S.stats.disk_used_gb.toFixed(1)  : '—';
   const diskTotalGb = S.stats.disk_total_gb ? S.stats.disk_total_gb.toFixed(1) : '—';
+  const sys = S.sysinfo || {};
 
   c.innerHTML = `
     <div class="settings-card">
-      <div class="settings-title">RESSOURCES SYSTÈME</div>
+      <div class="settings-title">HÔTE</div>
+      <div class="setting-row"><span>HOSTNAME</span><span class="setting-val">${escapeHtml(sys.hostname || '—')}</span></div>
+      <div class="setting-row"><span>UPTIME</span><span class="setting-val">${escapeHtml(sys.uptime || '—')}</span></div>
+      <div class="setting-row"><span>OS</span><span class="setting-val">${escapeHtml(sys.os || '—')}</span></div>
+      <div class="setting-row"><span>KERNEL</span><span class="setting-val">${escapeHtml(sys.kernel || '—')}</span></div>
+      <div class="setting-row"><span>CPU</span><span class="setting-val">${sys.cpu_count ? sys.cpu_count + ' cœur(s)' : '—'}</span></div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">RESSOURCES</div>
       <div class="seg-wrap">
         <div class="seg-meta"><span>RAM</span><span>${ramUsedGb}G / ${ramTotalGb}G</span></div>
         <div class="seg-bar">${segBar(ram)}</div>
@@ -1493,20 +1507,23 @@ async function loadDashboard() {
     await loadApps();
   }
 
+  // Charger stats + sysinfo si absent
+  if (!S.stats.mem_total_mb) await loadStats();
+
   const running = S.apps.filter(a => a.status === 'running').length;
   const stopped = S.apps.length - running;
   const ram  = S.stats.mem_total_mb ? Math.round(S.stats.mem_used_mb / S.stats.mem_total_mb * 100) : 0;
   const disk = S.stats.disk_total_gb ? Math.round(S.stats.disk_used_gb / S.stats.disk_total_gb * 100) : 0;
 
   const shortcuts = [
-    { id: 'apps',      icon: 'ti-layout-grid', label: 'APPLICATIONS', val: `${S.apps.length} installées` },
-    { id: 'logs',      icon: 'ti-terminal-2',  label: 'LOGS',         val: 'Temps réel' },
-    { id: 'backups',   icon: 'ti-archive',      label: 'SAUVEGARDES',  val: 'Restic SFTP' },
-    { id: 'secrets',   icon: 'ti-lock',         label: 'SECRETS',      val: 'AES-256-GCM' },
-    { id: 'locations', icon: 'ti-network',      label: 'EMPLACEMENTS', val: 'NFS / SMB' },
-    { id: 'audit',     icon: 'ti-clipboard-list',label: 'AUDIT',       val: 'Historique' },
-    { id: 'stats',     icon: 'ti-chart-bar',    label: 'SYSTÈME',      val: ram ? `RAM ${ram}%` : '—' },
-    { id: 'settings',  icon: 'ti-settings',     label: 'PARAMÈTRES',   val: `v${S.stats.version || '—'}` },
+    { id: 'apps',      icon: 'ti-layout-grid',    label: 'APPLICATIONS', val: `${S.apps.length} installées` },
+    { id: 'logs',      icon: 'ti-terminal-2',     label: 'LOGS',         val: 'Temps réel' },
+    { id: 'backups',   icon: 'ti-archive',         label: 'SAUVEGARDES',  val: 'Restic SFTP' },
+    { id: 'secrets',   icon: 'ti-lock',            label: 'SECRETS',      val: 'AES-256-GCM' },
+    { id: 'events',    icon: 'ti-history',         label: 'ÉVÉNEMENTS',   val: 'Historique' },
+    { id: 'audit',     icon: 'ti-clipboard-list',  label: 'AUDIT',        val: 'Journal sécurisé' },
+    { id: 'stats',     icon: 'ti-chart-bar',       label: 'SYSTÈME',      val: ram ? `RAM ${ram}%` : '—' },
+    { id: 'settings',  icon: 'ti-settings',        label: 'PARAMÈTRES',   val: `v${S.stats.version || '—'}` },
   ];
 
   c.innerHTML = `
@@ -1561,6 +1578,17 @@ async function loadDashboard() {
             </div>
           </div>`;
         }).join('')}
+      </div>
+    ` : ''}
+
+    ${S.sysinfo?.hostname ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// HÔTE</div>
+      <div class="settings-card" style="padding:8px 12px">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+          <div><div style="font-size:8px;color:var(--text3)">HOSTNAME</div><div style="font-size:10px;font-weight:700">${escapeHtml(S.sysinfo.hostname)}</div></div>
+          <div><div style="font-size:8px;color:var(--text3)">UPTIME</div><div style="font-size:10px;font-weight:700">${escapeHtml(S.sysinfo.uptime || '—')}</div></div>
+          <div><div style="font-size:8px;color:var(--text3)">CPU</div><div style="font-size:10px;font-weight:700">${S.sysinfo.cpu_count || '—'} cœur(s)</div></div>
+        </div>
       </div>
     ` : ''}
   `;
@@ -1711,14 +1739,15 @@ const SECTIONS = {
   secrets:   { label: 'SECRETS',         num: '/04', load: loadSecrets,    content: 'content-secrets',    btn: { icon: 'ti-lock-open',     label: 'DÉVERROUILLER', action: "unlockSecrets()" } },
   locations: { label: 'EMPLACEMENTS',    num: '/05', load: loadLocations,  content: 'content-locations',  btn: { icon: 'ti-plus',          label: 'AJOUTER',       action: "openAddLocationModal()" } },
   tasks:     { label: 'TÂCHES',           num: '/06', load: loadTasks,      content: 'content-tasks',      btn: { icon: 'ti-plus', label: 'NOUVELLE TÂCHE', action: 'openTaskModal()' } },
-  audit:     { label: 'AUDIT',           num: '/07', load: loadAudit,      content: 'content-audit',      btn: null },
-  settings:  { label: 'PARAMÈTRES',      num: '/08', load: loadSettings,   content: 'content-settings',   btn: null },
-  stats:     { label: 'SYSTÈME',         num: '/09', load: loadStats,      content: 'content-stats',      btn: null },
-  terminal:  { label: 'TERMINAL',        num: '/10', load: loadTerminal,   content: 'content-terminal',   btn: null },
-  services:  { label: 'SERVICES',        num: '/11', load: loadServices,   content: 'content-services',   btn: null },
-  network:   { label: 'RÉSEAU',          num: '/12', load: loadNetwork,    content: 'content-network',    btn: null },
-  storage:   { label: 'STOCKAGE',        num: '/13', load: loadStorage,    content: 'content-storage',    btn: null },
-  journal:   { label: 'JOURNAL',         num: '/14', load: loadJournal,    content: 'content-journal',    btn: null },
+  events:    { label: 'ÉVÉNEMENTS',       num: '/07', load: loadEvents,     content: 'content-events',     btn: null },
+  audit:     { label: 'AUDIT',           num: '/08', load: loadAudit,      content: 'content-audit',      btn: null },
+  settings:  { label: 'PARAMÈTRES',      num: '/09', load: loadSettings,   content: 'content-settings',   btn: null },
+  stats:     { label: 'SYSTÈME',         num: '/10', load: loadStats,      content: 'content-stats',      btn: null },
+  terminal:  { label: 'TERMINAL',        num: '/11', load: loadTerminal,   content: 'content-terminal',   btn: null },
+  services:  { label: 'SERVICES',        num: '/12', load: loadServices,   content: 'content-services',   btn: null },
+  network:   { label: 'RÉSEAU',          num: '/13', load: loadNetwork,    content: 'content-network',    btn: null },
+  storage:   { label: 'STOCKAGE',        num: '/14', load: loadStorage,    content: 'content-storage',    btn: null },
+  journal:   { label: 'JOURNAL',         num: '/15', load: loadJournal,    content: 'content-journal',    btn: null },
 };
 
 // ── Intégrations apps (panels embarqués) ─────────────────────────────────────
@@ -2002,6 +2031,62 @@ function goSection(id) {
 
   // Load data
   if (sec?.load) sec.load();
+}
+
+// ── SECTION: ÉVÉNEMENTS ──────────────────────────────────────────────────────
+
+const EVENT_ICONS = {
+  'app.installed':   'ti-package',
+  'app.removed':     'ti-trash',
+  'app.started':     'ti-player-play',
+  'app.stopped':     'ti-player-stop',
+  'app.restarted':   'ti-refresh',
+  'app.backed_up':   'ti-device-floppy',
+  'app.restored':    'ti-history',
+  'app.failed':      'ti-alert-circle',
+};
+
+async function loadEvents() {
+  const c = document.getElementById('content-events');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const resp = await api.get('/api/v1/events?limit=100');
+  const evts = resp?.data || [];
+
+  if (!evts.length) {
+    c.innerHTML = `<div class="empty-state">
+      <div class="empty-icon"><i class="ti ti-history"></i></div>
+      <div class="empty-title">AUCUN ÉVÉNEMENT</div>
+      <div class="empty-sub">Les installations, suppressions, démarrages et arrêts d'applications apparaîtront ici.</div>
+    </div>`;
+    return;
+  }
+
+  const rows = [...evts].reverse().map(e => {
+    const ico = EVENT_ICONS[e.type] || 'ti-circle';
+    const isErr = e.type?.includes('failed') || e.type?.includes('error');
+    const dotCls = isErr ? 'var(--err)' : e.type?.includes('removed') ? 'var(--warn)' : 'var(--ok)';
+    const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('fr-FR') : '';
+    return `<div class="loc-row" style="gap:12px">
+      <div style="width:30px;height:30px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ${ico}" style="font-size:13px;color:${dotCls}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(e.type || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(e.app_id || e.appId || '—')}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;font-size:8px;color:var(--text3)">${escapeHtml(ts)}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `<div class="settings-card" style="padding:0">
+    <div class="settings-title" style="padding:10px 12px">HISTORIQUE DES ÉVÉNEMENTS
+      <span style="color:var(--text3);font-size:9px;margin-left:6px">${evts.length}</span>
+    </div>
+    <div style="padding:0 12px 12px">${rows}</div>
+  </div>`;
 }
 
 // ── Audit ────────────────────────────────────────────────────────────────────
