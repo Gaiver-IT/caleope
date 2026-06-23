@@ -2260,8 +2260,8 @@ async function loadVaultwardenUsers() {
         }
       }
       const statusText = [...cells].slice(0, 5).map(td => td.textContent).join(' ');
-      const enabled = !/disabled|invited/i.test(statusText);
-      return email ? { email, name, enabled } : null;
+      const status = /invited/i.test(statusText) ? 'invited' : /disabled/i.test(statusText) ? 'disabled' : 'active';
+      return email ? { email, name, status } : null;
     }).filter(Boolean);
 
     if (!users.length) {
@@ -2282,8 +2282,10 @@ async function loadVaultwardenUsers() {
           ${u.name ? `<div style="font-size:8px;color:var(--text3)">${escapeHtml(u.name)}</div>` : ''}
         </div>
         <div>
-          ${u.enabled
+          ${u.status === 'active'
             ? '<span class="badge badge-run" style="font-size:7px">ACTIF</span>'
+            : u.status === 'invited'
+            ? '<span class="badge" style="font-size:7px;background:var(--warn-dim);color:var(--warn-b)">INVITÉ</span>'
             : '<span class="badge badge-err" style="font-size:7px">DÉSACTIVÉ</span>'}
         </div>
       </div>`;
