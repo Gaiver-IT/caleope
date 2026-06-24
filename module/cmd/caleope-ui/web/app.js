@@ -19,6 +19,7 @@ const S = {
   backupApp: null,
   tasks: [],       // file de tâches style Proxmox
   taskSeq: 0,      // compteur d'ID de tâche
+  appSearch: '',   // filtre recherche section apps
 };
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -464,13 +465,18 @@ function renderApps() {
       </div>
     </div>
 
-    <div class="tabs">
+    <div class="tabs" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <button class="tab-btn ${S.tab === 'installed' ? 'active' : ''}" onclick="switchTab('installed')">
         INSTALLÉES <span class="tab-count">${S.apps.length}</span>
       </button>
       <button class="tab-btn ${S.tab === 'catalog' ? 'active' : ''}" onclick="switchTab('catalog')">
         CATALOGUE <span class="tab-count">${S.catalog.length}</span>
       </button>
+      <input id="app-search" type="search" placeholder="Rechercher..." autocomplete="off"
+        value="${escapeHtml(S.appSearch || '')}"
+        oninput="filterApps(this.value)"
+        style="margin-left:auto;font-size:9px;padding:4px 8px;background:var(--card);border:1px solid var(--border);
+               border-radius:4px;color:var(--text1);width:140px;outline:none">
     </div>
 
     <div id="tab-installed" class="${S.tab !== 'installed' ? 'hidden' : ''}">
@@ -480,7 +486,7 @@ function renderApps() {
             <div class="empty-title">AUCUNE APP INSTALLÉE</div>
             <div class="empty-sub">Ouvrez le catalogue pour installer votre première app.</div>
            </div>`
-        : `<div class="apps-grid">${S.apps.map(appCard).join('')}</div>`
+        : `<div class="apps-grid" id="installed-grid">${S.apps.map(appCard).join('')}</div>`
       }
     </div>
 
@@ -491,7 +497,7 @@ function renderApps() {
             <div class="empty-title">CATALOGUE VIDE</div>
             <div class="empty-sub">Vérifiez la connexion au store.</div>
            </div>`
-        : `<div class="cat-grid">${S.catalog.map(catalogCard).join('')}</div>`
+        : `<div class="cat-grid" id="catalog-grid">${S.catalog.map(catalogCard).join('')}</div>`
       }
     </div>
   `;
@@ -503,6 +509,19 @@ function appCard(app) {
   const iconEl = domain
     ? `<a class="app-icon" href="${domain}" target="_blank" rel="noopener" title="Ouvrir ${escapeHtml(app.name || app.id)}">${icon(app.id)}</a>`
     : `<div class="app-icon">${icon(app.id)}</div>`;
+  // Container resource stats (matched by app.id, containers can have prefix '/')
+  const containers = S.containers || [];
+  const ct = containers.find(c => {
+    const name = (c.name || '').replace(/^\//, '');
+    return name === app.id || name.startsWith(app.id + '-') || name.startsWith(app.id + '_');
+  });
+  const ctStats = ct && isRunning
+    ? `<div style="display:flex;gap:6px;margin-top:4px">
+        <span style="font-size:8px;color:var(--text3);background:var(--bg);padding:1px 4px;border-radius:3px" title="CPU">
+          <i class="ti ti-cpu" style="font-size:8px"></i> ${escapeHtml(ct.cpu || '—')}</span>
+        <span style="font-size:8px;color:var(--text3);background:var(--bg);padding:1px 4px;border-radius:3px" title="RAM">
+          <i class="ti ti-device-desktop" style="font-size:8px"></i> ${escapeHtml((ct.mem || '').split(' / ')[0] || '—')}</span>
+      </div>` : '';
   return `
     <div class="app-card ${isRunning ? 'running' : ''}">
       <div class="card-corner"></div>
@@ -514,6 +533,7 @@ function appCard(app) {
         </div>
         ${statusBadge(app.status)}
       </div>
+      ${ctStats}
       <div class="app-desc">${app.description || ''}</div>
       <div class="app-footer">
         <div class="app-actions">
@@ -581,6 +601,25 @@ function switchTab(tab) {
   event.currentTarget.classList.add('active');
   document.getElementById('tab-installed')?.classList.toggle('hidden', tab !== 'installed');
   document.getElementById('tab-catalog')?.classList.toggle('hidden',   tab !== 'catalog');
+  filterApps(S.appSearch);
+}
+
+function filterApps(q) {
+  S.appSearch = (q || '').trim().toLowerCase();
+  const installedGrid = document.getElementById('installed-grid');
+  const catalogGrid   = document.getElementById('catalog-grid');
+  if (installedGrid) {
+    installedGrid.querySelectorAll('.app-card').forEach(card => {
+      const text = card.textContent.toLowerCase();
+      card.style.display = (!S.appSearch || text.includes(S.appSearch)) ? '' : 'none';
+    });
+  }
+  if (catalogGrid) {
+    catalogGrid.querySelectorAll('.cat-card').forEach(card => {
+      const text = card.textContent.toLowerCase();
+      card.style.display = (!S.appSearch || text.includes(S.appSearch)) ? '' : 'none';
+    });
+  }
 }
 
 // ── Actions app ───────────────────────────────────────────────────────────────
@@ -2029,6 +2068,13 @@ const APP_PANELS = {
     icon: 'ti-refresh',
     panels: [
       { id: 'panel-syncthing-status', label: 'ÉTAT SYNC', icon: 'ti-refresh', load: loadSyncthingStatus },
+    ],
+  },
+  'stirling-pdf': {
+    group: '// OUTILS',
+    icon: 'ti-file-type-pdf',
+    panels: [
+      { id: 'panel-stirling-pdf', label: 'STIRLING PDF', icon: 'ti-file-type-pdf', load: loadStirlingPDF },
     ],
   },
 };
@@ -3768,6 +3814,24 @@ async function loadFreshRssFeeds() {
     ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
 }
 
+// ── Stirling-PDF — Embed iframe ───────────────────────────────────────────────
+function loadStirlingPDF() {
+  const c = document.getElementById('content-panel-stirling-pdf');
+  if (!c) return;
+  const appDomain = S.apps.find(a => a.id === 'stirling-pdf')?.domain;
+  const src = '/ui/proxy/stirling-pdf/';
+  c.innerHTML = `
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 120px);min-height:400px;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center">
+        ${appDomain ? `<a class="btn btn-vio" href="https://${appDomain}" target="_blank" rel="noopener"
+          style="text-decoration:none;font-size:9px"><i class="ti ti-external-link"></i>OUVRIR DANS NOUVEL ONGLET</a>` : ''}
+        <span style="font-size:9px;color:var(--text3)">Outil de manipulation PDF — traitement côté serveur</span>
+      </div>
+      <iframe src="${src}" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+        allow="fullscreen" title="Stirling PDF"></iframe>
+    </div>`;
+}
+
 // ── Syncthing — Statut synchronisation ────────────────────────────────────────
 async function loadSyncthingStatus() {
   const c = document.getElementById('content-panel-syncthing-status');
@@ -3865,6 +3929,9 @@ function goSection(id) {
       const appObj = S.apps.find(a => a.id === panelAppId);
       if (appObj) {
         const isRun = appObj.status === 'running';
+        const openLink = appObj.domain ? `<a href="https://${appObj.domain}" target="_blank" rel="noopener"
+          class="btn-sm" title="Ouvrir ${escapeHtml(appObj.name || panelAppId)}" style="text-decoration:none">
+          <i class="ti ti-external-link" style="font-size:10px"></i></a>` : '';
         tbCtrl.style.display = 'inline-flex';
         tbCtrl.style.alignItems = 'center';
         tbCtrl.style.gap = '6px';
@@ -3873,9 +3940,13 @@ function goSection(id) {
           <span style="font-size:9px;color:${isRun ? 'var(--green-b)' : 'var(--red-b)'}">${isRun ? 'ACTIF' : 'ARRÊTÉ'}</span>
           ${isRun ? `<button class="btn-sm" onclick="restartApp('${panelAppId}')" title="Redémarrer ${appObj.name}">
             <i class="ti ti-refresh" style="font-size:10px"></i>
+          </button>
+          <button class="btn-sm" onclick="stopApp('${panelAppId}')" title="Arrêter ${appObj.name}">
+            <i class="ti ti-player-pause" style="font-size:10px"></i>
           </button>` : `<button class="btn-sm" onclick="startApp('${panelAppId}')" title="Démarrer ${appObj.name}">
             <i class="ti ti-player-play" style="font-size:10px"></i>
-          </button>`}`;
+          </button>`}
+          ${openLink}`;
       } else {
         tbCtrl.style.display = 'none';
         tbCtrl.innerHTML = '';
