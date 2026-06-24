@@ -815,6 +815,12 @@ function renderApps() {
   `;
 }
 
+function _hasUpgrade(app) {
+  const catalogEntry = (S.catalog || []).find(c => c.id === app.id);
+  if (!catalogEntry || !catalogEntry.version || !app.version) return false;
+  return catalogEntry.version !== app.version;
+}
+
 function appCard(app) {
   const isRunning = app.status === 'running';
   const domain = app.domain ? `https://${app.domain}` : null;
@@ -834,6 +840,7 @@ function appCard(app) {
         <span style="font-size:8px;color:var(--text3);background:var(--bg);padding:1px 4px;border-radius:3px" title="RAM">
           <i class="ti ti-device-desktop" style="font-size:8px"></i> ${escapeHtml((ct.mem || '').split(' / ')[0] || '—')}</span>
       </div>` : '';
+  const hasUpgrade = _hasUpgrade(app);
   return `
     <div class="app-card ${isRunning ? 'running' : ''}">
       <div class="card-corner"></div>
@@ -841,7 +848,7 @@ function appCard(app) {
         ${iconEl}
         <div class="app-meta">
           <div class="app-name">${app.name || app.id}</div>
-          <div class="app-ver">${app.version || '—'}</div>
+          <div class="app-ver">${app.version || '—'}${hasUpgrade ? `&nbsp;<span title="Mise à jour disponible dans le store" style="font-size:7px;font-weight:800;color:var(--warn);background:rgba(255,200,0,.12);padding:1px 4px;border-radius:3px;letter-spacing:.5px">UPDATE</span>` : ''}</div>
         </div>
         ${statusBadge(app.status)}
       </div>
@@ -919,6 +926,7 @@ function appListRow(app) {
     return name === app.id || name.startsWith(app.id + '-') || name.startsWith(app.id + '_');
   });
   const pinned = getPins().includes(app.id);
+  const hasUpgradeList = _hasUpgrade(app);
   return `<div class="app-list-row" data-status="${app.status}" data-id="${app.id}">
     <span style="font-size:16px;width:24px;text-align:center;flex-shrink:0">${icon(app.id)}</span>
     <div style="flex:1;min-width:0">
@@ -926,6 +934,7 @@ function appListRow(app) {
         <span style="font-size:10px;font-weight:700;color:var(--text1)">${escapeHtml(app.name || app.id)}</span>
         <span style="font-size:8px;color:var(--text3)">${escapeHtml(app.version || '')}</span>
         ${statusBadge(app.status)}
+        ${hasUpgradeList ? `<span style="font-size:7px;font-weight:800;color:var(--warn);background:rgba(255,200,0,.12);padding:1px 4px;border-radius:3px;letter-spacing:.5px">UPDATE</span>` : ''}
       </div>
       ${ct && isRunning ? `<div style="font-size:8px;color:var(--text3);margin-top:2px">
         <i class="ti ti-cpu" style="font-size:8px"></i> ${escapeHtml(ct.cpu || '—')} &nbsp;
@@ -7060,9 +7069,13 @@ async function loadEvents() {
   }).join('');
 
   const types = [...new Set(evts.map(e => e.event || e.type || '').filter(Boolean))].sort();
-  const filterBtns = `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">
+  const filterBtns = `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px">
     <button class="tab-btn active" style="font-size:8px;padding:2px 7px" onclick="filterEvents(this,'')">TOUT</button>
     ${types.map(t => `<button class="tab-btn" style="font-size:8px;padding:2px 7px" onclick="filterEvents(this,'${escapeHtml(t)}')">${escapeHtml(t.replace('app.','').toUpperCase())}</button>`).join('')}
+    <input type="search" id="events-search" placeholder="Rechercher app..." autocomplete="off"
+      oninput="filterEventsSearch()"
+      style="margin-left:auto;font-size:9px;padding:3px 8px;background:var(--card);border:1px solid var(--border);
+             border-radius:4px;color:var(--text1);width:150px;outline:none">
   </div>`;
 
   c.innerHTML = `${filterBtns}<div class="settings-card" style="padding:0">
@@ -7072,6 +7085,7 @@ async function loadEvents() {
     <div id="events-rows" style="padding:0 12px 12px">${rows}</div>
   </div>`;
   window._evtRows = [...evts].reverse();
+  window._evtTypeFilter = '';
 }
 
 // ── Audit ────────────────────────────────────────────────────────────────────
@@ -7106,23 +7120,48 @@ async function loadAudit() {
     </div>`;
   }).join('');
   c.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <div style="font-size:9px;color:var(--text3)">${rawLines.length} ENTRÉES</div>
-      <button class="btn-sm" onclick="exportAudit()" title="Exporter le journal d'audit">
+      <input type="search" id="audit-search" placeholder="Rechercher..." autocomplete="off"
+        oninput="filterAudit()"
+        style="flex:1;min-width:120px;max-width:220px;font-size:9px;padding:3px 8px;background:var(--card);
+               border:1px solid var(--border);border-radius:4px;color:var(--text1);outline:none">
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <button class="tab-btn active" style="font-size:8px;padding:2px 7px" onclick="setAuditFilter(this,'')">TOUT</button>
+        <button class="tab-btn" style="font-size:8px;padding:2px 7px" onclick="setAuditFilter(this,'INSTALL')">INSTALL</button>
+        <button class="tab-btn" style="font-size:8px;padding:2px 7px" onclick="setAuditFilter(this,'REMOVE')">REMOVE</button>
+        <button class="tab-btn" style="font-size:8px;padding:2px 7px" onclick="setAuditFilter(this,'START')">START</button>
+        <button class="tab-btn" style="font-size:8px;padding:2px 7px" onclick="setAuditFilter(this,'STOP')">STOP</button>
+        <button class="tab-btn" style="font-size:8px;padding:2px 7px" onclick="setAuditFilter(this,'ERROR')">ERREUR</button>
+      </div>
+      <button class="btn-sm" onclick="exportAudit()" title="Exporter le journal d'audit" style="margin-left:auto">
         <i class="ti ti-download" style="font-size:10px"></i> EXPORTER
       </button>
     </div>
-    <div class="log-wrap"><div class="log-body">${lines}</div></div>`;
-  // Store raw lines for export
+    <div class="log-wrap"><div class="log-body" id="audit-body">${lines}</div></div>`;
+  // Store raw lines for export and filter
   window._auditLines = rawLines;
+  window._auditFilter = '';
+}
+
+function filterEventsSearch() {
+  filterEvents(null, window._evtTypeFilter || '');
 }
 
 function filterEvents(btn, type) {
-  document.querySelectorAll('#content-events .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+  if (btn) document.querySelectorAll('#content-events .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+  window._evtTypeFilter = type;
   const evts = window._evtRows || [];
   const container = document.getElementById('events-rows');
   if (!container) return;
-  const filtered = type ? evts.filter(e => (e.event || e.type || '') === type) : evts;
+  const search = document.getElementById('events-search')?.value?.toLowerCase() || '';
+  const filtered = evts.filter(e => {
+    const evType = e.event || e.type || '';
+    const appId = e.app || e.app_id || e.appId || '';
+    if (type && evType !== type) return false;
+    if (search && !appId.toLowerCase().includes(search) && !evType.toLowerCase().includes(search)) return false;
+    return true;
+  });
   container.innerHTML = filtered.map(e => {
     const evType = e.event || e.type || '';
     const appId = e.app || e.app_id || e.appId || '';
@@ -7155,6 +7194,46 @@ function exportAudit() {
   a.click();
   URL.revokeObjectURL(url);
   notify('Export téléchargé', 'ok');
+}
+
+function setAuditFilter(btn, action) {
+  window._auditFilter = action;
+  document.querySelectorAll('#content-audit .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+  filterAudit();
+}
+
+function filterAudit() {
+  const body = document.getElementById('audit-body');
+  if (!body) return;
+  const rawLines = window._auditLines || [];
+  const search = document.getElementById('audit-search')?.value?.toLowerCase() || '';
+  const actionFilter = window._auditFilter || '';
+  const filtered = [...rawLines].reverse().filter(line => {
+    const parts = line.split(' ');
+    const action = parts[1] || '';
+    if (actionFilter && action !== actionFilter) return false;
+    if (search && !line.toLowerCase().includes(search)) return false;
+    return true;
+  });
+  body.innerHTML = filtered.map(line => {
+    const parts = line.split(' ');
+    const ts = parts[0] || '';
+    const action = parts[1] || '';
+    const rest = parts.slice(2).join(' ');
+    const appMatch = rest.match(/app=(\S+)/);
+    const resultMatch = rest.match(/result=(\S+)/);
+    const appId = appMatch?.[1] || '';
+    const result = resultMatch?.[1] || '';
+    const isOk = result.startsWith('OK');
+    const isErr = action === 'ERROR' || result.startsWith('DENIED');
+    const tagCls = isErr ? 'log-err' : isOk ? 'log-ok' : 'log-step';
+    const dateStr = ts ? new Date(ts).toLocaleString('fr-FR') : '';
+    return `<div class="log-line">
+      <span class="log-ts">${escapeHtml(dateStr)}</span>
+      <span class="log-tag ${tagCls}">[${escapeHtml(action)}]</span>
+      <span class="log-txt">${escapeHtml(appId)}${result ? ' — ' + escapeHtml(result) : ''}</span>
+    </div>`;
+  }).join('') || '<div class="empty-msg">Aucune entrée correspondante</div>';
 }
 
 // ── Login screen ──────────────────────────────────────────────────────────────
@@ -7277,7 +7356,7 @@ async function init() {
     if (_gChordActive) {
       _gChordActive = false;
       clearTimeout(_gChordTimer);
-      const CHORD_MAP = { d: 'dashboard', a: 'apps', l: 'logs', b: 'backups', s: 'stats', t: 'terminal', n: 'network', j: 'journal', e: 'events', k: 'secrets', v: 'services', x: 'storage' };
+      const CHORD_MAP = { d: 'dashboard', a: 'apps', l: 'logs', b: 'backups', s: 'stats', t: 'terminal', n: 'network', j: 'journal', e: 'events', k: 'secrets', v: 'services', x: 'storage', p: 'settings', u: 'audit', f: 'locations', m: 'tasks' };
       const dest = CHORD_MAP[e.key.toLowerCase()];
       if (dest) { e.preventDefault(); goSection(dest); }
     }
@@ -7802,7 +7881,9 @@ async function loadStorage() {
         </button>
       </div>
       <div id="docker-prune-result" style="display:none;margin-top:10px;font-size:9px;font-family:monospace;color:var(--text2);background:var(--bg1);padding:8px;border-radius:4px;max-height:120px;overflow-y:auto;white-space:pre-wrap"></div>
-    </div>`;
+    </div>
+    <div id="docker-volumes-widget" style="margin-top:16px"></div>`;
+  loadDockerVolumesWidget();
 }
 
 async function runDockerPrune() {
@@ -7829,6 +7910,37 @@ async function runDockerPrune() {
     btn.disabled = false;
     btn.innerHTML = '<i class="ti ti-trash"></i> PRUNE';
   }
+}
+
+async function loadDockerVolumesWidget() {
+  const w = document.getElementById('docker-volumes-widget');
+  if (!w) return;
+  let data = null;
+  try {
+    const r = await fetch('/sys/docker-volumes');
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+  if (!data?.volumes?.length) { w.innerHTML = ''; return; }
+  w.innerHTML = `
+    <div class="net-section-title">// VOLUMES DOCKER (${data.volumes.length})</div>
+    <div class="settings-card" style="padding:0">
+      <table style="width:100%;border-collapse:collapse;font-size:8px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="padding:4px 12px;text-align:left">NOM</th>
+          <th style="padding:4px 8px;text-align:left">DRIVER</th>
+          <th style="padding:4px 8px;text-align:left">SCOPE</th>
+          <th style="padding:4px 12px 4px 8px;text-align:left">POINT DE MONTAGE</th>
+        </tr></thead>
+        <tbody>${data.volumes.map(v => `
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:4px 12px;font-family:monospace;color:var(--text1);word-break:break-all">${escapeHtml(v.name)}</td>
+            <td style="padding:4px 8px;color:var(--text2)">${escapeHtml(v.driver || '—')}</td>
+            <td style="padding:4px 8px;color:var(--text3)">${escapeHtml(v.scope || '—')}</td>
+            <td style="padding:4px 12px 4px 8px;color:var(--text3);font-family:monospace;font-size:7px;word-break:break-all">${escapeHtml(v.mountpoint || '—')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 function openDiskMountModal(device, label, size) {
@@ -7938,6 +8050,28 @@ function setJournalPriFilter(btn, pri) {
 
 function filterJournalLines() {
   renderJournalLines();
+}
+
+function exportJournal() {
+  const entries = window._journalEntries || [];
+  const search  = document.getElementById('journal-search')?.value?.toLowerCase() || '';
+  const filtered = entries.filter(e => {
+    if (_journalPriFilter && e.priority !== _journalPriFilter) return false;
+    if (search && !(e.message || '').toLowerCase().includes(search) && !(e.unit || '').toLowerCase().includes(search)) return false;
+    return true;
+  });
+  const lines = filtered.map(e => {
+    const ts = e.time ? new Date(parseInt(e.time.replace('.',''))/1000).toISOString() : '';
+    return `${ts} [${e.priority || ''}] ${e.unit || ''}: ${e.message || ''}`;
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `caleope-journal-${new Date().toISOString().slice(0,10)}.log`;
+  a.click();
+  URL.revokeObjectURL(url);
+  notify(`Journal exporté (${lines.length} lignes)`, 'ok');
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────

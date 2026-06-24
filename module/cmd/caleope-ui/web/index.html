@@ -337,6 +337,9 @@
             <button class="btn-sm" style="margin-left:auto" onclick="loadJournal()">
               <i class="ti ti-refresh"></i>REFRESH
             </button>
+            <button class="btn-sm" onclick="exportJournal()" title="Exporter les entrées filtrées">
+              <i class="ti ti-download"></i>
+            </button>
           </div>
           <div class="log-body" id="journal-body"></div>
         </div>
@@ -600,6 +603,14 @@
         <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Terminal</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+T</kbd></div>
         <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Réseau</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+N</kbd></div>
         <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Journal</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+J</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Événements</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+E</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Secrets</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+K</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Services</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+V</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Stockage</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+X</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Paramètres</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+P</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Audit</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+U</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Emplacements</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+F</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Tâches</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+M</kbd></div>
       </div>
     </div>
     <div style="padding:8px 16px;border-top:1px solid var(--border);font-size:8px;color:var(--text3);text-align:center">Appuyez sur <kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text3);font-size:7px">Esc</kbd> ou cliquez en dehors pour fermer</div>

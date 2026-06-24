@@ -903,3 +903,49 @@ func parseJournalJSON(raw []byte) []journalEntry {
 	}
 	return entries
 }
+
+// ── Docker volumes ────────────────────────────────────────────────────────────
+
+type dockerVolumeEntry struct {
+	Name       string `json:"name"`
+	Driver     string `json:"driver"`
+	Mountpoint string `json:"mountpoint"`
+	Scope      string `json:"scope"`
+	Labels     string `json:"labels"`
+}
+
+func handleDockerVolumes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	out, err := exec.Command("docker", "volume", "ls", "--format",
+		"{{.Name}}\t{{.Driver}}\t{{.Mountpoint}}\t{{.Scope}}\t{{.Labels}}").Output()
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"volumes": []interface{}{}, "error": err.Error()})
+		return
+	}
+
+	var volumes []dockerVolumeEntry
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		line := sc.Text()
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
+			continue
+		}
+		v := dockerVolumeEntry{Name: parts[0], Driver: parts[1]}
+		if len(parts) > 2 {
+			v.Mountpoint = parts[2]
+		}
+		if len(parts) > 3 {
+			v.Scope = parts[3]
+		}
+		if len(parts) > 4 {
+			v.Labels = parts[4]
+		}
+		volumes = append(volumes, v)
+	}
+	if volumes == nil {
+		volumes = []dockerVolumeEntry{}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"volumes": volumes})
+}

@@ -1042,6 +1042,9 @@ func main() {
 	mux.HandleFunc("/sys/traefik-services", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleTraefikServices(w, r)
 	}))
+	mux.HandleFunc("/sys/docker-volumes", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerVolumes(w, r)
+	}))
 
 	// Notes post-install d'une app
 	mux.HandleFunc("/sys/app-notes/", requireSession(func(w http.ResponseWriter, r *http.Request) {
