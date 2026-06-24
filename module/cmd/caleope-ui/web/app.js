@@ -2300,7 +2300,8 @@ const APP_PANELS = {
     group: '// MÉDIAS',
     icon: 'ti-rss',
     panels: [
-      { id: 'panel-freshrss-feeds', label: 'FLUX RSS', icon: 'ti-rss', load: loadFreshRssFeeds },
+      { id: 'panel-freshrss-feeds',    label: 'FLUX RSS',    icon: 'ti-rss',       load: loadFreshRssFeeds },
+      { id: 'panel-freshrss-articles', label: 'NON LUS',     icon: 'ti-article',   load: loadFreshRssUnread },
     ],
   },
   'syncthing': {
@@ -4219,6 +4220,70 @@ async function loadFreshRssFeeds() {
       <div style="padding:0 12px 12px">${rows}</div>
     </div>
     ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+// ── FreshRSS — Articles non lus ──────────────────────────────────────────────
+async function loadFreshRssUnread() {
+  const c = document.getElementById('content-panel-freshrss-articles');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT ARTICLES...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'freshrss')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR FRESHRSS</a>`
+    : '';
+
+  // GReader API: récupérer les articles non lus
+  let items = null;
+  try {
+    const r = await fetch('/ui/proxy/freshrss/api/greader.php/reader/api/0/stream/contents/user/-/state/com.google/reading-list?output=json&n=30&xt=user/-/state/com.google/read');
+    if (r.ok) {
+      const d = await r.json();
+      items = d.items || [];
+    }
+  } catch(e) {}
+
+  if (!items) {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">${adminLink}</div>
+      <div class="empty-state"><div class="empty-icon"><i class="ti ti-rss"></i></div>
+        <div class="empty-title">FRESHRSS INDISPONIBLE</div>
+        <div class="empty-sub">Erreur d'accès à l'API GReader.</div></div>`;
+    return;
+  }
+
+  const rows = items.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-check"></i></div>
+        <div class="empty-title">TOUT LU !</div>
+        <div class="empty-sub">Aucun article non lu pour l'instant.</div></div>`
+    : items.map(item => {
+        const title = item.title || '(sans titre)';
+        const source = item.origin?.title || '';
+        const ts = item.published ? new Date(item.published * 1000).toLocaleString('fr-FR') : '';
+        const url = item.alternate?.[0]?.href || item.canonical?.[0]?.href || '';
+        return `
+          <div style="padding:7px 8px;background:var(--card);border-radius:6px;border:1px solid var(--border);margin-bottom:5px">
+            <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:2px">
+              ${source ? `<span style="font-size:7px;color:var(--text3);letter-spacing:.5px;flex-shrink:0">${escapeHtml(source)}</span>` : ''}
+              <span style="font-size:8px;color:var(--text3);margin-left:auto;flex-shrink:0">${escapeHtml(ts)}</span>
+            </div>
+            ${url
+              ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
+                  style="font-size:10px;font-weight:600;color:var(--text1);text-decoration:none;line-height:1.3;display:block">
+                  ${escapeHtml(title)}</a>`
+              : `<div style="font-size:10px;font-weight:600;color:var(--text1)">${escapeHtml(title)}</div>`
+            }
+          </div>`;
+      }).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      ${adminLink}
+      <span style="font-size:9px;color:var(--text3)">${items.length} article(s) non lu(s)</span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadFreshRssUnread()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
 }
 
 // ── Changedetection.io — Surveillances ───────────────────────────────────────
