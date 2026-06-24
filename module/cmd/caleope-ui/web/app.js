@@ -2127,12 +2127,16 @@ async function loadDashboard() {
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MONITORING</div>
       <div id="dash-uptime-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
+
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// ÉVÉNEMENTS RÉCENTS</div>
+    <div id="dash-events-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
   `;
 
-  // Charger le widget uptime-kuma async si présent
+  // Charger les widgets async
   if (S.apps.some(a => a.id === 'uptime-kuma' && a.status === 'running')) {
     loadDashUptimeWidget();
   }
+  loadDashEventsWidget();
 }
 
 async function loadDashUptimeWidget() {
@@ -2174,6 +2178,54 @@ async function loadDashUptimeWidget() {
       <button class="btn-sm" onclick="goSection('uptime-kuma')">
         <i class="ti ti-external-link" style="font-size:10px"></i> DÉTAILS
       </button>
+    </div>`;
+}
+
+async function loadDashEventsWidget() {
+  const w = document.getElementById('dash-events-widget');
+  if (!w) return;
+  let events = [];
+  try {
+    const r = await api.get('/api/v1/events?limit=8');
+    events = r?.data || [];
+  } catch(e) {}
+
+  const EVENT_ICONS = {
+    'app.installed': '📦', 'app.removed': '🗑️', 'app.started': '▶️',
+    'app.stopped': '⏹️', 'app.restarted': '🔄', 'app.backed_up': '💾',
+    'app.restored': '📤', 'app.failed': '❌',
+  };
+
+  if (!events.length) {
+    w.innerHTML = `<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun événement récent.</div>`;
+    return;
+  }
+
+  const rows = [...events].reverse().map(ev => {
+    const ts = ev.timestamp ? new Date(ev.timestamp).toLocaleString('fr-FR', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+    const evType = ev.event || ev.type || '';
+    const evIcon = EVENT_ICONS[evType] || '•';
+    const appId = ev.app || ev.app_id || '';
+    const appName = appId ? (S.apps.find(a => a.id === appId)?.name || appId) : '';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid var(--border)">
+        <span style="font-size:11px;width:18px;text-align:center">${evIcon}</span>
+        <div style="flex:1;min-width:0">
+          <span style="font-size:9px;font-weight:700;color:var(--text1)">${appName ? escapeHtml(appName)+' — ' : ''}</span>
+          <span style="font-size:9px;color:var(--text2)">${escapeHtml(evType || '')}</span>
+        </div>
+        <span style="font-size:8px;color:var(--text3);white-space:nowrap">${escapeHtml(ts)}</span>
+      </div>`;
+  }).join('');
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+      ${rows}
+      <div style="padding:6px 10px;text-align:right">
+        <button class="btn-sm" onclick="goSection('events')" style="font-size:8px">
+          <i class="ti ti-history" style="font-size:9px"></i> VOIR TOUT
+        </button>
+      </div>
     </div>`;
 }
 
