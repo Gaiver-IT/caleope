@@ -448,6 +448,9 @@ func main() {
 
 		// Mealie — API JWT, pas de proxy auth (login UI)
 		"mealie": {containerName: "mealie", containerPort: 9000},
+
+		// Changedetection.io — sans auth par défaut
+		"changedetection": {containerName: "changedetection", containerPort: 5000},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.

@@ -2228,6 +2228,13 @@ const APP_PANELS = {
       { id: 'panel-mealie-recipes', label: 'RECETTES', icon: 'ti-salad', load: loadMealieRecipes },
     ],
   },
+  'changedetection': {
+    group: '// MONITORING',
+    icon: 'ti-eye',
+    panels: [
+      { id: 'panel-changedetection-watches', label: 'SURVEILLANCES', icon: 'ti-eye', load: loadChangedetectionWatches },
+    ],
+  },
 };
 
 // ── Sidebar collapsible ───────────────────────────────────────────────────────
@@ -4033,6 +4040,58 @@ async function loadFreshRssFeeds() {
     <div class="settings-card" style="padding:0">
       <div class="settings-title" style="padding:10px 12px">
         <i class="ti ti-rss" style="font-size:12px"></i> ABONNEMENTS (${feeds.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+// ── Changedetection.io — Surveillances ───────────────────────────────────────
+async function loadChangedetectionWatches() {
+  const c = document.getElementById('content-panel-changedetection-watches');
+  if (!c) return;
+  const appDomain = S.apps.find(a => a.id === 'changedetection')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR CHANGEDETECTION</a>` : '';
+
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/changedetection/api/v1/watch?limit=20', {
+    headers: { 'Accept': 'application/json' }
+  });
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-eye"></i></div>
+      <div class="empty-title">CHANGEDETECTION INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier que le service est démarré.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+  const data = await r.json();
+  const watches = Array.isArray(data) ? data : Object.values(data);
+
+  const changed = watches.filter(w => w.last_changed > 0).length;
+  const rows = watches.slice(0, 10).map(w => {
+    const lastCheck = w.last_checked ? new Date(w.last_checked * 1000).toLocaleString('fr-FR') : '—';
+    const hasChanged = w.last_changed > 0;
+    return `
+      <div class="loc-row">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:10px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${escapeHtml(w.title || w.url || '?')}</div>
+          <div style="font-size:9px;color:var(--text3)">${escapeHtml(lastCheck)}</div>
+        </div>
+        ${hasChanged ? `<span style="font-size:9px;font-weight:700;color:var(--warn)">MODIFIÉ</span>` : ''}
+      </div>`;
+  }).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune surveillance.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${watches.length}</div><div class="stat-lbl">SURVEILLÉES</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:${changed > 0 ? 'var(--warn)' : 'var(--green-b)'}">${changed}</div><div class="stat-lbl">MODIFIÉES</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-eye" style="font-size:12px"></i> PAGES SURVEILLÉES
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
     </div>
