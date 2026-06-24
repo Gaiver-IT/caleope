@@ -60,6 +60,8 @@ async function logout() {
 }
 
 // ── Notifications ─────────────────────────────────────────────────────────────
+const _notifHistory = [];
+
 function notify(msg, type = 'info') {
   const stack = document.getElementById('notif-stack');
   const n = document.createElement('div');
@@ -68,6 +70,50 @@ function notify(msg, type = 'info') {
   n.innerHTML = `<i class="ti ${icon}" aria-hidden="true"></i>${msg}`;
   stack.appendChild(n);
   setTimeout(() => n.remove(), 4000);
+  // Track history
+  _notifHistory.unshift({ msg, type, time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) });
+  if (_notifHistory.length > 50) _notifHistory.pop();
+  _updateNotifBadge();
+}
+
+let _notifUnread = 0;
+function _updateNotifBadge() {
+  _notifUnread++;
+  const badge = document.getElementById('notif-history-badge');
+  if (badge) {
+    badge.textContent = _notifUnread > 9 ? '9+' : String(_notifUnread);
+    badge.style.display = '';
+  }
+}
+
+function openNotifHistory() {
+  _notifUnread = 0;
+  const badge = document.getElementById('notif-history-badge');
+  if (badge) badge.style.display = 'none';
+  const overlay = document.getElementById('notif-history-overlay');
+  if (!overlay) return;
+  const body = document.getElementById('notif-history-body');
+  if (body) {
+    if (!_notifHistory.length) {
+      body.innerHTML = '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune notification.</div>';
+    } else {
+      body.innerHTML = _notifHistory.map(n => {
+        const ico = { ok: 'ti-check', err: 'ti-alert-circle', info: 'ti-info-circle' }[n.type] || 'ti-info-circle';
+        const col = { ok: 'var(--ok)', err: 'var(--err)', info: 'var(--accent)' }[n.type] || 'var(--accent)';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+          <i class="ti ${ico}" style="color:${col};font-size:11px;flex-shrink:0"></i>
+          <span style="flex:1;font-size:9px;color:var(--text1)">${escapeHtml(n.msg)}</span>
+          <span style="font-size:8px;color:var(--text3);flex-shrink:0">${escapeHtml(n.time)}</span>
+        </div>`;
+      }).join('');
+    }
+  }
+  overlay.style.display = 'flex';
+}
+
+function closeNotifHistory() {
+  const overlay = document.getElementById('notif-history-overlay');
+  if (overlay) overlay.style.display = 'none';
 }
 
 // ── Segmented bar ─────────────────────────────────────────────────────────────
@@ -5251,7 +5297,9 @@ async function loadLinkdingBookmarks() {
   const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
     class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR LINKDING</a>` : '';
 
-  const r = await fetch('/ui/proxy/linkding/api/bookmarks/?limit=20');
+  const searchQ = document.getElementById('linkding-search')?.value?.trim() || '';
+  const url = `/ui/proxy/linkding/api/bookmarks/?limit=30${searchQ ? '&q=' + encodeURIComponent(searchQ) : ''}`;
+  const r = await fetch(url);
   if (!r.ok) {
     c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-bookmark"></i></div>
       <div class="empty-title">LINKDING INDISPONIBLE</div>
@@ -5264,15 +5312,20 @@ async function loadLinkdingBookmarks() {
   const bookmarks = data.results || [];
 
   const rows = bookmarks.map(b => `
-    <div class="loc-row">
+    <div class="loc-row" style="gap:8px">
       <div style="flex:1;min-width:0">
-        <div style="font-size:10px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-          ${escapeHtml(b.title || b.website_title || b.url)}</div>
-        <div style="font-size:9px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        <a href="${escapeHtml(b.url)}" target="_blank" rel="noopener"
+          style="font-size:10px;font-weight:700;color:var(--accent);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block">
+          ${escapeHtml(b.title || b.website_title || b.url)}</a>
+        <div style="font-size:8px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
           ${escapeHtml(b.url)}</div>
+        ${b.tag_names?.length ? `<div style="display:flex;gap:3px;margin-top:2px;flex-wrap:wrap">${b.tag_names.map(t => `<span style="font-size:7px;background:var(--vio-g);color:var(--vio-b);padding:1px 5px;border-radius:8px">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
       </div>
-      ${b.tag_names?.length ? `<div style="font-size:8px;color:var(--blue)">${b.tag_names.slice(0,2).map(t => escapeHtml(t)).join(' ')}</div>` : ''}
-    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun favori.</div>';
+      <button class="btn-sm danger" title="Supprimer" style="padding:2px 5px;flex-shrink:0"
+        onclick="deleteLinkdingBookmark(${b.id})">
+        <i class="ti ti-trash" style="font-size:9px"></i>
+      </button>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun résultat.</div>';
 
   c.innerHTML = `
     <div class="settings-card" style="padding:12px;margin-bottom:12px">
@@ -5292,8 +5345,15 @@ async function loadLinkdingBookmarks() {
       </div>
     </div>
     <div class="settings-card" style="padding:0">
-      <div class="settings-title" style="padding:10px 12px">
-        <i class="ti ti-bookmark" style="font-size:12px"></i> FAVORIS (${data.count || bookmarks.length})
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 12px 6px">
+        <div class="settings-title" style="flex:1;margin:0">
+          <i class="ti ti-bookmark" style="font-size:12px"></i> FAVORIS (${data.count || bookmarks.length})
+        </div>
+        <input id="linkding-search" type="search" placeholder="Rechercher…"
+          onkeydown="if(event.key==='Enter')loadLinkdingBookmarks()"
+          style="font-size:9px;padding:3px 7px;background:var(--card);border:1px solid var(--border);
+                 border-radius:4px;color:var(--text1);width:120px;outline:none">
+        <button class="btn-sm" onclick="loadLinkdingBookmarks()"><i class="ti ti-search" style="font-size:9px"></i></button>
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
     </div>
@@ -5321,6 +5381,13 @@ async function addLinkdingBookmark() {
     const err = await r.json().catch(() => ({}));
     notify(err.url?.[0] || 'Erreur ajout favori', 'err');
   }
+}
+
+async function deleteLinkdingBookmark(id) {
+  if (!confirm('Supprimer ce favori ?')) return;
+  const r = await fetch(`/ui/proxy/linkding/api/bookmarks/${id}/`, { method: 'DELETE' });
+  if (r.ok || r.status === 204) { notify('Favori supprimé', 'ok'); loadLinkdingBookmarks(); }
+  else { notify('Erreur suppression', 'err'); }
 }
 
 async function loadLinkdingTags() {
