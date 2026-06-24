@@ -482,6 +482,24 @@ const HARDCODED_PARAMS = {
     { id: 'KAVITA_PORT_WEB', label: 'Port web', type: 'port', default: '5001', required: false,
       description: 'Port d\'accès à l\'interface Kavita' },
   ],
+  'komga': [
+    { id: 'KOMGA_PORT', label: 'Port web', type: 'port', default: '8085', required: false,
+      description: 'Port d\'accès à l\'interface Komga' },
+    { id: 'KOMGA_ADMIN_EMAIL', label: 'Email admin', type: 'email', default: '', required: true,
+      description: 'Email du compte administrateur' },
+    { id: 'KOMGA_ADMIN_PASSWORD', label: 'Mot de passe admin', type: 'secret', default: '', required: true,
+      description: 'Mot de passe du compte administrateur (8 car. min)' },
+  ],
+  'code-server': [
+    { id: 'CODE_SERVER_PORT', label: 'Port web', type: 'port', default: '8443', required: false,
+      description: 'Port d\'accès à Code Server' },
+    { id: 'CODE_SERVER_PASSWORD', label: 'Mot de passe', type: 'secret', default: '', required: false,
+      description: 'Mot de passe d\'accès (auto-généré si vide)' },
+  ],
+  'scrutiny': [
+    { id: 'SCRUTINY_PORT', label: 'Port web', type: 'port', default: '8086', required: false,
+      description: 'Port d\'accès à l\'interface Scrutiny' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -500,11 +518,16 @@ const APP_ICONS = {
   ghost: '👻', wordpress: '📝', 'wiki-js': '📚',
   // Productivity
   glpi: '🎫', n8n: '⚙️', changedetection: '👁️',
-  // Lifestyle
-  mealie: '🥗', grocy: '🛒', monica: '👤',
+  // Lifestyle & smart home
+  mealie: '🥗', grocy: '🛒', monica: '👤', 'home-assistant': '🏡',
   // Outils
   memos: '📓', linkding: '🔖', 'paperless-ngx': '📄', 'stirling-pdf': '📑',
-  freshrss: '📰', 'ntfy': '🔔', gotify: '🔔', homarr: '🏠',
+  freshrss: '📰', ntfy: '🔔', gotify: '🔔', homarr: '🏠',
+  // Médias spécialisés
+  navidrome: '🎵', photoprism: '🖼️', kavita: '📚', komga: '📔', jellyseerr: '🎟️',
+  'calibre-web': '📖', plex: '🎥', azuracast: '🎙️',
+  // Dev & monitoring
+  'code-server': '💻', scrutiny: '🔬',
 };
 const icon = id => APP_ICONS[id] || '📦';
 
@@ -1145,13 +1168,20 @@ async function loadBackups() {
 
   S.backupApp = S.backupApp || S.apps[0]?.id;
 
+  const runningApps = S.apps.filter(a => a.status === 'running');
   c.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
       <span style="font-size:9px;color:var(--text3);letter-spacing:.5px">AFFICHER LES SAUVEGARDES DE</span>
       <select class="log-select" id="backup-select" onchange="changeBackupApp()" style="flex:0;min-width:160px">
         ${S.apps.map(a => `<option value="${a.id}" ${a.id === S.backupApp ? 'selected' : ''}>${a.name || a.id}</option>`).join('')}
       </select>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+        <button class="btn-sm" id="backup-all-btn" onclick="backupAll()" title="Sauvegarder toutes les apps actives">
+          <i class="ti ti-stack"></i>TOUT SAUVEGARDER <span style="opacity:.6">(${runningApps.length})</span>
+        </button>
+      </div>
     </div>
+    <div id="backup-all-progress" style="display:none;margin-bottom:12px"></div>
     <div id="backup-list"></div>
   `;
 
@@ -1217,6 +1247,56 @@ function openBackupModal() {
     if (S.backupApp) sel.value = S.backupApp;
   }
   document.getElementById('backup-modal').classList.add('open');
+}
+
+async function backupAll() {
+  const btn = document.getElementById('backup-all-btn');
+  const progress = document.getElementById('backup-all-progress');
+  if (!btn || !progress) return;
+
+  const targets = S.apps.filter(a => a.status === 'running');
+  if (!targets.length) { notify('Aucune app active à sauvegarder', 'warn'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>EN COURS...';
+  progress.style.display = 'block';
+
+  let done = 0, errors = 0;
+  const results = [];
+
+  progress.innerHTML = `<div style="font-size:10px;color:var(--text3);margin-bottom:6px">SAUVEGARDE DE ${targets.length} APP${targets.length>1?'S':''}…</div>
+    <div id="backup-all-rows" style="display:flex;flex-direction:column;gap:4px"></div>`;
+
+  const rowsEl = document.getElementById('backup-all-rows');
+
+  for (const app of targets) {
+    const rowId = `bar-${app.id}`;
+    if (rowsEl) rowsEl.insertAdjacentHTML('beforeend', `
+      <div id="${rowId}" style="display:flex;align-items:center;gap:8px;font-size:10px">
+        <span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>
+        <span style="color:var(--text2)">${escapeHtml(app.name || app.id)}</span>
+      </div>`);
+
+    const res = await api.post(`/api/v1/apps/${app.id}/backups`, {});
+    const row = document.getElementById(rowId);
+    if (res && !res.error) {
+      done++;
+      if (row) row.innerHTML = `<i class="ti ti-check" style="color:var(--ok);font-size:10px"></i><span style="color:var(--text2)">${escapeHtml(app.name || app.id)}</span>`;
+    } else {
+      errors++;
+      if (row) row.innerHTML = `<i class="ti ti-x" style="color:var(--err);font-size:10px"></i><span style="color:var(--text3)">${escapeHtml(app.name || app.id)}</span>`;
+    }
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = `<i class="ti ti-stack"></i>TOUT SAUVEGARDER <span style="opacity:.6">(${targets.length})</span>`;
+
+  const summary = errors
+    ? `${done}/${targets.length} sauvegardes réussies (${errors} erreur${errors>1?'s':''})`
+    : `${done} sauvegarde${done>1?'s':''} créée${done>1?'s':''}`;
+  notify(summary, errors ? 'warn' : 'ok');
+
+  if (done > 0) setTimeout(refreshBackupList, 600);
 }
 
 async function confirmBackupModal() {
@@ -2480,6 +2560,27 @@ const APP_PANELS = {
     icon: 'ti-books',
     panels: [
       { id: 'panel-kavita-library', label: 'BIBLIOTHÈQUE', icon: 'ti-books', load: loadKavitaLibrary },
+    ],
+  },
+  'komga': {
+    group: '// LECTURE',
+    icon: 'ti-notebook',
+    panels: [
+      { id: 'panel-komga-library', label: 'BIBLIOTHÈQUE', icon: 'ti-books', load: loadKomgaLibrary },
+    ],
+  },
+  'code-server': {
+    group: '// DEV',
+    icon: 'ti-code',
+    panels: [
+      { id: 'panel-code-server', label: 'ÉDITEUR', icon: 'ti-code', load: loadCodeServer },
+    ],
+  },
+  'scrutiny': {
+    group: '// SYSTÈME',
+    icon: 'ti-scan',
+    panels: [
+      { id: 'panel-scrutiny-disks', label: 'DISQUES', icon: 'ti-database', load: loadScrutinyDisks },
     ],
   },
 };
@@ -4906,6 +5007,134 @@ async function loadCalibreBooks() {
 }
 
 // ── Kavita — Bibliothèque manga/comics ───────────────────────────────────────
+// ── Komga — Bibliothèque comics/mangas ───────────────────────────────────────
+async function loadKomgaLibrary() {
+  const c = document.getElementById('content-panel-komga-library');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT KOMGA...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'komga')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR KOMGA</a>`
+    : '';
+
+  // Komga API: lister les séries récentes (nécessite auth Basic)
+  // On tente une requête sans auth sur l'endpoint /api/v2/series
+  let series = null;
+  try {
+    const r = await fetch('/ui/proxy/komga/api/v2/series?page=0&size=10&sort=lastModified,desc');
+    if (r.ok) { const d = await r.json(); series = d?.content; }
+  } catch(e) {}
+
+  if (!Array.isArray(series)) {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${adminLink}</div>
+      <div style="display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:300px">
+        <iframe src="/ui/proxy/komga/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+          allow="fullscreen" title="Komga"></iframe>
+      </div>`;
+    return;
+  }
+
+  const rows = series.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-book"></i></div>
+        <div class="empty-title">BIBLIOTHÈQUE VIDE</div>
+        <div class="empty-sub">Placez vos comics/mangas dans les dossiers Komga.</div></div>`
+    : series.map(s => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--card);
+            border-radius:6px;border:1px solid var(--border);margin-bottom:5px">
+          <span style="font-size:18px">📔</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:11px;color:var(--text1);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(s.name || '—')}</div>
+            <div style="font-size:9px;color:var(--text3);margin-top:2px">${s.booksCount || 0} tome${s.booksCount > 1 ? 's' : ''}</div>
+          </div>
+          <span style="font-size:9px;color:${s.booksUnreadCount > 0 ? 'var(--vio)' : 'var(--text3)'}">${s.booksUnreadCount > 0 ? s.booksUnreadCount + ' non lu' : '✓'}</span>
+        </div>`).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">${adminLink}
+      <span style="font-size:9px;color:var(--text3);margin-left:auto">${series.length} SÉRIE${series.length > 1 ? 'S' : ''}</span>
+    </div>
+    ${rows}`;
+}
+
+// ── Code Server — Éditeur web ─────────────────────────────────────────────────
+async function loadCodeServer() {
+  const c = document.getElementById('content-panel-code-server');
+  if (!c) return;
+
+  const appDomain = S.apps.find(a => a.id === 'code-server')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR ÉDITEUR</a>`
+    : '';
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${adminLink}</div>
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:300px">
+      <iframe src="/ui/proxy/code-server/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+        allow="fullscreen" title="Code Server"></iframe>
+    </div>`;
+}
+
+// ── Scrutiny — Monitoring disques SMART ──────────────────────────────────────
+async function loadScrutinyDisks() {
+  const c = document.getElementById('content-panel-scrutiny-disks');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT SCRUTINY...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'scrutiny')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR SCRUTINY</a>`
+    : '';
+
+  // Scrutiny API: /api/devices
+  let devices = null;
+  try {
+    const r = await fetch('/ui/proxy/scrutiny/api/devices');
+    if (r.ok) { const d = await r.json(); devices = d?.data; }
+  } catch(e) {}
+
+  if (!Array.isArray(devices)) {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${adminLink}</div>
+      <div style="display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:300px">
+        <iframe src="/ui/proxy/scrutiny/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+          allow="fullscreen" title="Scrutiny"></iframe>
+      </div>`;
+    return;
+  }
+
+  const rows = devices.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-database"></i></div>
+        <div class="empty-title">AUCUN DISQUE DÉTECTÉ</div>
+        <div class="empty-sub">Vérifiez la configuration des devices dans le docker-compose.</div></div>`
+    : devices.map(d => {
+        const passed = d.device_status === 0;
+        const statusColor = passed ? 'var(--ok)' : 'var(--err)';
+        const statusLabel = passed ? 'PASSED' : 'FAILED';
+        const temp = d.temp !== undefined ? `${d.temp}°C` : '—';
+        return `
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--card);
+            border-radius:6px;border:1px solid ${passed ? 'var(--border)' : 'var(--err)'};margin-bottom:6px">
+          <i class="ti ti-device-floppy" style="font-size:18px;color:${statusColor}"></i>
+          <div style="flex:1">
+            <div style="font-size:11px;color:var(--text1);font-weight:600">${escapeHtml(d.device_name || d.wwn || '—')}</div>
+            <div style="font-size:9px;color:var(--text3);margin-top:2px">${escapeHtml(d.model_name || '')} · ${escapeHtml(d.capacity || '')}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:10px;color:${statusColor};font-weight:700">${statusLabel}</div>
+            <div style="font-size:9px;color:var(--text3)">${temp}</div>
+          </div>
+        </div>`;
+      }).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">${adminLink}
+      <span style="font-size:9px;color:var(--text3);margin-left:auto">${devices.length} DISQUE${devices.length > 1 ? 'S' : ''}</span>
+    </div>
+    ${rows}`;
+}
+
 async function loadKavitaLibrary() {
   const c = document.getElementById('content-panel-kavita-library');
   if (!c) return;
@@ -5629,6 +5858,16 @@ function loadTerminal() {
 
   // Redimensionner quand la fenêtre change
   window.addEventListener('resize', fitTerminal);
+
+  // Ctrl+K / Cmd+K → quick nav
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      const overlay = document.getElementById('quicknav-overlay');
+      if (overlay && overlay.style.display !== 'none') closeQuickNav();
+      else openQuickNav();
+    }
+  });
 }
 
 function fitTerminal() {
@@ -5928,6 +6167,127 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// QUICK NAV (Ctrl+K)
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _qnCursor = -1;
+
+function openQuickNav() {
+  const overlay = document.getElementById('quicknav-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  const inp = document.getElementById('quicknav-input');
+  if (inp) { inp.value = ''; inp.focus(); }
+  _qnCursor = -1;
+  updateQuickNav('');
+}
+
+function closeQuickNav() {
+  const overlay = document.getElementById('quicknav-overlay');
+  if (overlay) overlay.style.display = 'none';
+  _qnCursor = -1;
+}
+
+function _buildQuickNavItems() {
+  const items = [];
+
+  // Sections principales
+  const SECTION_ICONS = {
+    dashboard: 'ti-layout-dashboard', apps: 'ti-layout-grid', logs: 'ti-file-text',
+    backups: 'ti-device-floppy', secrets: 'ti-lock', locations: 'ti-map-pin',
+    tasks: 'ti-checklist', events: 'ti-bell', audit: 'ti-shield',
+    settings: 'ti-settings', stats: 'ti-cpu', terminal: 'ti-terminal-2',
+    services: 'ti-server', network: 'ti-network', storage: 'ti-database',
+    journal: 'ti-notebook',
+  };
+  Object.entries(SECTIONS).forEach(([id, sec]) => {
+    items.push({
+      type: 'section', id, label: sec.label,
+      icon: SECTION_ICONS[id] || 'ti-chevron-right', sub: 'SECTION ' + sec.num,
+    });
+  });
+
+  // Panels d'intégration installés
+  Object.entries(APP_PANELS).forEach(([appId, appDef]) => {
+    const installed = S.apps.find(a => a.id === appId);
+    if (!installed) return;
+    const emoji = APP_ICONS[appId] || '';
+    appDef.panels.forEach(p => {
+      items.push({
+        type: 'panel', id: p.id, label: p.label,
+        icon: p.icon, sub: (emoji ? emoji + ' ' : '') + (installed.name || appId).toUpperCase(),
+        appId,
+      });
+    });
+  });
+
+  return items;
+}
+
+function updateQuickNav(q) {
+  const list = document.getElementById('quicknav-list');
+  if (!list) return;
+  _qnCursor = -1;
+
+  const items = _buildQuickNavItems();
+  const query = q.trim().toLowerCase();
+  const filtered = query
+    ? items.filter(it => it.label.toLowerCase().includes(query) || it.sub.toLowerCase().includes(query))
+    : items;
+
+  if (!filtered.length) {
+    list.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3);font-size:11px">AUCUN RÉSULTAT</div>`;
+    return;
+  }
+
+  list.innerHTML = filtered.map((it, i) => `
+    <div class="qn-item" data-idx="${i}" data-id="${escapeHtml(it.id)}"
+      style="display:flex;align-items:center;gap:12px;padding:9px 16px;cursor:pointer;transition:background .12s"
+      onmouseenter="qnHighlight(${i})" onclick="qnGo('${escapeHtml(it.id)}')">
+      <i class="ti ${it.icon}" style="font-size:14px;color:var(--vio);flex-shrink:0;width:16px;text-align:center"></i>
+      <span style="flex:1;font-size:12px;color:var(--text1)">${escapeHtml(it.label)}</span>
+      <span style="font-size:9px;color:var(--text3);font-family:monospace">${escapeHtml(it.sub)}</span>
+    </div>
+  `).join('');
+}
+
+function qnHighlight(idx) {
+  _qnCursor = idx;
+  document.querySelectorAll('.qn-item').forEach((el, i) => {
+    el.style.background = i === idx ? 'var(--bg3)' : '';
+    el.style.color = i === idx ? 'var(--vio)' : '';
+  });
+}
+
+function quickNavKey(e) {
+  const items = document.querySelectorAll('.qn-item');
+  if (e.key === 'Escape') { closeQuickNav(); return; }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    qnHighlight(Math.min(_qnCursor + 1, items.length - 1));
+    items[_qnCursor]?.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    qnHighlight(Math.max(_qnCursor - 1, 0));
+    items[_qnCursor]?.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const active = _qnCursor >= 0 ? items[_qnCursor] : items[0];
+    if (active) { const id = active.dataset.id; closeQuickNav(); goSection(id); }
+    return;
+  }
+}
+
+function qnGo(id) {
+  closeQuickNav();
+  goSection(id);
 }
 
 document.addEventListener('DOMContentLoaded', init);

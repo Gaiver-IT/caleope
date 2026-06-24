@@ -484,6 +484,15 @@ func main() {
 
 		// Kavita — lecteur manga/comics/ebooks
 		"kavita": {containerName: "kavita", containerPort: 5000},
+
+		// Komga — bibliothèque comics/mangas
+		"komga": {containerName: "komga", containerPort: 25600},
+
+		// Code Server — VS Code web
+		"code-server": {containerName: "code-server", containerPort: 8080},
+
+		// Scrutiny — monitoring disques SMART
+		"scrutiny": {containerName: "scrutiny", containerPort: 8080},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
