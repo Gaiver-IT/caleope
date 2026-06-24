@@ -451,6 +451,12 @@ func main() {
 
 		// Changedetection.io — sans auth par défaut
 		"changedetection": {containerName: "changedetection", containerPort: 5000},
+
+		// Gotify — notifications push, auth propre à gotify
+		"gotify": {containerName: "gotify", containerPort: 80},
+
+		// Homarr — dashboard de liens, sans auth proxy
+		"homarr": {containerName: "homarr", containerPort: 7575},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.

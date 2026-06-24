@@ -414,6 +414,23 @@ const HARDCODED_PARAMS = {
     { id: 'FILEBROWSER_PORT_WEB', label: 'Port web', type: 'port', default: '8085', required: false,
       description: 'Port d\'accès à l\'interface File Browser' },
   ],
+
+  'changedetection': [
+    { id: 'CHANGEDETECTION_PORT_WEB', label: 'Port web', type: 'port', default: '5055', required: false,
+      description: 'Port d\'accès à l\'interface Changedetection.io' },
+  ],
+
+  'gotify': [
+    { id: 'GOTIFY_PORT_WEB', label: 'Port web', type: 'port', default: '8090', required: false,
+      description: 'Port d\'accès à l\'interface Gotify' },
+    { id: 'GOTIFY_DEFAULTUSER_PASS', label: 'Mot de passe admin', type: 'secret', default: '', required: false,
+      description: 'Mot de passe du compte admin par défaut' },
+  ],
+
+  'homarr': [
+    { id: 'HOMARR_PORT_WEB', label: 'Port web', type: 'port', default: '7575', required: false,
+      description: 'Port d\'accès à l\'interface Homarr' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -2233,6 +2250,20 @@ const APP_PANELS = {
     icon: 'ti-eye',
     panels: [
       { id: 'panel-changedetection-watches', label: 'SURVEILLANCES', icon: 'ti-eye', load: loadChangedetectionWatches },
+    ],
+  },
+  'gotify': {
+    group: '// OUTILS',
+    icon: 'ti-bell-ringing',
+    panels: [
+      { id: 'panel-gotify-messages', label: 'MESSAGES', icon: 'ti-bell-ringing', load: loadGotifyMessages },
+    ],
+  },
+  'homarr': {
+    group: '// OUTILS',
+    icon: 'ti-layout-dashboard',
+    panels: [
+      { id: 'panel-homarr-dashboard', label: 'DASHBOARD', icon: 'ti-layout-dashboard', load: loadHomarrDashboard },
     ],
   },
 };
@@ -4263,6 +4294,81 @@ function loadStirlingPDF() {
       </div>
       <iframe src="${src}" style="flex:1;border:none;border-radius:6px;background:var(--card)"
         allow="fullscreen" title="Stirling PDF"></iframe>
+    </div>`;
+}
+
+// ── Gotify — Messages récents ─────────────────────────────────────────────────
+async function loadGotifyMessages() {
+  const c = document.getElementById('content-panel-gotify-messages');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT GOTIFY...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'gotify')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR GOTIFY</a>`
+    : '';
+
+  let r;
+  try {
+    r = await fetch('/ui/proxy/gotify/message?limit=20');
+  } catch(e) { r = null; }
+
+  if (!r || !r.ok) {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">${adminLink}</div>
+      <div class="empty-state"><div class="empty-icon"><i class="ti ti-bell-off"></i></div>
+        <div class="empty-title">GOTIFY INDISPONIBLE</div>
+        <div class="empty-sub">Vérifiez que Gotify est démarré et configuré.</div></div>`;
+    return;
+  }
+
+  const data = await r.json();
+  const messages = data.messages || [];
+
+  const rows = messages.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-bell"></i></div>
+        <div class="empty-title">AUCUN MESSAGE</div>
+        <div class="empty-sub">Aucune notification reçue pour l'instant.</div></div>`
+    : messages.map(m => {
+        const prioCls = m.priority >= 8 ? 'badge-err' : m.priority >= 4 ? 'badge-warn' : 'badge-run';
+        const prioLabel = m.priority >= 8 ? 'URGENT' : m.priority >= 4 ? 'NORMAL' : 'INFO';
+        const date = m.date ? new Date(m.date).toLocaleString('fr-FR') : '';
+        return `
+          <div style="padding:8px;background:var(--card);border-radius:6px;border:1px solid var(--border);margin-bottom:6px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span class="badge ${prioCls}" style="font-size:8px">${prioLabel}</span>
+              <span style="font-size:9px;font-weight:600;color:var(--text1)">${escapeHtml(m.appid ? String(m.appid) : 'App ' + m.appid)}</span>
+              <span style="font-size:8px;color:var(--text3);margin-left:auto">${escapeHtml(date)}</span>
+            </div>
+            <div style="font-size:10px;font-weight:600;color:var(--text1)">${escapeHtml(m.title || '')}</div>
+            ${m.message ? `<div style="font-size:9px;color:var(--text2);margin-top:2px">${escapeHtml(m.message)}</div>` : ''}
+          </div>`;
+      }).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      ${adminLink}
+      <span style="font-size:9px;color:var(--text3)">${messages.length} message(s)</span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadGotifyMessages()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
+}
+
+// ── Homarr — Dashboard iframe ─────────────────────────────────────────────────
+function loadHomarrDashboard() {
+  const c = document.getElementById('content-panel-homarr-dashboard');
+  if (!c) return;
+  const appDomain = S.apps.find(a => a.id === 'homarr')?.domain;
+  c.innerHTML = `
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 120px);min-height:400px;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center">
+        ${appDomain ? `<a class="btn btn-vio" href="https://${appDomain}" target="_blank" rel="noopener"
+          style="text-decoration:none;font-size:9px"><i class="ti ti-external-link"></i>OUVRIR DANS NOUVEL ONGLET</a>` : ''}
+        <span style="font-size:9px;color:var(--text3)">Dashboard de liens — cliquer sur l'icône crayon pour éditer</span>
+      </div>
+      <iframe src="/ui/proxy/homarr/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+        allow="fullscreen" title="Homarr"></iframe>
     </div>`;
 }
 
