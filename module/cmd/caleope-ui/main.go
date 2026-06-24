@@ -463,6 +463,9 @@ func main() {
 
 		// CrowdSec — LAPI locale pour consulter alertes/décisions
 		"crowdsec": {containerName: "crowdsec", containerPort: 8080},
+
+		// Grocy — gestion inventaire maison
+		"grocy": {containerName: "grocy", containerPort: 80},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.

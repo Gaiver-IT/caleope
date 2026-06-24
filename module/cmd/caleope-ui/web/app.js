@@ -431,6 +431,18 @@ const HARDCODED_PARAMS = {
     { id: 'HOMARR_PORT_WEB', label: 'Port web', type: 'port', default: '7575', required: false,
       description: 'Port d\'accès à l\'interface Homarr' },
   ],
+
+  'watchtower': [
+    { id: 'WATCHTOWER_SCHEDULE', label: 'Planification (cron)', type: 'text', default: '0 0 4 * * *', required: false,
+      description: 'Cron expression pour la vérification (ex: 0 0 4 * * * = chaque jour à 4h)' },
+    { id: 'WATCHTOWER_CLEANUP', label: 'Nettoyage images', type: 'bool', default: 'true', required: false,
+      description: 'Supprimer les anciennes images après mise à jour' },
+  ],
+
+  'grocy': [
+    { id: 'GROCY_PORT_WEB', label: 'Port web', type: 'port', default: '9283', required: false,
+      description: 'Port d\'accès à l\'interface Grocy' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -2279,6 +2291,14 @@ const APP_PANELS = {
     icon: 'ti-layout-dashboard',
     panels: [
       { id: 'panel-homarr-dashboard', label: 'DASHBOARD', icon: 'ti-layout-dashboard', load: loadHomarrDashboard },
+    ],
+  },
+  'grocy': {
+    group: '// LIFESTYLE',
+    icon: 'ti-shopping-cart',
+    panels: [
+      { id: 'panel-grocy-stock', label: 'STOCK', icon: 'ti-shopping-cart', load: loadGrocyStock },
+      { id: 'panel-grocy-tasks', label: 'TÂCHES', icon: 'ti-checklist', load: loadGrocyTasks },
     ],
   },
 };
@@ -4559,6 +4579,115 @@ function loadHomarrDashboard() {
       <iframe src="/ui/proxy/homarr/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
         allow="fullscreen" title="Homarr"></iframe>
     </div>`;
+}
+
+// ── Grocy — Stock et tâches ───────────────────────────────────────────────────
+async function loadGrocyStock() {
+  const c = document.getElementById('content-panel-grocy-stock');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT GROCY...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'grocy')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR GROCY</a>`
+    : '';
+
+  let stock = null;
+  try {
+    const r = await fetch('/ui/proxy/grocy/api/stock');
+    if (r.ok) stock = await r.json();
+  } catch(e) {}
+
+  if (!stock) {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">${adminLink}</div>
+      <div class="empty-state"><div class="empty-icon"><i class="ti ti-shopping-cart"></i></div>
+        <div class="empty-title">GROCY INDISPONIBLE</div>
+        <div class="empty-sub">Vérifiez que Grocy est démarré. La clé API est requise dans la configuration.</div></div>`;
+    return;
+  }
+
+  const expiringSoon = stock.filter(p => {
+    if (!p.best_before_date) return false;
+    const days = (new Date(p.best_before_date) - new Date()) / 86400000;
+    return days >= 0 && days <= 7;
+  });
+  const outOfStock = stock.filter(p => parseFloat(p.amount) <= 0);
+
+  const rows = stock.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-shopping-cart"></i></div>
+        <div class="empty-title">STOCK VIDE</div>
+        <div class="empty-sub">Ajoutez des produits depuis l'interface Grocy.</div></div>`
+    : `<table style="width:100%;border-collapse:collapse;font-size:9px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:4px 6px">PRODUIT</th>
+          <th style="text-align:left;padding:4px 6px">QUANTITÉ</th>
+          <th style="text-align:left;padding:4px 6px">DLC</th>
+        </tr></thead>
+        <tbody>${stock.slice(0, 30).map(p => {
+          const dlc = p.best_before_date || '—';
+          const days = p.best_before_date ? Math.ceil((new Date(p.best_before_date) - new Date()) / 86400000) : null;
+          const dlcCls = days !== null && days <= 3 ? 'color:var(--red-b)' : days !== null && days <= 7 ? 'color:var(--warn)' : 'color:var(--text3)';
+          return `<tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:5px 6px;color:var(--text1)">${escapeHtml(p.product?.name || String(p.product_id))}</td>
+            <td style="padding:5px 6px;color:var(--text2)">${parseFloat(p.amount || 0).toFixed(1)} ${escapeHtml(p.quantity_unit?.name || '')}</td>
+            <td style="padding:5px 6px;${dlcCls}">${escapeHtml(dlc)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      ${adminLink}
+      <span style="font-size:9px;color:var(--text3)">${stock.length} produit(s)</span>
+      ${expiringSoon.length ? `<span class="badge badge-warn" style="font-size:7px">${expiringSoon.length} exp. bientôt</span>` : ''}
+      ${outOfStock.length ? `<span class="badge badge-err" style="font-size:7px">${outOfStock.length} rupture(s)</span>` : ''}
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadGrocyStock()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
+}
+
+async function loadGrocyTasks() {
+  const c = document.getElementById('content-panel-grocy-tasks');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT TÂCHES...</div>`;
+
+  let tasks = null;
+  try {
+    const r = await fetch('/ui/proxy/grocy/api/tasks?done=0');
+    if (r.ok) tasks = await r.json();
+  } catch(e) {}
+
+  if (!tasks) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-checklist"></i></div>
+      <div class="empty-title">GROCY INDISPONIBLE</div></div>`;
+    return;
+  }
+
+  const rows = tasks.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-check"></i></div>
+        <div class="empty-title">AUCUNE TÂCHE</div>
+        <div class="empty-sub">Toutes les tâches sont accomplies !</div></div>`
+    : tasks.map(t => {
+        const due = t.due_date || null;
+        const overdue = due && new Date(due) < new Date();
+        return `
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card);
+              border-radius:6px;border:1px solid var(--border);margin-bottom:5px">
+            <i class="ti ti-circle" style="color:var(--text3);font-size:12px"></i>
+            <span style="flex:1;font-size:10px;color:var(--text1)">${escapeHtml(t.name || '—')}</span>
+            ${due ? `<span style="font-size:8px;color:${overdue ? 'var(--red-b)' : 'var(--text3)'}">${escapeHtml(due)}</span>` : ''}
+          </div>`;
+      }).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <span style="font-size:9px;color:var(--text3)">${tasks.length} tâche(s) en cours</span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadGrocyTasks()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
 }
 
 // ── Syncthing — Statut synchronisation ────────────────────────────────────────
