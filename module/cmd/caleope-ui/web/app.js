@@ -497,7 +497,23 @@ function renderApps() {
             <div class="empty-title">CATALOGUE VIDE</div>
             <div class="empty-sub">Vérifiez la connexion au store.</div>
            </div>`
-        : `<div class="cat-grid" id="catalog-grid">${S.catalog.map(catalogCard).join('')}</div>`
+        : (() => {
+            const cats = [...new Set(S.catalog.map(a => a.category || 'other'))].sort();
+            const catBtns = cats.map(cat => `
+              <button class="tab-btn cat-filter-btn" data-cat="${escapeHtml(cat)}"
+                onclick="filterCatalogCat(this,'${escapeHtml(cat)}')"
+                style="font-size:8px;padding:3px 8px">
+                ${cat.toUpperCase()}
+              </button>`).join('');
+            return `
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+                <button class="tab-btn cat-filter-btn active" data-cat="all"
+                  onclick="filterCatalogCat(this,'all')"
+                  style="font-size:8px;padding:3px 8px">TOUT</button>
+                ${catBtns}
+              </div>
+              <div class="cat-grid" id="catalog-grid">${S.catalog.map(catalogCard).join('')}</div>`;
+          })()
       }
     </div>
   `;
@@ -578,7 +594,7 @@ function appCard(app) {
 function catalogCard(app) {
   const installed = S.apps.some(a => a.id === app.id);
   return `
-    <div class="cat-card">
+    <div class="cat-card" data-cat="${escapeHtml(app.category || 'other')}">
       <div class="cat-top">
         <div class="app-icon" style="width:32px;height:32px;font-size:15px">${icon(app.id)}</div>
         <div>
@@ -602,6 +618,18 @@ function switchTab(tab) {
   document.getElementById('tab-installed')?.classList.toggle('hidden', tab !== 'installed');
   document.getElementById('tab-catalog')?.classList.toggle('hidden',   tab !== 'catalog');
   filterApps(S.appSearch);
+}
+
+function filterCatalogCat(btn, cat) {
+  document.querySelectorAll('.cat-filter-btn').forEach(b => b.classList.toggle('active', b === btn));
+  const grid = document.getElementById('catalog-grid');
+  if (!grid) return;
+  grid.querySelectorAll('.cat-card').forEach(card => {
+    const cardCat = card.dataset.cat || '';
+    card.style.display = (cat === 'all' || cardCat === cat) ? '' : 'none';
+  });
+  // Re-apply text search if any
+  if (S.appSearch) filterApps(S.appSearch);
 }
 
 function filterApps(q) {
@@ -632,6 +660,14 @@ async function appAction(id, action) {
   } else {
     notify(r?.error || `Erreur ${action}`, 'err');
   }
+}
+
+async function startAllStopped() {
+  const stopped = S.apps.filter(a => a.status !== 'running' && a.status !== 'installing');
+  if (!stopped.length) { notify('Aucune app arrêtée', 'info'); return; }
+  notify(`Démarrage de ${stopped.length} app(s)...`, 'info');
+  await Promise.all(stopped.map(a => api.post(`/api/v1/apps/${a.id}/start`)));
+  setTimeout(() => { loadApps(); loadDashboard(); }, 2000);
 }
 
 async function restartApp(id) {
@@ -1722,8 +1758,13 @@ async function loadDashboard() {
       const downApps = S.apps.filter(a => a.status !== 'running' && a.status !== 'installing');
       if (!downApps.length) return '';
       return `
-        <div style="font-size:9px;color:var(--red-b);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">
-          <i class="ti ti-alert-circle" style="font-size:10px"></i> ALERTES (${downApps.length})
+        <div style="display:flex;align-items:center;gap:8px;margin:20px 0 10px">
+          <div style="font-size:9px;color:var(--red-b);letter-spacing:1.5px;font-weight:700;flex:1">
+            <i class="ti ti-alert-circle" style="font-size:10px"></i> ALERTES (${downApps.length})
+          </div>
+          <button class="btn-sm" onclick="startAllStopped()" title="Démarrer toutes les apps arrêtées">
+            <i class="ti ti-player-play" style="font-size:10px"></i> TOUT DÉMARRER
+          </button>
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:4px">
           ${downApps.map(a => `
