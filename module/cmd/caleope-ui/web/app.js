@@ -1955,6 +1955,36 @@ const APP_PANELS = {
       { id: 'panel-memos-recent', label: 'NOTES RÉCENTES', icon: 'ti-file-text', load: loadMemosRecent },
     ],
   },
+  'linkding': {
+    group: '// PRODUCTIVITÉ',
+    icon: 'ti-bookmark',
+    panels: [
+      { id: 'panel-linkding-bookmarks', label: 'FAVORIS',      icon: 'ti-bookmark',     load: loadLinkdingBookmarks },
+      { id: 'panel-linkding-tags',      label: 'ÉTIQUETTES',   icon: 'ti-tag',          load: loadLinkdingTags },
+    ],
+  },
+  'paperless-ngx': {
+    group: '// PRODUCTIVITÉ',
+    icon: 'ti-file-invoice',
+    panels: [
+      { id: 'panel-paperless-docs',   label: 'DOCUMENTS',     icon: 'ti-files',        load: loadPaperlessDocs },
+      { id: 'panel-paperless-inbox',  label: 'BOÎTE ENTRÉE',  icon: 'ti-inbox',        load: loadPaperlessInbox },
+    ],
+  },
+  'freshrss': {
+    group: '// MÉDIAS',
+    icon: 'ti-rss',
+    panels: [
+      { id: 'panel-freshrss-feeds', label: 'FLUX RSS', icon: 'ti-rss', load: loadFreshRssFeeds },
+    ],
+  },
+  'syncthing': {
+    group: '// STOCKAGE',
+    icon: 'ti-refresh',
+    panels: [
+      { id: 'panel-syncthing-status', label: 'ÉTAT SYNC', icon: 'ti-refresh', load: loadSyncthingStatus },
+    ],
+  },
 };
 
 // ── Sidebar collapsible ───────────────────────────────────────────────────────
@@ -3474,6 +3504,270 @@ async function loadMemosRecent() {
         <i class="ti ti-file-text" style="font-size:12px"></i> NOTES RÉCENTES (${list.length})
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+// ── Linkding — Favoris ───────────────────────────────────────────────────────
+async function loadLinkdingBookmarks() {
+  const c = document.getElementById('content-panel-linkding-bookmarks');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT FAVORIS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'linkding')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR LINKDING</a>` : '';
+
+  const r = await fetch('/ui/proxy/linkding/api/bookmarks/?limit=20');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-bookmark"></i></div>
+      <div class="empty-title">LINKDING INDISPONIBLE</div>
+      <div class="empty-sub">${r.status === 503 ? 'Service non démarré.' : 'LINKDING_API_TOKEN manquant dans les secrets.'}</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const data = await r.json();
+  const bookmarks = data.results || [];
+
+  const rows = bookmarks.map(b => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${escapeHtml(b.title || b.website_title || b.url)}</div>
+        <div style="font-size:9px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${escapeHtml(b.url)}</div>
+      </div>
+      ${b.tag_names?.length ? `<div style="font-size:8px;color:var(--blue)">${b.tag_names.slice(0,2).map(t => escapeHtml(t)).join(' ')}</div>` : ''}
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun favori.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-bookmark" style="font-size:12px"></i> FAVORIS (${data.count || bookmarks.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+async function loadLinkdingTags() {
+  const c = document.getElementById('content-panel-linkding-tags');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/linkding/api/tags/?limit=50');
+  if (!r.ok) { c.innerHTML = `<div class="empty-msg">Linkding indisponible.</div>`; return; }
+
+  const data = await r.json();
+  const tags = data.results || [];
+
+  const tagHtml = tags.map(t => `
+    <span style="display:inline-block;background:var(--bg3);border-radius:4px;padding:2px 8px;font-size:9px;font-weight:700;color:var(--blue);margin:2px">
+      ${escapeHtml(t.name)}
+    </span>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune étiquette.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:12px">
+      <div class="settings-title" style="margin-bottom:10px">
+        <i class="ti ti-tag" style="font-size:12px"></i> ÉTIQUETTES (${tags.length})
+      </div>
+      <div>${tagHtml}</div>
+    </div>`;
+}
+
+// ── Paperless-NGX ─────────────────────────────────────────────────────────────
+async function loadPaperlessDocs() {
+  const c = document.getElementById('content-panel-paperless-docs');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT DOCUMENTS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'paperless-ngx')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR PAPERLESS</a>` : '';
+
+  const [rDocs, rStats] = await Promise.all([
+    fetch('/ui/proxy/paperless-ngx/api/documents/?page_size=10&ordering=-created'),
+    fetch('/ui/proxy/paperless-ngx/api/statistics/'),
+  ]);
+
+  if (!rDocs.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-file-invoice"></i></div>
+      <div class="empty-title">PAPERLESS INDISPONIBLE</div>
+      <div class="empty-sub">${rDocs.status === 503 ? 'Service non démarré.' : 'PAPERLESS_API_TOKEN manquant.'}</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const docs = await rDocs.json();
+  const stats = rStats.ok ? await rStats.json() : {};
+  const list = docs.results || [];
+
+  const rows = list.map(d => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(d.title || '(sans titre)')}</div>
+        <div style="font-size:9px;color:var(--text3)">
+          ${d.created ? new Date(d.created).toLocaleDateString('fr-FR') : ''}
+          ${d.correspondent ? ` · ${escapeHtml(d.correspondent?.name || '')}` : ''}
+        </div>
+      </div>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun document.</div>';
+
+  const totalDocs = stats.documents_total || docs.count || 0;
+  const inboxCount = stats.inbox_count || 0;
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${totalDocs}</div><div class="stat-lbl">TOTAL</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:${inboxCount > 0 ? 'var(--warn)' : 'var(--green-b)'}">${inboxCount}</div><div class="stat-lbl">À TRAITER</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-files" style="font-size:12px"></i> DOCUMENTS RÉCENTS
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+async function loadPaperlessInbox() {
+  const c = document.getElementById('content-panel-paperless-inbox');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  // Récupérer les docs sans correspondant ni tag (typiquement la boîte entrée)
+  const r = await fetch('/ui/proxy/paperless-ngx/api/documents/?page_size=10&ordering=-created&is_inbox_document=true');
+  if (!r.ok) { c.innerHTML = `<div class="empty-msg">Paperless indisponible.</div>`; return; }
+
+  const data = await r.json();
+  const list = data.results || [];
+
+  if (list.length === 0) {
+    c.innerHTML = `<div class="empty-state">
+      <div class="empty-icon" style="color:var(--green-b)"><i class="ti ti-circle-check"></i></div>
+      <div class="empty-title" style="color:var(--green-b)">BOÎTE VIDE</div>
+      <div class="empty-sub">Tous les documents ont été traités.</div>
+    </div>`;
+    return;
+  }
+
+  const rows = list.map(d => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(d.title || '(sans titre)')}</div>
+        <div style="font-size:9px;color:var(--warn)">À TRAITER · ${d.created ? new Date(d.created).toLocaleDateString('fr-FR') : ''}</div>
+      </div>
+    </div>`).join('');
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px;color:var(--warn)">
+        <i class="ti ti-inbox" style="font-size:12px"></i> BOÎTE ENTRÉE (${data.count})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── FreshRSS — Flux RSS ───────────────────────────────────────────────────────
+async function loadFreshRssFeeds() {
+  const c = document.getElementById('content-panel-freshrss-feeds');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT FLUX RSS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'freshrss')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR FRESHRSS</a>` : '';
+
+  const r = await fetch('/ui/proxy/freshrss/api/greader.php/reader/api/0/subscription/list?output=json');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-rss"></i></div>
+      <div class="empty-title">FRESHRSS INDISPONIBLE</div>
+      <div class="empty-sub">${r.status === 503 ? 'Service non démarré.' : 'Erreur d\'accès à l\'API FreshRSS.'}</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const data = await r.json();
+  const feeds = data.subscriptions || [];
+
+  const rows = feeds.map(f => {
+    const unread = f.unread_count || 0;
+    return `
+      <div class="loc-row">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:10px;font-weight:700">${escapeHtml(f.title || '?')}</div>
+          <div style="font-size:9px;color:var(--text3)">${escapeHtml((f.categories?.[0]?.label) || '')}</div>
+        </div>
+        ${unread > 0 ? `<span style="font-size:9px;font-weight:700;color:var(--blue)">${unread}</span>` : ''}
+      </div>`;
+  }).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun flux.</div>';
+
+  const totalUnread = feeds.reduce((s, f) => s + (f.unread_count || 0), 0);
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${feeds.length}</div><div class="stat-lbl">FLUX</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:${totalUnread > 0 ? 'var(--blue)' : 'var(--text3)'}">${totalUnread}</div><div class="stat-lbl">NON LUS</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-rss" style="font-size:12px"></i> ABONNEMENTS (${feeds.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+// ── Syncthing — Statut synchronisation ────────────────────────────────────────
+async function loadSyncthingStatus() {
+  const c = document.getElementById('content-panel-syncthing-status');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT SYNCTHING...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'syncthing')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR SYNCTHING</a>` : '';
+
+  const [rStatus, rFolders, rConnections] = await Promise.all([
+    fetch('/ui/proxy/syncthing/rest/system/status'),
+    fetch('/ui/proxy/syncthing/rest/config/folders'),
+    fetch('/ui/proxy/syncthing/rest/system/connections'),
+  ]);
+
+  if (!rStatus.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-refresh"></i></div>
+      <div class="empty-title">SYNCTHING INDISPONIBLE</div>
+      <div class="empty-sub">${rStatus.status === 503 ? 'Service non démarré.' : 'Erreur d\'accès à l\'API Syncthing.'}</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const status = await rStatus.json();
+  const folders = rFolders.ok ? await rFolders.json() : [];
+  const connections = rConnections.ok ? await rConnections.json() : {};
+  const connList = Object.values(connections.connections || {});
+  const connectedDevices = connList.filter(d => d.connected).length;
+
+  const folderRows = folders.slice(0, 5).map(f => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(f.label || f.id)}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(f.path || '')}</div>
+      </div>
+      <span style="font-size:9px;color:var(--text3)">${f.type === 'sendonly' ? 'ENVOI' : f.type === 'receiveonly' ? 'RÉCEPTION' : 'SYNC'}</span>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun dossier partagé.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${folders.length}</div><div class="stat-lbl">DOSSIERS</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:${connectedDevices > 0 ? 'var(--green-b)' : 'var(--text3)'}">${connectedDevices}</div><div class="stat-lbl">CONNECTÉS</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-refresh" style="font-size:12px"></i> DOSSIERS PARTAGÉS
+      </div>
+      <div style="padding:0 12px 12px">${folderRows}</div>
     </div>
     ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
 }

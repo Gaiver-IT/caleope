@@ -418,6 +418,24 @@ func main() {
 		// Memos — Bearer token (généré après login)
 		"memos": {tokenKey: "MEMOS_API_TOKEN", authScheme: "Bearer",
 			containerName: "memos", containerPort: 5230},
+
+		// Linkding — Bearer token (LINKDING_API_TOKEN)
+		"linkding": {tokenKey: "LINKDING_API_TOKEN", authScheme: "Bearer",
+			containerName: "linkding", containerPort: 9090},
+
+		// Paperless-NGX — Bearer token (PAPERLESS_API_TOKEN)
+		"paperless-ngx": {tokenKey: "PAPERLESS_API_TOKEN", authScheme: "Bearer",
+			containerName: "paperless-ngx", containerPort: 8000},
+
+		// FreshRSS — Google Reader API (BasicAuth)
+		"freshrss": {basicUserKey: "FRESHRSS_ADMIN_USER", basicPassKey: "FRESHRSS_ADMIN_PASS",
+			authScheme: "Basic", containerName: "freshrss", containerPort: 80},
+
+		// Syncthing — sans auth sur GUI (auth gérée dans l'interface)
+		"syncthing": {containerName: "syncthing", containerPort: 8384},
+
+		// Stirling PDF — sans auth par défaut
+		"stirling-pdf": {containerName: "stirling-pdf", containerPort: 8080},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
