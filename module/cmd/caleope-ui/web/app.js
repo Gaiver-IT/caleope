@@ -465,6 +465,18 @@ const HARDCODED_PARAMS = {
     { id: 'CALIBREWEB_PORT_WEB', label: 'Port web', type: 'port', default: '8083', required: false,
       description: 'Port d\'accès à l\'interface Calibre-Web' },
   ],
+
+  'navidrome': [
+    { id: 'NAVIDROME_PORT_WEB', label: 'Port web', type: 'port', default: '4533', required: false,
+      description: 'Port d\'accès à l\'interface Navidrome' },
+  ],
+
+  'photoprism': [
+    { id: 'PHOTOPRISM_PORT_WEB', label: 'Port web', type: 'port', default: '2342', required: false,
+      description: 'Port d\'accès à l\'interface PhotoPrism' },
+    { id: 'PHOTOPRISM_ADMIN_PASSWORD', label: 'Mot de passe admin', type: 'secret', default: '', required: false,
+      description: 'Mot de passe du compte admin' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -2409,6 +2421,20 @@ const APP_PANELS = {
     icon: 'ti-book',
     panels: [
       { id: 'panel-calibre-books', label: 'BIBLIOTHÈQUE', icon: 'ti-book', load: loadCalibreBooks },
+    ],
+  },
+  'navidrome': {
+    group: '// MÉDIAS',
+    icon: 'ti-music',
+    panels: [
+      { id: 'panel-navidrome-library', label: 'BIBLIOTHÈQUE', icon: 'ti-music', load: loadNavidromeLibrary },
+    ],
+  },
+  'photoprism': {
+    group: '// MÉDIAS',
+    icon: 'ti-camera',
+    panels: [
+      { id: 'panel-photoprism-stats', label: 'STATISTIQUES', icon: 'ti-chart-bar', load: loadPhotoprismStats },
     ],
   },
 };
@@ -4832,6 +4858,115 @@ async function loadCalibreBooks() {
         <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
     </div>
     ${rows}`;
+}
+
+// ── Navidrome — Bibliothèque musicale ────────────────────────────────────────
+async function loadNavidromeLibrary() {
+  const c = document.getElementById('content-panel-navidrome-library');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT NAVIDROME...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'navidrome')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR NAVIDROME</a>`
+    : '';
+
+  // API Subsonic: getArtists
+  let stats = null;
+  try {
+    const r = await fetch('/ui/proxy/navidrome/rest/getAlbumList2.view?type=newest&size=10&f=json&v=1.16.1&c=caleope&u=admin&p=');
+    if (r.ok) {
+      const d = await r.json();
+      stats = d['subsonic-response'];
+    }
+  } catch(e) {}
+
+  // Fallback: iframe embed
+  if (!stats || stats.status !== 'ok') {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${adminLink}</div>
+      <div style="display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:300px">
+        <iframe src="/ui/proxy/navidrome/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+          allow="fullscreen" title="Navidrome"></iframe>
+      </div>`;
+    return;
+  }
+
+  const albums = stats.albumList2?.album || [];
+  const rows = albums.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-music"></i></div>
+        <div class="empty-title">BIBLIOTHÈQUE VIDE</div>
+        <div class="empty-sub">Placez votre musique dans le dossier music/ de Navidrome.</div></div>`
+    : albums.map(a => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card);
+            border-radius:6px;border:1px solid var(--border);margin-bottom:5px">
+          <span style="font-size:16px">🎵</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:10px;font-weight:600;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(a.name || '—')}</div>
+            <div style="font-size:8px;color:var(--text3)">${escapeHtml(a.artist || '—')} · ${a.songCount || 0} piste(s)</div>
+          </div>
+          <span style="font-size:8px;color:var(--text3)">${escapeHtml(String(a.year || ''))}</span>
+        </div>`).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      ${adminLink}
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadNavidromeLibrary()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin-bottom:8px">// ALBUMS RÉCENTS</div>
+    ${rows}`;
+}
+
+// ── PhotoPrism — Statistiques ─────────────────────────────────────────────────
+async function loadPhotoprismStats() {
+  const c = document.getElementById('content-panel-photoprism-stats');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT PHOTOPRISM...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'photoprism')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR PHOTOPRISM</a>`
+    : '';
+
+  let photos = null;
+  try {
+    const r = await fetch('/ui/proxy/photoprism/api/v1/photos?count=12&offset=0&merged=true&quality=1&public=true');
+    if (r.ok) photos = await r.json();
+  } catch(e) {}
+
+  if (!photos) {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">${adminLink}</div>
+      <div class="empty-state"><div class="empty-icon"><i class="ti ti-camera"></i></div>
+        <div class="empty-title">PHOTOPRISM INDISPONIBLE</div>
+        <div class="empty-sub">Vérifiez que PhotoPrism est démarré. Une session est requise.</div></div>`;
+    return;
+  }
+
+  const count = Array.isArray(photos) ? photos.length : 0;
+  const grid = Array.isArray(photos) && photos.length > 0
+    ? `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px">
+        ${photos.slice(0, 12).map(p => {
+          const thumb = `/ui/proxy/photoprism/api/v1/t/${p.Hash}/public/tile_224`;
+          return `<div style="aspect-ratio:1;border-radius:4px;overflow:hidden;background:var(--card);border:1px solid var(--border)">
+            <img src="${escapeHtml(thumb)}" style="width:100%;height:100%;object-fit:cover"
+              onerror="this.parentElement.innerHTML='<div style=\'display:flex;align-items:center;justify-content:center;height:100%\'>📷</div>'" alt="">
+          </div>`;
+        }).join('')}
+      </div>`
+    : `<div class="empty-state"><div class="empty-icon"><i class="ti ti-camera"></i></div>
+        <div class="empty-title">AUCUNE PHOTO</div>
+        <div class="empty-sub">Lancez une indexation depuis PhotoPrism.</div></div>`;
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      ${adminLink}
+      <span style="font-size:9px;color:var(--text3)">${count} photo(s) récentes</span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadPhotoprismStats()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${grid}`;
 }
 
 // ── Jellyseerr — Demandes médias ─────────────────────────────────────────────

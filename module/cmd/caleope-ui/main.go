@@ -475,6 +475,12 @@ func main() {
 
 		// Calibre-Web — bibliothèque ebooks
 		"calibre-web": {containerName: "calibre-web", containerPort: 8083},
+
+		// Navidrome — serveur de musique
+		"navidrome": {containerName: "navidrome", containerPort: 4533},
+
+		// PhotoPrism — gestionnaire de photos
+		"photoprism": {containerName: "photoprism", containerPort: 2342},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
