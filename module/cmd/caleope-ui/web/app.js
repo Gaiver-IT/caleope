@@ -3855,14 +3855,9 @@ function goSection(id) {
   const contentEl = document.querySelector('.content');
   if (contentEl) contentEl.scrollTop = 0;
 
-  // Injecter la barre de contrôle pour les panels d'intégration
-  const panelMatch = id.match(/^panel-([^-]+(?:-[^-]+)*?)-/);
-  const ctrlBarId = 'panel-ctrl-bar';
-  let existingCtrl = document.getElementById(ctrlBarId);
-  if (existingCtrl) existingCtrl.remove();
-
-  if (panelMatch && target) {
-    // Identifier l'app via le préfixe du panel id
+  // Contrôle d'app dans la topbar pour les panels d'intégration
+  const tbCtrl = document.getElementById('tb-app-ctrl');
+  if (tbCtrl) {
     const panelAppId = Object.keys(APP_PANELS).find(aid =>
       id.startsWith('panel-' + aid + '-') || id === 'panel-' + aid
     );
@@ -3870,20 +3865,24 @@ function goSection(id) {
       const appObj = S.apps.find(a => a.id === panelAppId);
       if (appObj) {
         const isRun = appObj.status === 'running';
-        const ctrlBar = document.createElement('div');
-        ctrlBar.id = ctrlBarId;
-        ctrlBar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 10px;margin-bottom:4px;border-bottom:1px solid var(--border);margin-bottom:12px';
-        ctrlBar.innerHTML = `
+        tbCtrl.style.display = 'inline-flex';
+        tbCtrl.style.alignItems = 'center';
+        tbCtrl.style.gap = '6px';
+        tbCtrl.innerHTML = `
           <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isRun ? 'var(--green-b)' : 'var(--red-b)'}"></span>
-          <span style="font-size:10px;font-weight:700;flex:1">${escapeHtml(appObj.name || panelAppId)}</span>
           <span style="font-size:9px;color:${isRun ? 'var(--green-b)' : 'var(--red-b)'}">${isRun ? 'ACTIF' : 'ARRÊTÉ'}</span>
-          ${isRun ? `<button class="btn-sm" onclick="restartApp('${panelAppId}')" title="Redémarrer">
+          ${isRun ? `<button class="btn-sm" onclick="restartApp('${panelAppId}')" title="Redémarrer ${appObj.name}">
             <i class="ti ti-refresh" style="font-size:10px"></i>
-          </button>` : `<button class="btn-sm" onclick="startApp('${panelAppId}')" title="Démarrer">
+          </button>` : `<button class="btn-sm" onclick="startApp('${panelAppId}')" title="Démarrer ${appObj.name}">
             <i class="ti ti-player-play" style="font-size:10px"></i>
           </button>`}`;
-        target.insertBefore(ctrlBar, target.firstChild);
+      } else {
+        tbCtrl.style.display = 'none';
+        tbCtrl.innerHTML = '';
       }
+    } else {
+      tbCtrl.style.display = 'none';
+      tbCtrl.innerHTML = '';
     }
   }
 

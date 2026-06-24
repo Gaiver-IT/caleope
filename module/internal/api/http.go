@@ -28,7 +28,8 @@
 //   POST   /api/v1/upgrade                 ?check=true
 //   POST   /api/v1/update
 //   GET    /api/v1/token                   (localhost seulement)
-//   GET    /api/v1/system                  hostname, uptime, OS, CPU
+//   GET    /api/v1/system                  hostname, uptime, OS, CPU, RAM, disque
+//   GET    /api/v1/containers              stats CPU/RAM de tous les conteneurs (docker stats)
 //   GET    /api/v1/tasks
 //   POST   /api/v1/tasks                   body JSON: Task
 //   DELETE /api/v1/tasks/{id}
