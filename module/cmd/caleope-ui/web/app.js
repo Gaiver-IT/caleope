@@ -500,6 +500,22 @@ const HARDCODED_PARAMS = {
     { id: 'SCRUTINY_PORT', label: 'Port web', type: 'port', default: '8086', required: false,
       description: 'Port d\'accès à l\'interface Scrutiny' },
   ],
+  'memos': [
+    { id: 'MEMOS_PORT_WEB', label: 'Port web', type: 'port', default: '5230', required: false,
+      description: 'Port d\'accès à l\'interface Memos' },
+    { id: 'MEMOS_ADMIN_USER', label: 'Nom d\'utilisateur admin', type: 'text', default: 'admin', required: false,
+      description: 'Nom d\'utilisateur du compte administrateur' },
+    { id: 'MEMOS_ADMIN_PASS', label: 'Mot de passe admin', type: 'secret', default: '', required: false,
+      description: 'Mot de passe du compte admin (auto-généré si vide)' },
+  ],
+  'linkding': [
+    { id: 'LINKDING_PORT_WEB', label: 'Port web', type: 'port', default: '9090', required: false,
+      description: 'Port d\'accès à l\'interface Linkding' },
+    { id: 'LINKDING_ADMIN_USER', label: 'Nom d\'utilisateur admin', type: 'text', default: 'admin', required: false,
+      description: 'Nom d\'utilisateur du compte administrateur' },
+    { id: 'LINKDING_ADMIN_PASS', label: 'Mot de passe admin', type: 'secret', default: '', required: false,
+      description: 'Mot de passe du compte admin (auto-généré si vide)' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -602,6 +618,12 @@ function renderApps() {
       <button class="tab-btn ${S.tab === 'catalog' ? 'active' : ''}" onclick="switchTab('catalog')">
         CATALOGUE <span class="tab-count">${S.catalog.length}</span>
       </button>
+      ${S.tab === 'installed' ? `
+      <span style="width:1px;height:14px;background:var(--border);margin:0 2px"></span>
+      <button class="tab-btn ${(S.statusFilter||'all')==='all'?'active':''}" style="font-size:8px;padding:3px 7px" onclick="filterAppStatus('all')">TOUTES</button>
+      <button class="tab-btn ${(S.statusFilter||'all')==='running'?'active':''}" style="font-size:8px;padding:3px 7px;color:var(--vio-b)" onclick="filterAppStatus('running')">ACTIVES <span class="tab-count" style="background:var(--vio-b);color:var(--bg)">${running}</span></button>
+      <button class="tab-btn ${(S.statusFilter||'all')==='stopped'?'active':''}" style="font-size:8px;padding:3px 7px" onclick="filterAppStatus('stopped')">ARRÊTÉES <span class="tab-count">${S.apps.length - running}</span></button>
+      ` : ''}
       <input id="app-search" type="search" placeholder="Rechercher..." autocomplete="off"
         value="${escapeHtml(S.appSearch || '')}"
         oninput="filterApps(this.value)"
@@ -610,6 +632,23 @@ function renderApps() {
     </div>
 
     <div id="tab-installed" class="${S.tab !== 'installed' ? 'hidden' : ''}">
+      ${S.apps.length > 0 && S.tab === 'installed' ? `
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:8px;color:var(--text3);letter-spacing:.5px">ACTIONS EN LOT :</span>
+        <button class="btn-sm" onclick="bulkAction('start')" title="Démarrer toutes les apps arrêtées"
+          style="font-size:8px;padding:3px 8px">
+          <i class="ti ti-player-play"></i>DÉMARRER ARRÊTÉES
+        </button>
+        <button class="btn-sm" onclick="bulkAction('restart')" title="Redémarrer toutes les apps actives"
+          style="font-size:8px;padding:3px 8px">
+          <i class="ti ti-refresh"></i>REDÉMARRER ACTIVES
+        </button>
+        <button class="btn-sm danger" onclick="bulkAction('stop')" title="Arrêter toutes les apps actives"
+          style="font-size:8px;padding:3px 8px">
+          <i class="ti ti-player-pause"></i>TOUT ARRÊTER
+        </button>
+        <span id="bulk-status" style="font-size:8px;color:var(--text3);margin-left:4px"></span>
+      </div>` : ''}
       ${S.apps.length === 0
         ? `<div class="empty-state">
             <div class="empty-icon"><i class="ti ti-apps" aria-hidden="true"></i></div>
@@ -769,7 +808,8 @@ function filterApps(q) {
   if (installedGrid) {
     installedGrid.querySelectorAll('.app-card').forEach(card => {
       const text = card.textContent.toLowerCase();
-      card.style.display = (!S.appSearch || text.includes(S.appSearch)) ? '' : 'none';
+      const sf = S.statusFilter || 'all';
+      card.style.display = (!S.appSearch || text.includes(S.appSearch)) && applyStatusFilter(card, sf) ? '' : 'none';
     });
   }
   if (catalogGrid) {
@@ -778,6 +818,36 @@ function filterApps(q) {
       card.style.display = (!S.appSearch || text.includes(S.appSearch)) ? '' : 'none';
     });
   }
+}
+
+function applyStatusFilter(card, sf) {
+  if (sf === 'all') return true;
+  const isRunning = card.classList.contains('running');
+  return sf === 'running' ? isRunning : !isRunning;
+}
+
+function filterAppStatus(status) {
+  S.statusFilter = status;
+  renderApps();
+}
+
+// ── Actions en lot ────────────────────────────────────────────────────────────
+async function bulkAction(action) {
+  const targets = action === 'start'
+    ? S.apps.filter(a => a.status !== 'running')
+    : S.apps.filter(a => a.status === 'running');
+  if (targets.length === 0) { notify('Aucune app à ' + action, 'info'); return; }
+  const status = document.getElementById('bulk-status');
+  let done = 0;
+  if (status) status.textContent = `0/${targets.length}...`;
+  for (const app of targets) {
+    await api.post(`/api/v1/apps/${app.id}/${action}`);
+    done++;
+    if (status) status.textContent = `${done}/${targets.length}...`;
+  }
+  if (status) status.textContent = `✓ ${done} apps`;
+  notify(`Bulk ${action} — ${done} apps`, 'ok');
+  setTimeout(() => { if (status) status.textContent = ''; loadApps(); }, 2000);
 }
 
 // ── Actions app ───────────────────────────────────────────────────────────────
