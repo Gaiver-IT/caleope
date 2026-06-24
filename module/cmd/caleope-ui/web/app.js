@@ -455,6 +455,16 @@ const HARDCODED_PARAMS = {
     { id: 'MYSQL_PASSWORD', label: 'Mot de passe DB', type: 'secret', default: '', required: false,
       description: 'Mot de passe MySQL pour le compte monica' },
   ],
+
+  'home-assistant': [
+    { id: 'HA_PORT_WEB', label: 'Port web', type: 'port', default: '8123', required: false,
+      description: 'Port d\'accès à l\'interface Home Assistant' },
+  ],
+
+  'calibre-web': [
+    { id: 'CALIBREWEB_PORT_WEB', label: 'Port web', type: 'port', default: '8083', required: false,
+      description: 'Port d\'accès à l\'interface Calibre-Web' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -2384,6 +2394,20 @@ const APP_PANELS = {
     icon: 'ti-ticket',
     panels: [
       { id: 'panel-jellyseerr-requests', label: 'DEMANDES', icon: 'ti-ticket', load: loadJellyseerrRequests },
+    ],
+  },
+  'home-assistant': {
+    group: '// SMART HOME',
+    icon: 'ti-home-2',
+    panels: [
+      { id: 'panel-ha-dashboard', label: 'TABLEAU DE BORD', icon: 'ti-home-2', load: loadHADashboard },
+    ],
+  },
+  'calibre-web': {
+    group: '// MÉDIAS',
+    icon: 'ti-book',
+    panels: [
+      { id: 'panel-calibre-books', label: 'BIBLIOTHÈQUE', icon: 'ti-book', load: loadCalibreBooks },
     ],
   },
 };
@@ -4664,6 +4688,85 @@ function loadHomarrDashboard() {
       <iframe src="/ui/proxy/homarr/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
         allow="fullscreen" title="Homarr"></iframe>
     </div>`;
+}
+
+// ── Home Assistant — Dashboard iframe ────────────────────────────────────────
+function loadHADashboard() {
+  const c = document.getElementById('content-panel-ha-dashboard');
+  if (!c) return;
+  const appDomain = S.apps.find(a => a.id === 'home-assistant')?.domain;
+  c.innerHTML = `
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 120px);min-height:400px;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${appDomain ? `<a class="btn btn-vio" href="https://${appDomain}" target="_blank" rel="noopener"
+          style="text-decoration:none;font-size:9px"><i class="ti ti-external-link"></i>OUVRIR DANS NOUVEL ONGLET</a>` : ''}
+        <span style="font-size:9px;color:var(--text3)">Domotique — interface intégrée</span>
+      </div>
+      <iframe src="/ui/proxy/home-assistant/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+        allow="fullscreen" title="Home Assistant"></iframe>
+    </div>`;
+}
+
+// ── Calibre-Web — Bibliothèque ebooks ─────────────────────────────────────────
+async function loadCalibreBooks() {
+  const c = document.getElementById('content-panel-calibre-books');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT CALIBRE-WEB...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'calibre-web')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR CALIBRE-WEB</a>`
+    : '';
+
+  let books = null;
+  try {
+    const r = await fetch('/ui/proxy/calibre-web/opds/new');
+    if (r.ok) {
+      const xml = await r.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xml, 'application/xml');
+      const entries = Array.from(doc.querySelectorAll('entry'));
+      books = entries.slice(0, 20).map(e => ({
+        title: e.querySelector('title')?.textContent || '—',
+        author: e.querySelector('author name')?.textContent || '—',
+        updated: e.querySelector('updated')?.textContent || '',
+      }));
+    }
+  } catch(e) {}
+
+  if (!books) {
+    // Fallback: iframe embed
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${adminLink}</div>
+      <div style="display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:300px">
+        <iframe src="/ui/proxy/calibre-web/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+          allow="fullscreen" title="Calibre-Web"></iframe>
+      </div>`;
+    return;
+  }
+
+  const rows = books.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-book"></i></div>
+        <div class="empty-title">BIBLIOTHÈQUE VIDE</div>
+        <div class="empty-sub">Ajoutez des livres dans le dossier books.</div></div>`
+    : books.map(b => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card);
+            border-radius:6px;border:1px solid var(--border);margin-bottom:5px">
+          <span style="font-size:16px">📖</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:10px;font-weight:600;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title)}</div>
+            <div style="font-size:8px;color:var(--text3)">${escapeHtml(b.author)}</div>
+          </div>
+        </div>`).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      ${adminLink}
+      <span style="font-size:9px;color:var(--text3)">${books.length} livre(s) récents</span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadCalibreBooks()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
 }
 
 // ── Jellyseerr — Demandes médias ─────────────────────────────────────────────

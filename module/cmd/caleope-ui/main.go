@@ -469,6 +469,12 @@ func main() {
 
 		// Jellyseerr — demandes médias pour Jellyfin
 		"jellyseerr": {containerName: "jellyseerr", containerPort: 5055},
+
+		// Home Assistant — domotique
+		"home-assistant": {containerName: "home-assistant", containerPort: 8123},
+
+		// Calibre-Web — bibliothèque ebooks
+		"calibre-web": {containerName: "calibre-web", containerPort: 8083},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
