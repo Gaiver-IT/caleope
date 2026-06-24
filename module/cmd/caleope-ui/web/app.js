@@ -595,6 +595,26 @@ async function appAction(id, action) {
   }
 }
 
+async function restartApp(id) {
+  notify(`Redémarrage de ${id}...`, 'info');
+  const r = await api.post(`/api/v1/apps/${id}/restart`);
+  if (r && r.success !== false) {
+    notify(`${id} — redémarré`, 'ok');
+    setTimeout(() => { loadApps(); goSection(S.section); }, 2000);
+  } else {
+    notify(r?.error || 'Erreur restart', 'err');
+  }
+}
+
+async function startApp(id) {
+  await appAction(id, 'start');
+}
+
+async function stopApp(id) {
+  if (!confirm(`Arrêter ${id} ?`)) return;
+  await appAction(id, 'stop');
+}
+
 async function removeApp(id) {
   if (!confirm(`Supprimer ${id} ? Les données seront conservées (app-data/).`)) return;
   notify(`Suppression de ${id}...`, 'info');
@@ -2023,12 +2043,15 @@ function buildDynamicNav() {
     if (!installedIds.has(appId)) return;
     hasAny = true;
     const gid = 'int-' + appId;
+    const appObj = S.apps.find(a => a.id === appId);
+    const isRunning = appObj?.status === 'running';
+    const healthDot = `<span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${isRunning ? 'var(--green-b)' : 'var(--red-b)'};margin-right:4px;flex-shrink:0"></span>`;
     html += `
       <div class="sb-section">
         <button class="sb-app-toggle" data-gid="${gid}" id="sb-items-${gid}-toggle"
           onclick="toggleSbGroup('${gid}')">
           <i class="ti ${app.icon}" style="font-size:11px;opacity:.7"></i>
-          <span>${app.group.replace('// ','')}</span>
+          ${healthDot}<span>${appObj?.name || appId}</span>
           <i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
         </button>
         <div class="sb-app-items" id="sb-items-${gid}">`;
@@ -3805,6 +3828,38 @@ function goSection(id) {
   // Scroll en haut à chaque changement de section
   const contentEl = document.querySelector('.content');
   if (contentEl) contentEl.scrollTop = 0;
+
+  // Injecter la barre de contrôle pour les panels d'intégration
+  const panelMatch = id.match(/^panel-([^-]+(?:-[^-]+)*?)-/);
+  const ctrlBarId = 'panel-ctrl-bar';
+  let existingCtrl = document.getElementById(ctrlBarId);
+  if (existingCtrl) existingCtrl.remove();
+
+  if (panelMatch && target) {
+    // Identifier l'app via le préfixe du panel id
+    const panelAppId = Object.keys(APP_PANELS).find(aid =>
+      id.startsWith('panel-' + aid + '-') || id === 'panel-' + aid
+    );
+    if (panelAppId) {
+      const appObj = S.apps.find(a => a.id === panelAppId);
+      if (appObj) {
+        const isRun = appObj.status === 'running';
+        const ctrlBar = document.createElement('div');
+        ctrlBar.id = ctrlBarId;
+        ctrlBar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 0 10px;margin-bottom:4px;border-bottom:1px solid var(--border);margin-bottom:12px';
+        ctrlBar.innerHTML = `
+          <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isRun ? 'var(--green-b)' : 'var(--red-b)'}"></span>
+          <span style="font-size:10px;font-weight:700;flex:1">${escapeHtml(appObj.name || panelAppId)}</span>
+          <span style="font-size:9px;color:${isRun ? 'var(--green-b)' : 'var(--red-b)'}">${isRun ? 'ACTIF' : 'ARRÊTÉ'}</span>
+          ${isRun ? `<button class="btn-sm" onclick="restartApp('${panelAppId}')" title="Redémarrer">
+            <i class="ti ti-refresh" style="font-size:10px"></i>
+          </button>` : `<button class="btn-sm" onclick="startApp('${panelAppId}')" title="Démarrer">
+            <i class="ti ti-player-play" style="font-size:10px"></i>
+          </button>`}`;
+        target.insertBefore(ctrlBar, target.firstChild);
+      }
+    }
+  }
 
   // Load data
   if (sec?.load) sec.load();
