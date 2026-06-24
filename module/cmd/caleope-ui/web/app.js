@@ -2215,6 +2215,13 @@ const APP_PANELS = {
       { id: 'panel-filebrowser', label: 'FICHIERS', icon: 'ti-folder-open', load: loadFileBrowser },
     ],
   },
+  'mealie': {
+    group: '// LIFESTYLE',
+    icon: 'ti-salad',
+    panels: [
+      { id: 'panel-mealie-recipes', label: 'RECETTES', icon: 'ti-salad', load: loadMealieRecipes },
+    ],
+  },
 };
 
 // ── Sidebar collapsible ───────────────────────────────────────────────────────
@@ -3732,6 +3739,22 @@ async function loadMemosRecent() {
   }).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune note.</div>';
 
   c.innerHTML = `
+    <div class="settings-card" style="padding:12px;margin-bottom:12px">
+      <div class="settings-title" style="margin-bottom:8px">NOUVELLE NOTE</div>
+      <textarea id="memos-new-content" rows="3" placeholder="Écrire une note (Markdown supporté)..."
+        style="width:100%;font-size:10px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);
+               border-radius:4px;color:var(--text1);resize:vertical;font-family:inherit;box-sizing:border-box"></textarea>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <select id="memos-visibility" style="font-size:9px;padding:3px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text1)">
+          <option value="PRIVATE">PRIVÉE</option>
+          <option value="PROTECTED">PROTÉGÉE</option>
+          <option value="PUBLIC">PUBLIQUE</option>
+        </select>
+        <button class="btn-sm" style="margin-left:auto" onclick="createMemo()">
+          <i class="ti ti-send" style="font-size:10px"></i> CRÉER
+        </button>
+      </div>
+    </div>
     <div class="settings-card" style="padding:0">
       <div class="settings-title" style="padding:10px 12px">
         <i class="ti ti-file-text" style="font-size:12px"></i> NOTES RÉCENTES (${list.length})
@@ -3739,6 +3762,25 @@ async function loadMemosRecent() {
       <div style="padding:0 12px 12px">${rows}</div>
     </div>
     ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+async function createMemo() {
+  const content = document.getElementById('memos-new-content')?.value?.trim();
+  if (!content) { notify('Contenu vide', 'err'); return; }
+  const visibility = document.getElementById('memos-visibility')?.value || 'PRIVATE';
+  const r = await fetch('/ui/proxy/memos/api/v1/memos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, visibility }),
+  });
+  if (r.ok) {
+    notify('Note créée', 'ok');
+    const ta = document.getElementById('memos-new-content');
+    if (ta) ta.value = '';
+    loadMemosRecent();
+  } else {
+    notify('Erreur création note', 'err');
+  }
 }
 
 // ── Linkding — Favoris ───────────────────────────────────────────────────────
@@ -3946,6 +3988,51 @@ async function loadFreshRssFeeds() {
     <div class="settings-card" style="padding:0">
       <div class="settings-title" style="padding:10px 12px">
         <i class="ti ti-rss" style="font-size:12px"></i> ABONNEMENTS (${feeds.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+// ── Mealie — Recettes ────────────────────────────────────────────────────────
+async function loadMealieRecipes() {
+  const c = document.getElementById('content-panel-mealie-recipes');
+  if (!c) return;
+  const appDomain = S.apps.find(a => a.id === 'mealie')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR MEALIE</a>` : '';
+
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT RECETTES...</div>`;
+
+  // Mealie nécessite auth — on essaie l'API publique (pas de token nécessaire pour les recettes publiques)
+  const r = await fetch('/ui/proxy/mealie/api/recipes?page=1&perPage=20');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-salad"></i></div>
+      <div class="empty-title">MEALIE INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier que le service est démarré.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+  const data = await r.json();
+  const recipes = data.items || [];
+  const total = data.total || recipes.length;
+
+  const rows = recipes.slice(0, 10).map(recipe => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(recipe.name || '?')}</div>
+        ${recipe.description ? `<div style="font-size:9px;color:var(--text3)">${escapeHtml(recipe.description.slice(0,80))}${recipe.description.length>80?'…':''}</div>` : ''}
+      </div>
+      ${recipe.rating ? `<span style="font-size:9px;color:var(--warn)">★ ${recipe.rating}</span>` : ''}
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune recette.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${total}</div><div class="stat-lbl">RECETTES</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-salad" style="font-size:12px"></i> DERNIÈRES RECETTES
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
     </div>

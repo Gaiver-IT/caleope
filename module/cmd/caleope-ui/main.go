@@ -445,6 +445,9 @@ func main() {
 
 		// File Browser — sans auth proxy (auth propre à filebrowser)
 		"filebrowser": {containerName: "filebrowser", containerPort: 80},
+
+		// Mealie — API JWT, pas de proxy auth (login UI)
+		"mealie": {containerName: "mealie", containerPort: 9000},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
