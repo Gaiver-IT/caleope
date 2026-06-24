@@ -459,11 +459,25 @@ const HARDCODED_PARAMS = {
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
 const APP_ICONS = {
-  jellyfin: '🎬', 'arr-stack': '📡', azuracast: '🎵', nextcloud: '☁️',
-  vaultwarden: '🔒', authentik: '🔑', gitea: '🐙', immich: '📸',
-  'prometheus-grafana': '📊', crowdsec: '🛡️', 'wg-easy': '🌐', ghost: '👻',
-  wordpress: '📝', glpi: '🎫', 'wiki-js': '📚', pterodactyl: '🦕',
-  tailscale: '🔐',
+  // Médias
+  jellyfin: '🎬', 'arr-stack': '📡', azuracast: '🎵', immich: '📸', jellyseerr: '🎟️',
+  // Cloud & fichiers
+  nextcloud: '☁️', filebrowser: '📁', syncthing: '🔄',
+  // Sécurité & réseau
+  vaultwarden: '🔒', authentik: '🔑', crowdsec: '🛡️', 'wg-easy': '🌐',
+  tailscale: '🔐', pihole: '🚫', adguard: '🛡️',
+  // Dev & ops
+  gitea: '🐙', pterodactyl: '🦕', portainer: '🐳', watchtower: '🔭',
+  'prometheus-grafana': '📊', 'uptime-kuma': '📈',
+  // Web & contenu
+  ghost: '👻', wordpress: '📝', 'wiki-js': '📚',
+  // Productivity
+  glpi: '🎫', n8n: '⚙️', changedetection: '👁️',
+  // Lifestyle
+  mealie: '🥗', grocy: '🛒', monica: '👤',
+  // Outils
+  memos: '📓', linkding: '🔖', 'paperless-ngx': '📄', 'stirling-pdf': '📑',
+  freshrss: '📰', 'ntfy': '🔔', gotify: '🔔', homarr: '🏠',
 };
 const icon = id => APP_ICONS[id] || '📦';
 
