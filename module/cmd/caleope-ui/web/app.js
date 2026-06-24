@@ -1865,7 +1865,96 @@ const APP_PANELS = {
       { id: 'panel-pterodactyl', label: 'SERVEURS', icon: 'ti-server-2', load: loadPterodactyl },
     ],
   },
+  'prometheus-grafana': {
+    group: '// MONITORING',
+    icon: 'ti-chart-line',
+    panels: [
+      { id: 'panel-grafana-dashboards', label: 'DASHBOARDS', icon: 'ti-layout-dashboard', load: loadGrafanaDashboards },
+    ],
+  },
+  'jellyfin': {
+    group: '// MÉDIAS',
+    icon: 'ti-player-play',
+    panels: [
+      { id: 'panel-jellyfin-libraries', label: 'BIBLIOTHÈQUES', icon: 'ti-movie',   load: loadJellyfinLibraries },
+      { id: 'panel-jellyfin-recent',    label: 'RÉCENTS',        icon: 'ti-clock',  load: loadJellyfinRecent    },
+    ],
+  },
+  'immich': {
+    group: '// PHOTOS',
+    icon: 'ti-photo',
+    panels: [
+      { id: 'panel-immich-stats',  label: 'STATISTIQUES', icon: 'ti-chart-bar',    load: loadImmichStats  },
+      { id: 'panel-immich-albums', label: 'ALBUMS',        icon: 'ti-photo-album', load: loadImmichAlbums },
+    ],
+  },
+  'wikijs': {
+    group: '// WIKI',
+    icon: 'ti-book',
+    panels: [
+      { id: 'panel-wikijs-pages', label: 'PAGES', icon: 'ti-file-text', load: loadWikiPages },
+    ],
+  },
+  'ghost': {
+    group: '// BLOG',
+    icon: 'ti-ghost',
+    panels: [
+      { id: 'panel-ghost-posts', label: 'ARTICLES', icon: 'ti-writing', load: loadGhostPosts },
+    ],
+  },
+  'wordpress': {
+    group: '// WORDPRESS',
+    icon: 'ti-world-www',
+    panels: [
+      { id: 'panel-wp-posts', label: 'ARTICLES', icon: 'ti-writing', load: loadWPPosts },
+      { id: 'panel-wp-pages', label: 'PAGES',    icon: 'ti-layout',  load: loadWPPages },
+    ],
+  },
+  'glpi': {
+    group: '// HELPDESK',
+    icon: 'ti-ticket',
+    panels: [
+      { id: 'panel-glpi-tickets', label: 'TICKETS', icon: 'ti-ticket', load: loadGLPITickets },
+    ],
+  },
+  'pihole': {
+    group: '// DNS',
+    icon: 'ti-shield-bolt',
+    panels: [
+      { id: 'panel-pihole-stats', label: 'STATISTIQUES', icon: 'ti-chart-bar', load: loadPiholeStats },
+      { id: 'panel-pihole-lists', label: 'BLOCKLISTS',   icon: 'ti-list',      load: loadPiholeLists },
+    ],
+  },
+  'adguard': {
+    group: '// DNS',
+    icon: 'ti-shield-bolt',
+    panels: [
+      { id: 'panel-adguard-stats', label: 'STATISTIQUES', icon: 'ti-chart-bar', load: loadAdGuardStats },
+    ],
+  },
 };
+
+// ── Sidebar collapsible ───────────────────────────────────────────────────────
+function toggleSbGroup(gid) {
+  const toggle = document.querySelector(`[data-gid="${gid}"]`);
+  const items  = document.getElementById(`sb-items-${gid}`);
+  if (!toggle || !items) return;
+  const collapsed = items.classList.toggle('collapsed');
+  toggle.classList.toggle('collapsed', collapsed);
+  try { localStorage.setItem('sb-col-' + gid, collapsed ? '1' : '0'); } catch(e) {}
+}
+
+function restoreSbGroups() {
+  document.querySelectorAll('[data-gid]').forEach(toggle => {
+    const gid = toggle.dataset.gid;
+    try {
+      if (localStorage.getItem('sb-col-' + gid) === '1') {
+        const items = document.getElementById(`sb-items-${gid}`);
+        if (items) { items.classList.add('collapsed'); toggle.classList.add('collapsed'); }
+      }
+    } catch(e) {}
+  });
+}
 
 function buildDynamicNav() {
   const sbInt = document.getElementById('sb-integrations');
@@ -1875,22 +1964,31 @@ function buildDynamicNav() {
   const content = document.querySelector('.content');
 
   let html = '';
+  let hasAny = false;
+
   Object.entries(APP_PANELS).forEach(([appId, app]) => {
     if (!installedIds.has(appId)) return;
-    html += `<div class="sb-group">${app.group}</div>`;
+    hasAny = true;
+    const gid = 'int-' + appId;
+    html += `
+      <div class="sb-section">
+        <button class="sb-app-toggle" data-gid="${gid}" id="sb-items-${gid}-toggle"
+          onclick="toggleSbGroup('${gid}')">
+          <i class="ti ${app.icon}" style="font-size:11px;opacity:.7"></i>
+          <span>${app.group.replace('// ','')}</span>
+          <i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-app-items" id="sb-items-${gid}">`;
     app.panels.forEach(panel => {
       html += `<button class="nav-btn" data-section="${panel.id}" onclick="goSection('${panel.id}')">
         <i class="ti ${panel.icon}" aria-hidden="true"></i>${panel.label}
-        <span style="font-size:7px;color:var(--text3);margin-left:auto;letter-spacing:.3px">${appId.toUpperCase()}</span>
       </button>`;
-      // Enregistrer dans SECTIONS si pas déjà présent
       if (!SECTIONS[panel.id]) {
         SECTIONS[panel.id] = {
           label: panel.label, num: '/INT', load: panel.load,
           content: `content-${panel.id}`, btn: null,
         };
       }
-      // Créer le div de contenu si absent
       if (content && !document.getElementById(`content-${panel.id}`)) {
         const el = document.createElement('div');
         el.id = `content-${panel.id}`;
@@ -1898,9 +1996,28 @@ function buildDynamicNav() {
         content.appendChild(el);
       }
     });
+    html += `</div></div>`;
   });
 
   sbInt.innerHTML = html;
+
+  // Afficher / masquer le groupe parent INTÉGRATIONS
+  const sbSectionInt = document.getElementById('sb-section-integrations');
+  if (sbSectionInt) sbSectionInt.style.display = hasAny ? '' : 'none';
+
+  // Restaurer état collapse pour les sous-groupes intégrations
+  Object.keys(APP_PANELS).forEach(appId => {
+    if (!installedIds.has(appId)) return;
+    const gid = 'int-' + appId;
+    try {
+      if (localStorage.getItem('sb-col-' + gid) === '1') {
+        const items = document.getElementById(`sb-items-${gid}`);
+        const tog   = document.querySelector(`[data-gid="${gid}"]`);
+        if (items) { items.classList.add('collapsed'); }
+        if (tog)   { tog.classList.add('collapsed'); }
+      }
+    } catch(e) {}
+  });
 
   // Re-marquer le bouton actif si on est déjà dans un panel
   document.querySelectorAll('.nav-btn').forEach(b => {
@@ -2521,6 +2638,603 @@ async function loadPterodactyl() {
     </div>`;
 }
 
+// ── Grafana — Dashboards ──────────────────────────────────────────────────────
+async function loadGrafanaDashboards() {
+  const c = document.getElementById('content-panel-grafana-dashboards');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT GRAFANA...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'prometheus-grafana')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR</a>` : '';
+
+  const [rDash, rDs] = await Promise.all([
+    fetch('/ui/proxy/grafana/api/search?type=dash-db&limit=50'),
+    fetch('/ui/proxy/grafana/api/datasources'),
+  ]);
+
+  if (!rDash.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-chart-line"></i></div>
+      <div class="empty-title">GRAFANA INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier GRAFANA_ADMIN_USER/PASSWORD dans les secrets.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const dashboards = await rDash.json();
+  const datasources = rDs.ok ? await rDs.json() : [];
+
+  const statCards = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${dashboards.length}</div><div class="stat-lbl">DASHBOARDS</div></div>
+      <div class="stat-card"><div class="stat-val">${datasources.length}</div><div class="stat-lbl">SOURCES</div></div>
+    </div>`;
+
+  const rows = dashboards.slice(0, 20).map(d => `
+    <div class="loc-row">
+      <div style="width:28px;height:28px;border-radius:2px;background:var(--bg3);
+        display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ti-layout-dashboard" style="font-size:12px;color:var(--vio)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(d.title || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(d.folderTitle || 'Général')}</div>
+      </div>
+      ${appDomain ? `<a href="https://${appDomain}${d.url}" target="_blank" rel="noopener"
+        style="font-size:9px;color:var(--blue);text-decoration:none"><i class="ti ti-external-link"></i></a>` : ''}
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun dashboard.</div>';
+
+  c.innerHTML = `${statCards}
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+        <i class="ti ti-layout-dashboard" style="font-size:12px"></i> DASHBOARDS
+        ${adminLink}
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── Jellyfin — Bibliothèques ──────────────────────────────────────────────────
+async function loadJellyfinLibraries() {
+  const c = document.getElementById('content-panel-jellyfin-libraries');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT JELLYFIN...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'jellyfin')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/web" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR JELLYFIN</a>` : '';
+
+  const r = await fetch('/ui/proxy/jellyfin/Library/VirtualFolders');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-player-play"></i></div>
+      <div class="empty-title">JELLYFIN INDISPONIBLE</div>
+      <div class="empty-sub">Générer JELLYFIN_API_KEY via la reconfiguration de l'app.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const libs = await r.json();
+  const iconFor = type => ({movies:'ti-movie',tvshows:'ti-device-tv',music:'ti-music',books:'ti-book',photos:'ti-photo'}[type] || 'ti-folder');
+
+  const rows = (Array.isArray(libs) ? libs : []).map(lib => `
+    <div class="loc-row">
+      <div style="width:28px;height:28px;border-radius:2px;background:var(--bg3);
+        display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ${iconFor(lib.CollectionType)}" style="font-size:12px;color:var(--text2)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(lib.Name || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(lib.CollectionType || 'mixte')}</div>
+      </div>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune bibliothèque.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+        <i class="ti ti-movie" style="font-size:12px"></i> BIBLIOTHÈQUES
+        ${adminLink ? `<a href="https://${appDomain}/web" target="_blank" rel="noopener"
+          class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>GÉRER</a>` : ''}
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+async function loadJellyfinRecent() {
+  const c = document.getElementById('content-panel-jellyfin-recent');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/jellyfin/Items/Latest?Limit=10&IncludeItemTypes=Movie,Episode');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-clock"></i></div>
+      <div class="empty-title">NON DISPONIBLE</div>
+      <div class="empty-sub">Clé API Jellyfin requise.</div></div>`;
+    return;
+  }
+
+  const items = await r.json();
+  const rows = (Array.isArray(items) ? items : []).map(item => `
+    <div class="loc-row">
+      <div style="width:28px;height:28px;border-radius:2px;background:var(--bg3);
+        display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ${item.Type === 'Movie' ? 'ti-movie' : 'ti-device-tv'}" style="font-size:12px;color:var(--text2)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(item.Name || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(item.Type || '')}${item.ProductionYear ? ' · ' + item.ProductionYear : ''}</div>
+      </div>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun contenu récent.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-clock" style="font-size:12px"></i> AJOUTS RÉCENTS
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── Immich — Statistiques ────────────────────────────────────────────────────
+async function loadImmichStats() {
+  const c = document.getElementById('content-panel-immich-stats');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT IMMICH...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'immich')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR IMMICH</a>` : '';
+
+  const r = await fetch('/ui/proxy/immich/api/server/statistics');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-photo"></i></div>
+      <div class="empty-title">IMMICH INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier IMMICH_ADMIN_EMAIL/PASS dans les secrets.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const stats = await r.json();
+  const fmtSize = bytes => {
+    if (!bytes) return '—';
+    const gb = bytes / 1073741824;
+    return gb >= 1 ? gb.toFixed(1) + ' Go' : (bytes / 1048576).toFixed(0) + ' Mo';
+  };
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${(stats.photos || 0).toLocaleString()}</div><div class="stat-lbl">PHOTOS</div></div>
+      <div class="stat-card"><div class="stat-val">${(stats.videos || 0).toLocaleString()}</div><div class="stat-lbl">VIDÉOS</div></div>
+      <div class="stat-card"><div class="stat-val">${fmtSize(stats.usage)}</div><div class="stat-lbl">STOCKAGE</div></div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+async function loadImmichAlbums() {
+  const c = document.getElementById('content-panel-immich-albums');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT ALBUMS...</div>`;
+
+  const r = await fetch('/ui/proxy/immich/api/albums?shared=false');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-photo-album"></i></div>
+      <div class="empty-title">NON DISPONIBLE</div></div>`;
+    return;
+  }
+
+  const albums = await r.json();
+  const rows = (Array.isArray(albums) ? albums.slice(0,20) : []).map(a => `
+    <div class="loc-row">
+      <div style="width:28px;height:28px;border-radius:2px;background:var(--bg3);
+        display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ti-photo-album" style="font-size:12px;color:var(--text2)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(a.albumName || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${a.assetCount ?? 0} média(s)</div>
+      </div>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun album.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-photo-album" style="font-size:12px"></i> ALBUMS (${(Array.isArray(albums) ? albums.length : 0)})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── WikiJS — Pages ────────────────────────────────────────────────────────────
+async function loadWikiPages() {
+  const c = document.getElementById('content-panel-wikijs-pages');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT WIKI...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'wikijs')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR WIKI</a>` : '';
+
+  const query = JSON.stringify({ query: '{ pages { list(orderBy: UPDATED) { id title path updatedAt } } }' });
+  const r = await fetch('/ui/proxy/wikijs/graphql', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: query,
+  });
+
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-book"></i></div>
+      <div class="empty-title">WIKI.JS INDISPONIBLE</div>
+      <div class="empty-sub">Générer WIKIJS_API_TOKEN dans Wiki.js → Admin → Developer Tools → API Access.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const data = await r.json();
+  const pages = data?.data?.pages?.list || [];
+
+  const rows = pages.slice(0, 20).map(p => `
+    <div class="loc-row">
+      <div style="width:28px;height:28px;border-radius:2px;background:var(--bg3);
+        display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ti-file-text" style="font-size:12px;color:var(--text2)"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(p.title || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(p.path || '')}</div>
+      </div>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune page.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${pages.length}</div><div class="stat-lbl">PAGES</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+        <i class="ti ti-file-text" style="font-size:12px"></i> PAGES RÉCENTES
+        ${adminLink ? `<a href="https://${appDomain}/a" target="_blank" rel="noopener"
+          class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>ADMIN</a>` : ''}
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── Ghost — Articles ──────────────────────────────────────────────────────────
+async function loadGhostPosts() {
+  const c = document.getElementById('content-panel-ghost-posts');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT GHOST...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'ghost')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/ghost" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR GHOST</a>` : '';
+
+  const r = await fetch('/ui/proxy/ghost/ghost/api/admin/posts/?limit=20&fields=id,title,status,published_at');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-ghost"></i></div>
+      <div class="empty-title">GHOST INDISPONIBLE</div>
+      <div class="empty-sub">Générer GHOST_ADMIN_API_KEY dans Ghost admin → Intégrations → Ajouter une intégration personnalisée.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const data = await r.json();
+  const posts = data.posts || [];
+  const published = posts.filter(p => p.status === 'published').length;
+  const draft     = posts.filter(p => p.status === 'draft').length;
+
+  const statusBadge = s => s === 'published'
+    ? '<span class="badge badge-run" style="font-size:7px">PUBLIÉ</span>'
+    : '<span class="badge" style="font-size:7px;opacity:.6">BROUILLON</span>';
+
+  const rows = posts.slice(0, 15).map(p => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(p.title || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${p.published_at ? new Date(p.published_at).toLocaleDateString('fr') : '—'}</div>
+      </div>
+      ${statusBadge(p.status)}
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun article.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${published}</div><div class="stat-lbl">PUBLIÉS</div></div>
+      <div class="stat-card"><div class="stat-val">${draft}</div><div class="stat-lbl">BROUILLONS</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+        <i class="ti ti-writing" style="font-size:12px"></i> ARTICLES
+        ${adminLink ? `<a href="https://${appDomain}/ghost" target="_blank" rel="noopener"
+          class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>ADMIN</a>` : ''}
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── WordPress — Articles & Pages ──────────────────────────────────────────────
+async function loadWPPosts() {
+  const c = document.getElementById('content-panel-wp-posts');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT WORDPRESS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'wordpress')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/wp-admin" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>WP ADMIN</a>` : '';
+
+  const r = await fetch('/ui/proxy/wordpress/wp-json/wp/v2/posts?status=publish,draft&per_page=20&_fields=id,title,status,date,link');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-world-www"></i></div>
+      <div class="empty-title">WORDPRESS INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier WP_ADMIN_USER/PASS dans les secrets. Activer l'authentification REST si nécessaire.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const posts = await r.json();
+  const published = (Array.isArray(posts) ? posts : []).filter(p => p.status === 'publish').length;
+  const draft     = (Array.isArray(posts) ? posts : []).filter(p => p.status === 'draft').length;
+
+  const rows = (Array.isArray(posts) ? posts.slice(0,15) : []).map(p => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(p.title?.rendered || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${p.date ? new Date(p.date).toLocaleDateString('fr') : '—'}</div>
+      </div>
+      ${p.status === 'publish'
+        ? '<span class="badge badge-run" style="font-size:7px">PUBLIÉ</span>'
+        : '<span class="badge" style="font-size:7px;opacity:.6">BROUILLON</span>'}
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun article.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${published}</div><div class="stat-lbl">PUBLIÉS</div></div>
+      <div class="stat-card"><div class="stat-val">${draft}</div><div class="stat-lbl">BROUILLONS</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+        <i class="ti ti-writing" style="font-size:12px"></i> ARTICLES
+        ${adminLink ? `<a href="https://${appDomain}/wp-admin/edit.php" target="_blank" rel="noopener"
+          class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>GÉRER</a>` : ''}
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+async function loadWPPages() {
+  const c = document.getElementById('content-panel-wp-pages');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/wordpress/wp-json/wp/v2/pages?status=publish,draft&per_page=20&_fields=id,title,status,date');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-layout"></i></div>
+      <div class="empty-title">NON DISPONIBLE</div></div>`;
+    return;
+  }
+
+  const pages = await r.json();
+  const rows = (Array.isArray(pages) ? pages.slice(0,15) : []).map(p => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(p.title?.rendered || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${p.date ? new Date(p.date).toLocaleDateString('fr') : '—'}</div>
+      </div>
+      ${p.status === 'publish'
+        ? '<span class="badge badge-run" style="font-size:7px">PUBLIÉE</span>'
+        : '<span class="badge" style="font-size:7px;opacity:.6">BROUILLON</span>'}
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune page.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-layout" style="font-size:12px"></i> PAGES (${Array.isArray(pages) ? pages.length : 0})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── GLPI — Tickets ────────────────────────────────────────────────────────────
+async function loadGLPITickets() {
+  const c = document.getElementById('content-panel-glpi-tickets');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT GLPI...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'glpi')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR GLPI</a>` : '';
+
+  const r = await fetch('/ui/proxy/glpi/apirest.php/Ticket?range=0-20&is_deleted=0&order=DESC&sort=15&criteria[0][field]=12&criteria[0][searchtype]=equals&criteria[0][value]=notclosed');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-ticket"></i></div>
+      <div class="empty-title">GLPI INDISPONIBLE</div>
+      <div class="empty-sub">Activer l'API REST dans GLPI : Administration → Paramètres généraux → API, puis ajouter GLPI_ADMIN_USER dans les secrets.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const tickets = await r.json();
+  const list = Array.isArray(tickets) ? tickets : [];
+
+  const statusLabel = s => ({1:'NOUVEAU',2:'EN COURS',3:'EN ATTENTE',4:'RÉSOLU',5:'FERMÉ',6:'ACCEPTÉ'}[s] || s);
+  const statusBadge = s => {
+    const cls = [4,5].includes(s) ? 'badge-run' : s === 1 ? '' : '';
+    const bg  = s === 1 ? 'background:var(--warn-dim);color:var(--warn-b)' : '';
+    return `<span class="badge ${cls}" style="font-size:7px;${bg}">${statusLabel(s)}</span>`;
+  };
+
+  const rows = list.slice(0,15).map(t => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(t.name || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">#${t.id || '?'} · ${t.date ? new Date(t.date).toLocaleDateString('fr') : '—'}</div>
+      </div>
+      ${statusBadge(t.status)}
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun ticket ouvert.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="display:flex;align-items:center;gap:6px;padding:10px 12px">
+        <i class="ti ti-ticket" style="font-size:12px"></i> TICKETS OUVERTS
+        ${adminLink ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+          class="btn-sm" style="margin-left:auto;text-decoration:none"><i class="ti ti-external-link"></i>GÉRER</a>` : ''}
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── Pi-hole — Stats DNS ───────────────────────────────────────────────────────
+async function loadPiholeStats() {
+  const c = document.getElementById('content-panel-pihole-stats');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT PI-HOLE...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'pihole')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}/admin" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR PI-HOLE</a>` : '';
+
+  const r = await fetch('/ui/proxy/pihole/admin/api.php?summaryRaw');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-shield-bolt"></i></div>
+      <div class="empty-title">PI-HOLE INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier PIHOLE_API_TOKEN dans les secrets.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const s = await r.json();
+  if (s.status === undefined && !s.dns_queries_today) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-shield-bolt"></i></div>
+      <div class="empty-title">TOKEN INVALIDE</div>
+      <div class="empty-sub">Régénérer PIHOLE_API_TOKEN (sha256 double du WEBPASSWORD).</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const pct = s.ads_percentage_today ? parseFloat(s.ads_percentage_today).toFixed(1) : '0';
+  const enabled = s.status === 'enabled';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card">
+        <div class="stat-val">${(s.dns_queries_today || 0).toLocaleString()}</div>
+        <div class="stat-lbl">REQUÊTES</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">${(s.ads_blocked_today || 0).toLocaleString()}</div>
+        <div class="stat-lbl">BLOQUÉES</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">${pct}%</div>
+        <div class="stat-lbl">BLOQUÉES %</div>
+      </div>
+    </div>
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card">
+        <div class="stat-val">${(s.domains_being_blocked || 0).toLocaleString()}</div>
+        <div class="stat-lbl">DOMAINES BLOQUÉS</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">${(s.unique_clients || 0)}</div>
+        <div class="stat-lbl">CLIENTS</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">
+          ${enabled
+            ? '<span style="color:var(--green-b)">ACTIF</span>'
+            : '<span style="color:var(--red-b)">INACTIF</span>'}
+        </div>
+        <div class="stat-lbl">STATUT</div>
+      </div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:4px">${adminLink}</div>` : ''}`;
+}
+
+async function loadPiholeLists() {
+  const c = document.getElementById('content-panel-pihole-lists');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/pihole/admin/api.php?list=black');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-list"></i></div>
+      <div class="empty-title">INDISPONIBLE</div></div>`;
+    return;
+  }
+
+  const data = await r.json();
+  const list = data.data || [];
+
+  const rows = list.slice(0,20).map(entry => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(Array.isArray(entry) ? entry[0] : (entry.domain || entry))}</div>
+      </div>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune entrée.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-list" style="font-size:12px"></i> LISTE NOIRE (${list.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── AdGuard Home — Stats DNS ──────────────────────────────────────────────────
+async function loadAdGuardStats() {
+  const c = document.getElementById('content-panel-adguard-stats');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT ADGUARD...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'adguard')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR ADGUARD</a>` : '';
+
+  const [rStats, rStatus] = await Promise.all([
+    fetch('/ui/proxy/adguard/control/stats'),
+    fetch('/ui/proxy/adguard/control/status'),
+  ]);
+
+  if (!rStats.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-shield-bolt"></i></div>
+      <div class="empty-title">ADGUARD INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier ADGUARD_USERNAME/PASSWORD dans les secrets.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const stats  = await rStats.json();
+  const status = rStatus.ok ? await rStatus.json() : {};
+  const total  = stats.num_dns_queries || 0;
+  const blocked = stats.num_blocked_filtering || 0;
+  const pct = total > 0 ? ((blocked / total) * 100).toFixed(1) : '0';
+
+  const topBlocked = (stats.top_blocked_domains || []).slice(0, 5);
+  const topRows = topBlocked.map(([domain, count]) => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0"><div style="font-size:10px;font-weight:700">${escapeHtml(domain)}</div></div>
+      <div style="font-size:9px;color:var(--text3)">${count}</div>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune donnée.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${total.toLocaleString()}</div><div class="stat-lbl">REQUÊTES</div></div>
+      <div class="stat-card"><div class="stat-val">${blocked.toLocaleString()}</div><div class="stat-lbl">BLOQUÉES</div></div>
+      <div class="stat-card"><div class="stat-val">${pct}%</div><div class="stat-lbl">TAUX</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-list" style="font-size:12px"></i> TOP DOMAINES BLOQUÉS
+      </div>
+      <div style="padding:0 12px 12px">${topRows}</div>
+    </div>
+    ${status.protection_enabled !== undefined ? `
+    <div style="margin-top:8px;font-size:9px;color:var(--text3);text-align:center">
+      Protection : ${status.protection_enabled
+        ? '<span style="color:var(--green-b)">ACTIVE</span>'
+        : '<span style="color:var(--red-b)">INACTIVE</span>'}
+    </div>` : ''}
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
 function goSection(id) {
   S.section = id;
 
@@ -2662,6 +3376,7 @@ let _dashRefreshInterval = null;
 function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').classList.add('visible');
+  restoreSbGroups();
   startClock();
   goSection('dashboard');
   // Auto-refresh dashboard + stats toutes les 30s

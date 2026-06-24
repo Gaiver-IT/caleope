@@ -14,7 +14,9 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -55,6 +57,46 @@ type vwSessionCache struct {
 }
 
 var vwCache = &vwSessionCache{}
+
+// immichTokenCache : token Immich mis en cache (POST /api/auth/login → Bearer)
+type immichTokenCache struct {
+	mu      sync.Mutex
+	token   string
+	expires time.Time
+}
+
+var immichCache = &immichTokenCache{}
+
+// glpiSessionCache : session GLPI (GET /apirest.php/initSession → Session-Token)
+type glpiSessionCache struct {
+	mu      sync.Mutex
+	token   string
+	expires time.Time
+}
+
+var glpiCache = &glpiSessionCache{}
+
+// ghostAdminJWT génère un JWT signé HMAC-SHA256 pour l'Admin API Ghost.
+// apiKey format : "keyid:hexsecret" (copié depuis Ghost admin → Intégrations)
+func ghostAdminJWT(apiKey string) (string, error) {
+	parts := strings.SplitN(apiKey, ":", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("GHOST_ADMIN_API_KEY doit être au format 'id:hexsecret'")
+	}
+	kid, hexSecret := parts[0], parts[1]
+	secret, err := hex.DecodeString(hexSecret)
+	if err != nil {
+		return "", fmt.Errorf("secret hex invalide: %w", err)
+	}
+	now := time.Now().Unix()
+	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT","kid":"` + kid + `"}`))
+	pld := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"iat":%d,"exp":%d,"aud":"/admin/"}`, now, now+300)))
+	msg := hdr + "." + pld
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(msg))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return msg + "." + sig, nil
+}
 
 func newSessions() *sessions { return &sessions{data: make(map[string]time.Time)} }
 
@@ -326,6 +368,45 @@ func main() {
 		"arr-radarr":  {tokenKey: "ARR_API_RADARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "radarr",  containerPort: 7878},
 		"arr-lidarr":  {tokenKey: "ARR_API_LIDARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "lidarr",  containerPort: 8686},
 		"arr-prowlarr":{tokenKey: "ARR_API_PROWLARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "prowlarr",containerPort: 9696},
+
+		// Grafana — Basic auth (admin user/pass)
+		"grafana": {basicUserKey: "GRAFANA_ADMIN_USER", basicPassKey: "GRAFANA_ADMIN_PASSWORD",
+			authScheme: "Basic", secretsApp: "prometheus-grafana",
+			containerName: "caleope-grafana", containerPort: 3000},
+
+		// Jellyfin — API key (JELLYFIN_API_KEY dans secrets.env)
+		"jellyfin": {tokenKey: "JELLYFIN_API_KEY", authScheme: "JellyfinToken",
+			containerName: "jellyfin", containerPort: 8096},
+
+		// Immich — login flow avec cache (POST /api/auth/login → Bearer token)
+		"immich": {basicUserKey: "IMMICH_ADMIN_EMAIL", basicPassKey: "IMMICH_ADMIN_PASS",
+			authScheme: "ImmichLogin",
+			containerName: "immich-server", containerPort: 2283},
+
+		// WikiJS — Bearer token (généré dans WikiJS admin → Developer Tools)
+		"wikijs": {tokenKey: "WIKIJS_API_TOKEN", authScheme: "Bearer",
+			containerName: "wikijs", containerPort: 3000},
+
+		// Ghost — Admin API JWT (GHOST_ADMIN_API_KEY format: "keyid:hexsecret")
+		"ghost": {tokenKey: "GHOST_ADMIN_API_KEY", authScheme: "GhostAdmin",
+			containerName: "ghost", containerPort: 2368},
+
+		// WordPress — Basic auth (WP_ADMIN_USER / WP_ADMIN_PASS)
+		"wordpress": {basicUserKey: "WP_ADMIN_USER", basicPassKey: "WP_ADMIN_PASS",
+			authScheme: "Basic", containerName: "wordpress", containerPort: 80},
+
+		// GLPI — session token (Basic auth → initSession → Session-Token header)
+		// Nécessite que l'API REST GLPI soit activée et GLPI_ADMIN_USER dans secrets.env
+		"glpi": {basicUserKey: "GLPI_ADMIN_USER", basicPassKey: "GLPI_ADMIN_PASSWORD",
+			authScheme: "GLPISession", containerName: "glpi", containerPort: 80},
+
+		// Pi-hole — auth en query param (PIHOLE_API_TOKEN = SHA256(SHA256(password)))
+		"pihole": {tokenKey: "PIHOLE_API_TOKEN", authScheme: "PiholeQuery",
+			containerName: "pihole", containerPort: 80},
+
+		// AdGuard Home — Basic auth (ADGUARD_USERNAME / ADGUARD_PASSWORD)
+		"adguard": {basicUserKey: "ADGUARD_USERNAME", basicPassKey: "ADGUARD_PASSWORD",
+			authScheme: "Basic", containerName: "adguardhome", containerPort: 3000},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
@@ -485,6 +566,124 @@ func main() {
 			return
 		}
 
+		// ImmichLogin : POST /api/auth/login → cache Bearer token (expiry ~24h)
+		if cfg.authScheme == "ImmichLogin" {
+			email := readEnvKey(secretsPath, cfg.basicUserKey)
+			pass  := readEnvKey(secretsPath, cfg.basicPassKey)
+			if email == "" || pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials Immich non disponibles")
+				return
+			}
+			immichCache.mu.Lock()
+			immichToken := immichCache.token
+			if immichToken == "" || time.Now().After(immichCache.expires) {
+				loginBody := strings.NewReader(fmt.Sprintf(`{"email":%q,"password":%q}`, email, pass))
+				loginReq, _ := http.NewRequest(http.MethodPost, targetBase+"/api/auth/login", loginBody)
+				loginReq.Header.Set("Content-Type", "application/json")
+				loginReq.Header.Set("Accept", "application/json")
+				loginResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(loginReq)
+				if err2 == nil && loginResp != nil {
+					var loginData struct { AccessToken string `json:"accessToken"` }
+					if json.NewDecoder(loginResp.Body).Decode(&loginData) == nil && loginData.AccessToken != "" {
+						immichToken = loginData.AccessToken
+						immichCache.token = immichToken
+						immichCache.expires = time.Now().Add(23 * time.Hour)
+					}
+					loginResp.Body.Close()
+				}
+			}
+			immichCache.mu.Unlock()
+			if immichToken == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "immich: authentification échouée")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			outReq.Header.Set("Authorization", "Bearer "+immichToken)
+			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// GLPISession : GET /apirest.php/initSession (Basic auth) → cache Session-Token
+		if cfg.authScheme == "GLPISession" {
+			user := readEnvKey(secretsPath, cfg.basicUserKey)
+			if user == "" { user = "glpi" } // fallback nom admin par défaut
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
+			if pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": GLPI_ADMIN_PASSWORD non disponible")
+				return
+			}
+			glpiCache.mu.Lock()
+			glpiToken := glpiCache.token
+			if glpiToken == "" || time.Now().After(glpiCache.expires) {
+				creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+				initReq, _ := http.NewRequest(http.MethodGet, targetBase+"/apirest.php/initSession", nil)
+				initReq.Header.Set("Authorization", "Basic "+creds)
+				initReq.Header.Set("Content-Type", "application/json")
+				initResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(initReq)
+				if err2 == nil && initResp != nil {
+					var initData struct { SessionToken string `json:"session_token"` }
+					if json.NewDecoder(initResp.Body).Decode(&initData) == nil && initData.SessionToken != "" {
+						glpiToken = initData.SessionToken
+						glpiCache.token = glpiToken
+						glpiCache.expires = time.Now().Add(30 * time.Minute)
+					}
+					initResp.Body.Close()
+				}
+			}
+			glpiCache.mu.Unlock()
+			if glpiToken == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "glpi: session non initialisée (API REST activée ?)")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			outReq.Header.Set("Session-Token", glpiToken)
+			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// PiholeQuery : auth en query param ?auth=TOKEN (Pi-hole v5 API)
+		if cfg.authScheme == "PiholeQuery" {
+			token := readEnvKey(secretsPath, cfg.tokenKey)
+			if token == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": PIHOLE_API_TOKEN non disponible")
+				return
+			}
+			if strings.Contains(targetURL, "?") {
+				targetURL += "&auth=" + url.QueryEscape(token)
+			} else {
+				targetURL += "?auth=" + url.QueryEscape(token)
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
 		// Construire le header d'authentification (autres schemes)
 		var authHeader, authValue string
 		switch cfg.authScheme {
@@ -504,6 +703,25 @@ func main() {
 				return
 			}
 			authHeader, authValue = "Authorization", "token "+token
+		case "JellyfinToken":
+			token := readEnvKey(secretsPath, cfg.tokenKey)
+			if token == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": JELLYFIN_API_KEY non disponible — générer via setup.sh")
+				return
+			}
+			authHeader, authValue = "Authorization", `MediaBrowser Token="`+token+`"`
+		case "GhostAdmin":
+			apiKey := readEnvKey(secretsPath, cfg.tokenKey)
+			if apiKey == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": GHOST_ADMIN_API_KEY non disponible — créer dans Ghost admin → Intégrations")
+				return
+			}
+			jwt, err := ghostAdminJWT(apiKey)
+			if err != nil {
+				jsonErr(w, http.StatusServiceUnavailable, "ghost: "+err.Error())
+				return
+			}
+			authHeader, authValue = "Authorization", "Ghost "+jwt
 		default:
 			token := readEnvKey(secretsPath, cfg.tokenKey)
 			if token == "" {
