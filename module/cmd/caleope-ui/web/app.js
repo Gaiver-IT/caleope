@@ -77,11 +77,23 @@ function segBar(pct, total = 20, cls = 'on') {
   }).join('');
 }
 
-// ── Clock ─────────────────────────────────────────────────────────────────────
+// ── Clock + dashboard countdown ───────────────────────────────────────────────
 function startClock() {
   const el = document.getElementById('clock');
   if (!el) return;
-  const tick = () => { el.textContent = new Date().toLocaleTimeString('fr-FR', { hour12: false }); };
+  const tick = () => {
+    el.textContent = new Date().toLocaleTimeString('fr-FR', { hour12: false });
+    // Countdown pour le dashboard
+    if (S._dashRefreshedAt && S.section === 'dashboard') {
+      const elapsed = Math.floor((Date.now() - S._dashRefreshedAt) / 1000);
+      const remaining = Math.max(0, 30 - (elapsed % 30));
+      const cntEl = document.getElementById('dash-next-refresh');
+      if (cntEl) {
+        cntEl.textContent = remaining <= 5 ? `dans ${remaining}s…` : `prochain dans ${remaining}s`;
+        cntEl.style.color = remaining <= 5 ? 'var(--warn)' : 'var(--accent)';
+      }
+    }
+  };
   tick();
   setInterval(tick, 1000);
 }
@@ -571,6 +583,7 @@ async function loadApps() {
   S.stats   = { ...(stats?.data || {}), version: ping?.data?.version };
   updateTbSysbar();
   buildDynamicNav();
+  buildPinnedSection();
   renderApps();
 }
 
@@ -753,6 +766,13 @@ function appCard(app) {
             <i class="ti ti-trash"></i>
             <span class="btn-label">SUPPRIMER</span>
           </button>
+          ${(() => {
+            const pinned = getPins().includes(app.id);
+            return `<button class="action-btn${pinned ? ' active' : ''}" onclick="togglePinApp('${app.id}')" title="${pinned ? 'Retirer des favoris' : 'Épingler dans la sidebar'}">
+              <i class="ti ti-star${pinned ? '-filled' : ''}"></i>
+              <span class="btn-label">${pinned ? 'ÉPINGLÉ' : 'ÉPINGLER'}</span>
+            </button>`;
+          })()}
         </div>
         ${domain ? `<a class="app-link" href="${domain}" target="_blank" rel="noopener"><i class="ti ti-external-link" style="font-size:10px"></i>OUVRIR</a>` : ''}
       </div>
@@ -1795,6 +1815,8 @@ function renderStats() {
       <div class="setting-row"><span>OS</span><span class="setting-val">${escapeHtml(sys.os || '—')}</span></div>
       <div class="setting-row"><span>KERNEL</span><span class="setting-val">${escapeHtml(sys.kernel || '—')}</span></div>
       <div class="setting-row"><span>CPU</span><span class="setting-val">${sys.cpu_count ? sys.cpu_count + ' cœur(s)' : '—'}</span></div>
+      ${sys.load_avg_1 !== undefined ? `
+      <div class="setting-row"><span>CHARGE (1m/5m/15m)</span><span class="setting-val" style="font-family:monospace">${sys.load_avg_1?.toFixed(2)} · ${sys.load_avg_5?.toFixed(2)} · ${sys.load_avg_15?.toFixed(2)}</span></div>` : ''}
     </div>
     <div class="settings-card">
       <div class="settings-title">RESSOURCES</div>
@@ -2026,7 +2048,19 @@ async function loadDashboard() {
     { id: 'settings',  icon: 'ti-settings',        label: 'PARAMÈTRES',   val: `v${S.stats.version || '—'}` },
   ];
 
+  S._dashRefreshedAt = Date.now();
+
   c.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:8px;color:var(--text3)">
+        <i class="ti ti-refresh" style="font-size:9px"></i>
+        Actualisé à <span id="dash-refreshed-time">${new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+        · <span id="dash-next-refresh" style="color:var(--accent)">prochain dans 30s</span>
+      </div>
+      <button class="btn-sm" onclick="refreshSection()" title="Actualiser maintenant">
+        <i class="ti ti-refresh" style="font-size:10px"></i>
+      </button>
+    </div>
     <div class="metrics" style="margin-bottom:20px">
       <div class="mc mc-vio">
         <div class="mc-label">APPS ACTIVES</div>
@@ -2112,20 +2146,65 @@ async function loadDashboard() {
       </div>
     ` : ''}
 
-    ${S.sysinfo?.hostname ? `
+    ${S.sysinfo?.hostname ? (() => {
+      const sys = S.sysinfo;
+      const ram = sys.mem_total ? Math.round(sys.mem_used / sys.mem_total * 100) : 0;
+      const ramUsed = sys.mem_total ? (sys.mem_used / 1073741824).toFixed(1) : '—';
+      const ramTotal = sys.mem_total ? (sys.mem_total / 1073741824).toFixed(1) : '—';
+      const disk = sys.disk_total ? Math.round(sys.disk_used / sys.disk_total * 100) : 0;
+      const diskUsed = sys.disk_total ? (sys.disk_used / 1073741824).toFixed(0) : '—';
+      const diskTotal = sys.disk_total ? (sys.disk_total / 1073741824).toFixed(0) : '—';
+      const ramColor = ram > 90 ? 'var(--red-b)' : ram > 70 ? 'var(--warn)' : 'var(--accent)';
+      const diskColor = disk > 90 ? 'var(--red-b)' : disk > 80 ? 'var(--warn)' : 'var(--accent)';
+      return `
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// HÔTE</div>
-      <div class="settings-card" style="padding:8px 12px">
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-          <div><div style="font-size:8px;color:var(--text3)">HOSTNAME</div><div style="font-size:10px;font-weight:700">${escapeHtml(S.sysinfo.hostname)}</div></div>
-          <div><div style="font-size:8px;color:var(--text3)">UPTIME</div><div style="font-size:10px;font-weight:700">${escapeHtml(S.sysinfo.uptime || '—')}</div></div>
-          <div><div style="font-size:8px;color:var(--text3)">CPU</div><div style="font-size:10px;font-weight:700">${S.sysinfo.cpu_count || '—'} cœur(s)</div></div>
+      <div class="settings-card" style="padding:10px 12px">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">
+          <div><div style="font-size:8px;color:var(--text3)">HOSTNAME</div><div style="font-size:10px;font-weight:700">${escapeHtml(sys.hostname)}</div></div>
+          <div><div style="font-size:8px;color:var(--text3)">UPTIME</div><div style="font-size:10px;font-weight:700">${escapeHtml(sys.uptime || '—')}</div></div>
+          <div><div style="font-size:8px;color:var(--text3)">CPU</div><div style="font-size:10px;font-weight:700">${sys.cpu_count || '—'} cœur(s)</div></div>
         </div>
-      </div>
-    ` : ''}
+        ${sys.mem_total ? `
+        <div style="margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;font-size:8px;color:var(--text3);margin-bottom:3px">
+            <span>RAM</span><span style="color:${ramColor}">${ramUsed} / ${ramTotal} Go (${ram}%)</span>
+          </div>
+          <div style="height:4px;background:var(--border);border-radius:2px">
+            <div style="height:100%;width:${ram}%;background:${ramColor};border-radius:2px;transition:width .3s"></div>
+          </div>
+        </div>` : ''}
+        ${sys.disk_total ? `
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:8px;color:var(--text3);margin-bottom:3px">
+            <span>DISQUE</span><span style="color:${diskColor}">${diskUsed} / ${diskTotal} Go (${disk}%)</span>
+          </div>
+          <div style="height:4px;background:var(--border);border-radius:2px">
+            <div style="height:100%;width:${disk}%;background:${diskColor};border-radius:2px;transition:width .3s"></div>
+          </div>
+        </div>` : ''}
+        ${(sys.load_avg_1 !== undefined) ? (() => {
+          const l1 = sys.load_avg_1?.toFixed(2) ?? '—';
+          const l5 = sys.load_avg_5?.toFixed(2) ?? '—';
+          const l15 = sys.load_avg_15?.toFixed(2) ?? '—';
+          const cpus = sys.cpu_count || 1;
+          const loadColor = sys.load_avg_1 > cpus * 1.5 ? 'var(--red-b)' : sys.load_avg_1 > cpus ? 'var(--warn)' : 'var(--text2)';
+          return `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+            <span style="font-size:8px;color:var(--text3)">CHARGE</span>
+            <span style="font-size:9px;color:${loadColor};font-family:monospace">${l1} · ${l5} · ${l15}</span>
+          </div>`;
+        })() : ''}
+      </div>`;
+    })() : ''}
 
     ${S.apps.some(a => a.id === 'uptime-kuma' && a.status === 'running') ? `
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MONITORING</div>
       <div id="dash-uptime-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    <div id="dash-resources-widget"></div>
+
+    ${S.apps.some(a => a.id === 'crowdsec' && a.status === 'running') ? `
+      <div id="dash-crowdsec-widget"></div>
     ` : ''}
 
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// ÉVÉNEMENTS RÉCENTS</div>
@@ -2135,6 +2214,10 @@ async function loadDashboard() {
   // Charger les widgets async
   if (S.apps.some(a => a.id === 'uptime-kuma' && a.status === 'running')) {
     loadDashUptimeWidget();
+  }
+  loadDashResourcesWidget();
+  if (S.apps.some(a => a.id === 'crowdsec' && a.status === 'running')) {
+    loadDashCrowdSecWidget();
   }
   loadDashEventsWidget();
 }
@@ -2227,6 +2310,110 @@ async function loadDashEventsWidget() {
         </button>
       </div>
     </div>`;
+}
+
+// ── Dashboard: CrowdSec security widget ──────────────────────────────────────
+async function loadDashCrowdSecWidget() {
+  const w = document.getElementById('dash-crowdsec-widget');
+  if (!w) return;
+
+  let decisions = null, alerts = null;
+  try {
+    const [dr, ar] = await Promise.all([
+      fetch('/ui/proxy/crowdsec/v1/decisions?limit=1000'),
+      fetch('/ui/proxy/crowdsec/v1/alerts?limit=100'),
+    ]);
+    if (dr.ok) { const t = await dr.text(); decisions = t ? JSON.parse(t) : []; }
+    if (ar.ok) { const t = await ar.text(); alerts = t ? JSON.parse(t) : []; }
+  } catch(e) {}
+
+  if (!decisions && !alerts) { w.innerHTML = ''; return; }
+
+  const totalBans = (decisions || []).length;
+  const totalAlerts = (alerts || []).length;
+
+  // Top scenarii
+  const scenarioCounts = {};
+  (decisions || []).forEach(d => {
+    const s = d.scenario || d.reason || 'unknown';
+    scenarioCounts[s] = (scenarioCounts[s] || 0) + 1;
+  });
+  const topScenarios = Object.entries(scenarioCounts)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3);
+
+  const scenarioHtml = topScenarios.length
+    ? topScenarios.map(([s, n]) => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--border)">
+          <span style="font-size:8px;color:var(--text2)">${escapeHtml(s)}</span>
+          <span class="badge badge-err" style="font-size:7px">${n}</span>
+        </div>`).join('')
+    : '';
+
+  w.innerHTML = `
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// SÉCURITÉ</div>
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:${scenarioHtml ? '10px' : '0'}">
+        <div>
+          <div style="font-size:8px;color:var(--text3)">BANS ACTIFS</div>
+          <div style="font-size:18px;font-weight:700;color:${totalBans > 0 ? 'var(--red-b)' : 'var(--green-b)'}">${totalBans.toLocaleString()}</div>
+        </div>
+        <div>
+          <div style="font-size:8px;color:var(--text3)">ALERTES</div>
+          <div style="font-size:18px;font-weight:700;color:${totalAlerts > 0 ? 'var(--warn)' : 'var(--text2)'}">${totalAlerts}</div>
+        </div>
+      </div>
+      ${scenarioHtml ? `<div style="font-size:8px;color:var(--text3);margin-bottom:5px">TOP SCENARII</div>${scenarioHtml}` : ''}
+      <div style="margin-top:8px;text-align:right">
+        <button class="btn-sm" onclick="goSection('panel-crowdsec-decisions')" style="font-size:8px">
+          <i class="ti ti-shield-check" style="font-size:9px"></i> DÉTAILS
+        </button>
+      </div>
+    </div>`;
+}
+
+// ── Dashboard: Resources widget ───────────────────────────────────────────────
+async function loadDashResourcesWidget() {
+  const w = document.getElementById('dash-resources-widget');
+  if (!w) return;
+
+  let appStats = S.stats?.apps;
+  if (!appStats || !appStats.length) {
+    const r = await api.get('/api/v1/stats').catch(() => null);
+    if (r?.data?.apps) { Object.assign(S.stats, r.data); appStats = r.data.apps; }
+  }
+  if (!appStats || !appStats.length) { w.innerHTML = ''; return; }
+
+  // Top 5 par RAM (memory_mb > 0)
+  const topMem = [...appStats]
+    .filter(a => a.memory_mb > 0 && a.status === 'running')
+    .sort((a, b) => b.memory_mb - a.memory_mb)
+    .slice(0, 6);
+
+  if (!topMem.length) { w.innerHTML = ''; return; }
+
+  const maxMem = topMem[0].memory_mb;
+  const rows = topMem.map(a => {
+    const memPct = Math.round(a.memory_mb / maxMem * 100);
+    const memStr = a.memory_mb >= 1024 ? (a.memory_mb / 1024).toFixed(1) + ' Go' : Math.round(a.memory_mb) + ' Mo';
+    const cpuStr = a.cpu_percent > 0 ? a.cpu_percent.toFixed(1) + '%' : '';
+    const barColor = memPct > 80 ? 'var(--red-b)' : memPct > 50 ? 'var(--warn)' : 'var(--accent)';
+    return `
+      <div style="display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:8px;padding:4px 0">
+        <span style="font-size:14px;width:20px;text-align:center">${icon(a.app_id)}</span>
+        <div>
+          <div style="font-size:9px;font-weight:600;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(a.name || a.app_id)}</div>
+          <div style="height:3px;background:var(--border);border-radius:2px;margin-top:2px">
+            <div style="height:100%;width:${memPct}%;background:${barColor};border-radius:2px;transition:width .3s"></div>
+          </div>
+        </div>
+        <span style="font-size:8px;color:var(--text2);font-family:monospace;white-space:nowrap">${memStr}</span>
+        ${cpuStr ? `<span style="font-size:8px;color:var(--text3);font-family:monospace">${cpuStr}</span>` : '<span></span>'}
+      </div>`;
+  }).join('');
+
+  w.innerHTML = `
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// RESSOURCES APPS</div>
+    <div class="settings-card" style="padding:8px 12px">${rows}</div>`;
 }
 
 // ── SECTION: TASKS ───────────────────────────────────────────────────────────
@@ -2727,6 +2914,48 @@ function restoreSbGroups() {
       }
     } catch(e) {}
   });
+}
+
+// ── App pinning (localStorage) ────────────────────────────────────────────────
+function getPins() {
+  try { return JSON.parse(localStorage.getItem('caleope-pins') || '[]'); } catch(e) { return []; }
+}
+function savePins(pins) {
+  try { localStorage.setItem('caleope-pins', JSON.stringify(pins)); } catch(e) {}
+}
+function togglePinApp(appId) {
+  const pins = getPins();
+  const idx = pins.indexOf(appId);
+  if (idx >= 0) pins.splice(idx, 1); else pins.push(appId);
+  savePins(pins);
+  buildPinnedSection();
+  renderApps();
+}
+function buildPinnedSection() {
+  const list = document.getElementById('sb-pins-list');
+  const section = document.getElementById('sb-section-pins');
+  if (!list || !section) return;
+  const pins = getPins();
+  const pinned = pins.map(id => S.apps.find(a => a.id === id)).filter(Boolean);
+  if (!pinned.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  list.innerHTML = pinned.map(a => {
+    const domain = a.domain ? `https://${a.domain}` : null;
+    const isRun = a.status === 'running';
+    const dot = `<span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${isRun ? 'var(--green-b)' : 'var(--red-b)'};margin-right:5px;flex-shrink:0"></span>`;
+    if (domain) {
+      return `<a href="${domain}" target="_blank" rel="noopener"
+        class="nav-btn" style="text-decoration:none;display:flex;align-items:center">
+        ${dot}<span style="font-size:11px">${icon(a.id)}</span>
+        <span style="margin-left:5px">${escapeHtml(a.name || a.id)}</span>
+        <i class="ti ti-external-link" style="font-size:9px;margin-left:auto;opacity:.4"></i>
+      </a>`;
+    }
+    return `<button class="nav-btn" onclick="goSection('apps')" style="display:flex;align-items:center">
+      ${dot}<span style="font-size:11px">${icon(a.id)}</span>
+      <span style="margin-left:5px">${escapeHtml(a.name || a.id)}</span>
+    </button>`;
+  }).join('');
 }
 
 function buildDynamicNav() {
@@ -4874,14 +5103,9 @@ async function loadCrowdsecDecisions() {
   if (!c) return;
   c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT CROWDSEC...</div>`;
 
-  const appObj = S.apps.find(a => a.id === 'crowdsec');
-  const apiKey = appObj?.config?.BOUNCER_KEY || '';
-
   let decisions = null;
   try {
-    const r = await fetch('/ui/proxy/crowdsec/v1/decisions?limit=50', {
-      headers: apiKey ? { 'X-Api-Key': apiKey } : {},
-    });
+    const r = await fetch('/ui/proxy/crowdsec/v1/decisions?limit=50');
     if (r.ok) { const t = await r.text(); decisions = t ? JSON.parse(t) : []; }
   } catch(e) {}
 
@@ -4930,14 +5154,9 @@ async function loadCrowdsecAlerts() {
   if (!c) return;
   c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT ALERTES...</div>`;
 
-  const appObj = S.apps.find(a => a.id === 'crowdsec');
-  const apiKey = appObj?.config?.BOUNCER_KEY || '';
-
   let alerts = null;
   try {
-    const r = await fetch('/ui/proxy/crowdsec/v1/alerts?limit=30', {
-      headers: apiKey ? { 'X-Api-Key': apiKey } : {},
-    });
+    const r = await fetch('/ui/proxy/crowdsec/v1/alerts?limit=30');
     if (r.ok) { const t = await r.text(); alerts = t ? JSON.parse(t) : []; }
   } catch(e) {}
 

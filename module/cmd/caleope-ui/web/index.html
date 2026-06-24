@@ -86,6 +86,16 @@
         <i class="ti ti-layout-dashboard" aria-hidden="true"></i>TABLEAU DE BORD
       </button>
 
+      <!-- Liens favoris (apps épinglées) -->
+      <div class="sb-section" id="sb-section-pins" style="display:none">
+        <button class="sb-group-toggle" data-gid="g-pins" onclick="toggleSbGroup('g-pins')">
+          <span>// FAVORIS</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-pins">
+          <div id="sb-pins-list"></div>
+        </div>
+      </div>
+
       <div class="sb-section">
         <button class="sb-group-toggle" data-gid="g-apps" onclick="toggleSbGroup('g-apps')">
           <span>// APPS</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>

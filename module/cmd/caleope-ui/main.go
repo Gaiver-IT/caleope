@@ -463,8 +463,9 @@ func main() {
 		// WG-Easy — interface web WireGuard
 		"wg-easy": {containerName: "wg-easy", containerPort: 51821},
 
-		// CrowdSec — LAPI locale pour consulter alertes/décisions
-		"crowdsec": {containerName: "crowdsec", containerPort: 8080},
+		// CrowdSec — LAPI locale pour consulter alertes/décisions (bouncer API key)
+		"crowdsec": {tokenKey: "CROWDSEC_LOCAL_API_KEY", authScheme: "X-Api-Key",
+			containerName: "crowdsec", containerPort: 8080},
 
 		// Grocy — gestion inventaire maison, API key dans GROCY-API-KEY header
 		"grocy": {tokenKey: "GROCY_API_KEY", authScheme: "GROCY-API-KEY",

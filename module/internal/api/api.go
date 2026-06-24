@@ -1553,6 +1553,12 @@ func (s *Server) handleSystemInfo() (map[string]interface{}, error) {
 		}
 	}
 
+	// Load average depuis /proc/loadavg
+	var load1, load5, load15 float64
+	if raw, err := os.ReadFile("/proc/loadavg"); err == nil {
+		fmt.Sscanf(strings.TrimSpace(string(raw)), "%f %f %f", &load1, &load5, &load15)
+	}
+
 	return map[string]interface{}{
 		"hostname":        hostname,
 		"uptime_seconds":  uptimeSec,
@@ -1566,6 +1572,9 @@ func (s *Server) handleSystemInfo() (map[string]interface{}, error) {
 		"disk_total":      diskTotal,
 		"disk_free":       diskFree,
 		"disk_used":       diskTotal - diskFree,
+		"load_avg_1":      load1,
+		"load_avg_5":      load5,
+		"load_avg_15":     load15,
 	}, nil
 }
 
