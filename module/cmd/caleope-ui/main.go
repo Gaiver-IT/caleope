@@ -176,10 +176,12 @@ func main() {
 	}
 
 	// Mot de passe UI — dans core/daemon/ui-password, sinon = token daemon
+	uiPasswordPath := filepath.Join(*baseDir, "core", "daemon", "ui-password")
 	uiPassword := daemonToken
-	if pw, err := readFile(filepath.Join(*baseDir, "core", "daemon", "ui-password")); err == nil && pw != "" {
+	if pw, err := readFile(uiPasswordPath); err == nil && pw != "" {
 		uiPassword = pw
 	}
+	var uiPasswordMu sync.RWMutex
 
 	store := newSessions()
 
@@ -913,7 +915,10 @@ func main() {
 			Password string `json:"password"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Password != uiPassword {
+		uiPasswordMu.RLock()
+		currentPw := uiPassword
+		uiPasswordMu.RUnlock()
+		if body.Password != currentPw {
 			jsonErr(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
@@ -938,6 +943,39 @@ func main() {
 		http.SetCookie(w, &http.Cookie{Name: "caleope-session", MaxAge: -1, Path: "/"})
 		w.WriteHeader(http.StatusOK)
 	})
+
+	// Changer mot de passe UI (session requise)
+	mux.HandleFunc("/auth/password", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Current string `json:"current"`
+			New     string `json:"new"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		uiPasswordMu.RLock()
+		currentPw := uiPassword
+		uiPasswordMu.RUnlock()
+		if body.Current != currentPw {
+			jsonErr(w, http.StatusUnauthorized, "mot de passe actuel incorrect")
+			return
+		}
+		if len(body.New) < 8 {
+			jsonErr(w, http.StatusBadRequest, "le nouveau mot de passe doit faire au moins 8 caractères")
+			return
+		}
+		if err := os.WriteFile(uiPasswordPath, []byte(body.New), 0600); err != nil {
+			jsonErr(w, http.StatusInternalServerError, "erreur écriture: "+err.Error())
+			return
+		}
+		uiPasswordMu.Lock()
+		uiPassword = body.New
+		uiPasswordMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
 
 	// Vérifier session (utilisé par le frontend au chargement)
 	mux.HandleFunc("/auth/check", func(w http.ResponseWriter, r *http.Request) {

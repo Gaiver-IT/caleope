@@ -20,6 +20,9 @@ const S = {
   tasks: [],       // file de tâches style Proxmox
   taskSeq: 0,      // compteur d'ID de tâche
   appSearch: '',   // filtre recherche section apps
+  appView: (() => { try { return localStorage.getItem('caleope-appview') || 'grid'; } catch(e) { return 'grid'; } })(),
+  _statsAutoRefresh: false,
+  _statsTimer: null,
 };
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -559,6 +562,54 @@ const APP_ICONS = {
 };
 const icon = id => APP_ICONS[id] || '📦';
 
+// ── Sidebar search ────────────────────────────────────────────────────────────
+function filterSidebar(q) {
+  const query = q.trim().toLowerCase();
+  document.querySelectorAll('.sb-nav .nav-btn[data-section]').forEach(btn => {
+    const label = btn.textContent.toLowerCase();
+    const section = btn.dataset.section || '';
+    const match = !query || label.includes(query) || section.includes(query);
+    btn.style.display = match ? '' : 'none';
+  });
+  document.querySelectorAll('.sb-section').forEach(sec => {
+    if (!query) { sec.style.display = ''; return; }
+    const visibleBtns = sec.querySelectorAll('.nav-btn[data-section]:not([style*="none"])');
+    sec.style.display = visibleBtns.length ? '' : 'none';
+  });
+}
+
+// ── Recent sections ───────────────────────────────────────────────────────────
+function getRecentSections() {
+  try { return JSON.parse(localStorage.getItem('caleope-recents') || '[]'); } catch(e) { return []; }
+}
+function pushRecentSection(id) {
+  if (id === 'dashboard') return;
+  let recents = getRecentSections().filter(r => r !== id);
+  recents.unshift(id);
+  recents = recents.slice(0, 5);
+  try { localStorage.setItem('caleope-recents', JSON.stringify(recents)); } catch(e) {}
+  buildRecentSection();
+}
+function buildRecentSection() {
+  const recents = getRecentSections();
+  const list = document.getElementById('sb-recent-list');
+  const sec = document.getElementById('sb-section-recent');
+  if (!list || !sec) return;
+  if (!recents.length) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  list.innerHTML = recents.map(id => {
+    const sec2 = SECTIONS[id];
+    if (!sec2) return '';
+    const app = Object.keys(APP_PANELS).find(aid => APP_PANELS[aid].panels?.some(p => p.id === id));
+    const panelDef = app ? APP_PANELS[app]?.panels?.find(p => p.id === id) : null;
+    const label = sec2.label || panelDef?.label || id.toUpperCase();
+    const appIcon = app ? icon(app) : '';
+    return `<button class="nav-btn" data-section="${id}" onclick="goSection('${id}')">
+      <span style="font-size:11px;margin-right:2px">${appIcon}</span>${escapeHtml(label)}
+    </button>`;
+  }).join('');
+}
+
 // ── Badge statut ──────────────────────────────────────────────────────────────
 function statusBadge(status) {
   const map = {
@@ -584,6 +635,7 @@ async function loadApps() {
   updateTbSysbar();
   buildDynamicNav();
   buildPinnedSection();
+  buildRecentSection();
   renderApps();
 }
 
@@ -642,6 +694,16 @@ function renderApps() {
         oninput="filterApps(this.value)"
         style="margin-left:auto;font-size:9px;padding:4px 8px;background:var(--card);border:1px solid var(--border);
                border-radius:4px;color:var(--text1);width:140px;outline:none">
+      <div style="display:flex;border:1px solid var(--border);border-radius:4px;overflow:hidden">
+        <button title="Vue grille" onclick="setAppView('grid')"
+          style="padding:4px 7px;background:${(S.appView||'grid')==='grid'?'var(--bg3)':'transparent'};border:none;cursor:pointer;color:var(--text2)">
+          <i class="ti ti-layout-grid" style="font-size:11px"></i>
+        </button>
+        <button title="Vue liste" onclick="setAppView('list')"
+          style="padding:4px 7px;background:${(S.appView||'grid')==='list'?'var(--bg3)':'transparent'};border:none;cursor:pointer;color:var(--text2)">
+          <i class="ti ti-list" style="font-size:11px"></i>
+        </button>
+      </div>
     </div>
 
     <div id="tab-installed" class="${S.tab !== 'installed' ? 'hidden' : ''}">
@@ -668,7 +730,9 @@ function renderApps() {
             <div class="empty-title">AUCUNE APP INSTALLÉE</div>
             <div class="empty-sub">Ouvrez le catalogue pour installer votre première app.</div>
            </div>`
-        : `<div class="apps-grid" id="installed-grid">${S.apps.map(appCard).join('')}</div>`
+        : (S.appView === 'list'
+          ? `<div class="apps-list" id="installed-grid">${S.apps.map(appListRow).join('')}</div>`
+          : `<div class="apps-grid" id="installed-grid">${S.apps.map(appCard).join('')}</div>`)
       }
     </div>
 
@@ -766,6 +830,11 @@ function appCard(app) {
             <i class="ti ti-trash"></i>
             <span class="btn-label">SUPPRIMER</span>
           </button>
+          ${APP_PANELS[app.id] && isRunning ? `
+          <button class="action-btn" onclick="goSection('${APP_PANELS[app.id].panels[0]?.id || 'panel-'+app.id}')" title="Ouvrir le panel intégré">
+            <i class="ti ti-layout-sidebar-right"></i>
+            <span class="btn-label">PANEL</span>
+          </button>` : ''}
           ${(() => {
             const pinned = getPins().includes(app.id);
             return `<button class="action-btn${pinned ? ' active' : ''}" onclick="togglePinApp('${app.id}')" title="${pinned ? 'Retirer des favoris' : 'Épingler dans la sidebar'}">
@@ -778,6 +847,49 @@ function appCard(app) {
       </div>
     </div>
   `;
+}
+
+function setAppView(mode) {
+  S.appView = mode;
+  try { localStorage.setItem('caleope-appview', mode); } catch(e) {}
+  renderApps();
+}
+
+function appListRow(app) {
+  const isRunning = app.status === 'running';
+  const domain = app.domain ? `https://${app.domain}` : null;
+  const containers = S.containers || [];
+  const ct = containers.find(c => {
+    const name = (c.name || '').replace(/^\//, '');
+    return name === app.id || name.startsWith(app.id + '-') || name.startsWith(app.id + '_');
+  });
+  const pinned = getPins().includes(app.id);
+  return `<div class="app-list-row" data-status="${app.status}" data-id="${app.id}">
+    <span style="font-size:16px;width:24px;text-align:center;flex-shrink:0">${icon(app.id)}</span>
+    <div style="flex:1;min-width:0">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:10px;font-weight:700;color:var(--text1)">${escapeHtml(app.name || app.id)}</span>
+        <span style="font-size:8px;color:var(--text3)">${escapeHtml(app.version || '')}</span>
+        ${statusBadge(app.status)}
+      </div>
+      ${ct && isRunning ? `<div style="font-size:8px;color:var(--text3);margin-top:2px">
+        <i class="ti ti-cpu" style="font-size:8px"></i> ${escapeHtml(ct.cpu || '—')} &nbsp;
+        <i class="ti ti-device-desktop" style="font-size:8px"></i> ${escapeHtml((ct.mem || '').split(' / ')[0] || '—')}
+      </div>` : ''}
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+      ${APP_PANELS[app.id] && isRunning ? `<button class="btn-sm" onclick="goSection('${APP_PANELS[app.id].panels[0]?.id || 'panel-'+app.id}')" title="Panel"><i class="ti ti-layout-sidebar-right" style="font-size:10px"></i></button>` : ''}
+      ${domain ? `<a class="btn-sm" href="${domain}" target="_blank" rel="noopener" title="Ouvrir" style="text-decoration:none"><i class="ti ti-external-link" style="font-size:10px"></i></a>` : ''}
+      <button class="btn-sm" onclick="openLogs('${app.id}')" title="Logs"><i class="ti ti-terminal-2" style="font-size:10px"></i></button>
+      ${isRunning
+        ? `<button class="btn-sm" onclick="appAction('${app.id}','restart')" title="Redémarrer"><i class="ti ti-refresh" style="font-size:10px"></i></button>
+           <button class="btn-sm danger" onclick="appAction('${app.id}','stop')" title="Arrêter"><i class="ti ti-player-pause" style="font-size:10px"></i></button>`
+        : `<button class="btn-sm success" onclick="appAction('${app.id}','start')" title="Démarrer"><i class="ti ti-player-play" style="font-size:10px"></i></button>`}
+      <button class="btn-sm${pinned?' active':''}" onclick="togglePinApp('${app.id}')" title="${pinned?'Retirer':'Épingler'}">
+        <i class="ti ti-star${pinned?'-filled':''}" style="font-size:10px"></i>
+      </button>
+    </div>
+  </div>`;
 }
 
 function catalogCard(app) {
@@ -826,10 +938,11 @@ function filterApps(q) {
   const installedGrid = document.getElementById('installed-grid');
   const catalogGrid   = document.getElementById('catalog-grid');
   if (installedGrid) {
-    installedGrid.querySelectorAll('.app-card').forEach(card => {
+    installedGrid.querySelectorAll('.app-card, .app-list-row').forEach(card => {
       const text = card.textContent.toLowerCase();
       const sf = S.statusFilter || 'all';
-      card.style.display = (!S.appSearch || text.includes(S.appSearch)) && applyStatusFilter(card, sf) ? '' : 'none';
+      const statusMatch = sf === 'all' || (sf === 'running' ? card.dataset.status === 'running' : card.dataset.status !== 'running');
+      card.style.display = (!S.appSearch || text.includes(S.appSearch)) && statusMatch ? '' : 'none';
     });
   }
   if (catalogGrid) {
@@ -1839,7 +1952,34 @@ function renderStats() {
       <div class="setting-row"><span>SOCKET</span><span class="setting-val">/run/caleoped.sock</span></div>
       <div class="setting-row"><span>APPS ACTIVES</span><span class="setting-val text-vio">${S.apps.filter(a => a.status === 'running').length}</span></div>
     </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">
+      <div style="font-size:9px;color:var(--text3)">
+        <i class="ti ti-refresh" style="font-size:9px"></i>
+        Actualisé à ${new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <label style="display:flex;align-items:center;gap:5px;font-size:9px;color:var(--text3);cursor:pointer">
+          <input type="checkbox" id="stats-autorefresh" onchange="toggleStatsAutoRefresh(this.checked)"
+            ${S._statsAutoRefresh ? 'checked' : ''} style="width:12px;height:12px">
+          AUTO (5s)
+        </label>
+        <button class="btn-sm" onclick="loadStats()"><i class="ti ti-refresh" style="font-size:10px"></i></button>
+      </div>
+    </div>
   `;
+  if (S._statsAutoRefresh) {
+    clearInterval(S._statsTimer);
+    S._statsTimer = setInterval(() => { if (S.section === 'stats') loadStats(); }, 5000);
+  }
+}
+
+let _statsRefreshTimer = null;
+function toggleStatsAutoRefresh(on) {
+  S._statsAutoRefresh = on;
+  clearInterval(S._statsTimer);
+  if (on) {
+    S._statsTimer = setInterval(() => { if (S.section === 'stats') loadStats(); }, 5000);
+  }
 }
 
 // ── SECTION: SETTINGS ─────────────────────────────────────────────────────────
@@ -1887,6 +2027,17 @@ async function loadSettings() {
       </div>
     </div>
     <div class="settings-card">
+      <div class="settings-title">MOT DE PASSE</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <input type="password" id="pw-current" placeholder="Mot de passe actuel" class="param-input" style="max-width:300px">
+        <input type="password" id="pw-new" placeholder="Nouveau mot de passe (min 8 car.)" class="param-input" style="max-width:300px">
+        <input type="password" id="pw-confirm" placeholder="Confirmer le nouveau mot de passe" class="param-input" style="max-width:300px">
+        <div>
+          <button class="btn" onclick="changePassword()"><i class="ti ti-lock"></i>CHANGER</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card">
       <div class="settings-title">SESSION</div>
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
@@ -1894,6 +2045,27 @@ async function loadSettings() {
       </div>
     </div>
   `;
+}
+
+async function changePassword() {
+  const cur = document.getElementById('pw-current')?.value || '';
+  const nw = document.getElementById('pw-new')?.value || '';
+  const confirm = document.getElementById('pw-confirm')?.value || '';
+  if (!cur || !nw) { notify('Remplissez tous les champs', 'err'); return; }
+  if (nw !== confirm) { notify('Les mots de passe ne correspondent pas', 'err'); return; }
+  if (nw.length < 8) { notify('Minimum 8 caractères', 'err'); return; }
+  const r = await fetch('/auth/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current: cur, new: nw }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.ok) {
+    notify('Mot de passe changé', 'ok');
+    ['pw-current','pw-new','pw-confirm'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  } else {
+    notify(d.error || 'Erreur', 'err');
+  }
 }
 
 // ── Logo upload ───────────────────────────────────────────────────────────────
@@ -2050,6 +2222,26 @@ async function loadDashboard() {
 
   S._dashRefreshedAt = Date.now();
 
+  // ── Alertes système ──────────────────────────────────────────────────────────
+  const alerts = [];
+  if (disk > 90)       alerts.push({ lvl: 'err',  msg: `Disque critique : ${disk}% utilisé (${(sys.disk_free/1073741824).toFixed(1)} Go libres)`, icon: 'ti-device-floppy' });
+  else if (disk > 85)  alerts.push({ lvl: 'warn', msg: `Disque presque plein : ${disk}% utilisé`, icon: 'ti-device-floppy' });
+  if (ram > 90)        alerts.push({ lvl: 'err',  msg: `RAM critique : ${ram}% utilisée`, icon: 'ti-cpu' });
+  else if (ram > 85)   alerts.push({ lvl: 'warn', msg: `RAM élevée : ${ram}% utilisée`, icon: 'ti-cpu' });
+  const failedApps = S.apps.filter(a => a.status === 'error' || a.status === 'failed');
+  if (failedApps.length) alerts.push({ lvl: 'err', msg: `${failedApps.length} app(s) en erreur : ${failedApps.map(a=>a.name||a.id).join(', ')}`, icon: 'ti-alert-triangle' });
+
+  const alertsHtml = alerts.length ? `
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">
+      ${alerts.map(al => `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:6px;
+            background:${al.lvl==='err'?'rgba(255,80,80,.08)':'rgba(255,180,0,.06)'};
+            border:1px solid ${al.lvl==='err'?'var(--red-b)':'var(--warn)'}">
+          <i class="ti ${al.icon}" style="color:${al.lvl==='err'?'var(--red-b)':'var(--warn)'};font-size:13px;flex-shrink:0"></i>
+          <span style="font-size:9px;font-weight:700;color:${al.lvl==='err'?'var(--red-b)':'var(--warn)'}">${escapeHtml(al.msg)}</span>
+        </div>`).join('')}
+    </div>` : '';
+
   c.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div style="font-size:8px;color:var(--text3)">
@@ -2083,6 +2275,8 @@ async function loadDashboard() {
         <div class="mc-sub"><div class="seg-bar" style="margin-top:4px">${segBar(disk, 12, disk > 85 ? 'on-err' : disk > 70 ? 'on-warn' : 'on-ok')}</div></div>
       </div>
     </div>
+
+    ${alertsHtml}
 
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin-bottom:10px">// ACCÈS RAPIDE</div>
     <div class="dash-grid">
@@ -2207,6 +2401,11 @@ async function loadDashboard() {
       <div id="dash-crowdsec-widget"></div>
     ` : ''}
 
+    ${S.apps.some(a => a.id === 'gotify' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// NOTIFICATIONS</div>
+      <div id="dash-gotify-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// ÉVÉNEMENTS RÉCENTS</div>
     <div id="dash-events-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
   `;
@@ -2218,6 +2417,9 @@ async function loadDashboard() {
   loadDashResourcesWidget();
   if (S.apps.some(a => a.id === 'crowdsec' && a.status === 'running')) {
     loadDashCrowdSecWidget();
+  }
+  if (S.apps.some(a => a.id === 'gotify' && a.status === 'running')) {
+    loadDashGotifyWidget();
   }
   loadDashEventsWidget();
 }
@@ -2310,6 +2512,44 @@ async function loadDashEventsWidget() {
         </button>
       </div>
     </div>`;
+}
+
+// ── Dashboard: Gotify notifications widget ────────────────────────────────────
+async function loadDashGotifyWidget() {
+  const w = document.getElementById('dash-gotify-widget');
+  if (!w) return;
+  let msgs = null;
+  try {
+    const r = await fetch('/ui/proxy/gotify/message?limit=6');
+    if (r.ok) msgs = (await r.json()).messages || [];
+  } catch(e) {}
+
+  if (!msgs || !msgs.length) {
+    w.innerHTML = `<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune notification récente.</div>`;
+    return;
+  }
+
+  const prioColor = p => p >= 8 ? 'var(--red-b)' : p >= 4 ? 'var(--warn)' : 'var(--text3)';
+  const rows = msgs.map(m => {
+    const ts = m.date ? new Date(m.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '';
+    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border)">
+      <span style="width:6px;height:6px;border-radius:50%;background:${prioColor(m.priority||0)};flex-shrink:0;margin-top:3px"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:700;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(m.title||'Message')}</div>
+        <div style="font-size:8px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml((m.message||'').slice(0,80))}</div>
+      </div>
+      <span style="font-size:8px;color:var(--text3);white-space:nowrap;flex-shrink:0">${escapeHtml(ts)}</span>
+    </div>`;
+  }).join('');
+
+  w.innerHTML = `<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+    ${rows}
+    <div style="padding:6px 10px;text-align:right">
+      <button class="btn-sm" onclick="goSection('gotify')" style="font-size:8px">
+        <i class="ti ti-bell" style="font-size:9px"></i> VOIR TOUT
+      </button>
+    </div>
+  </div>`;
 }
 
 // ── Dashboard: CrowdSec security widget ──────────────────────────────────────
@@ -5835,6 +6075,7 @@ async function loadSyncthingStatus() {
 
 function goSection(id) {
   S.section = id;
+  pushRecentSection(id);
 
   // Nav buttons
   document.querySelectorAll('.nav-btn').forEach(b => {
@@ -6354,7 +6595,29 @@ async function loadNetwork() {
     }
   }
 
+  // IP publique (tentative non-bloquante)
+  let publicIp = null;
+  try {
+    const ipResp = await Promise.race([
+      fetch('https://api.ipify.org?format=json').then(r => r.json()),
+      new Promise((_, reject) => setTimeout(reject, 3000)),
+    ]);
+    publicIp = ipResp?.ip || null;
+  } catch(e) {}
+
   el.innerHTML = `
+    ${publicIp ? `<div class="settings-card" style="margin-bottom:16px;padding:10px 14px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <i class="ti ti-world" style="color:var(--accent);font-size:16px;flex-shrink:0"></i>
+        <div style="flex:1">
+          <div style="font-size:8px;color:var(--text3);letter-spacing:1px">ADRESSE IP PUBLIQUE</div>
+          <div style="font-size:13px;font-weight:700;font-family:monospace;color:var(--text1)">${escapeHtml(publicIp)}</div>
+        </div>
+        <button class="btn-sm" onclick="navigator.clipboard.writeText('${escapeHtml(publicIp)}').then(()=>notify('IP copiée','ok'))" title="Copier">
+          <i class="ti ti-copy" style="font-size:10px"></i>
+        </button>
+      </div>
+    </div>` : ''}
     <div class="net-section-title">// INTERFACES PHYSIQUES</div>
     <div class="net-grid">${ifaceCards || '<div class="empty-msg">Aucune interface physique détectée</div>'}</div>
     ${routeRows ? `<div class="net-section-title" style="margin-top:24px">// ROUTES</div>

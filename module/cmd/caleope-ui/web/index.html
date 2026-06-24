@@ -81,10 +81,27 @@
       </div>
     </div>
 
+    <!-- Sidebar search -->
+    <div class="sb-search">
+      <i class="ti ti-search" style="font-size:10px;color:var(--text3)"></i>
+      <input id="sb-search-input" type="text" placeholder="Rechercher..." autocomplete="off"
+        oninput="filterSidebar(this.value)" onkeydown="if(event.key==='Escape'){this.value='';filterSidebar('')}">
+    </div>
+
     <div class="sb-nav">
       <button class="nav-btn" data-section="dashboard" onclick="goSection('dashboard')">
         <i class="ti ti-layout-dashboard" aria-hidden="true"></i>TABLEAU DE BORD
       </button>
+
+      <!-- Récents -->
+      <div class="sb-section" id="sb-section-recent" style="display:none">
+        <button class="sb-group-toggle" data-gid="g-recent" onclick="toggleSbGroup('g-recent')">
+          <span>// RÉCENTS</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-recent">
+          <div id="sb-recent-list"></div>
+        </div>
+      </div>
 
       <!-- Liens favoris (apps épinglées) -->
       <div class="sb-section" id="sb-section-pins" style="display:none">
