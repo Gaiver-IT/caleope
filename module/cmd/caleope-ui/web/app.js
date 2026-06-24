@@ -1487,16 +1487,34 @@ function renderStats() {
   const diskTotalGb = diskTotal ? (diskTotal / 1073741824).toFixed(1) : '—';
   const disk = diskTotal ? Math.round(diskUsed / diskTotal * 100) : 0;
 
-  // Stats conteneurs
+  // Stats conteneurs avec barres CPU/RAM
   const containers = S.containers || [];
-  const ctRows = containers.length > 0 ? containers.map(ct => `
-    <div class="loc-row">
-      <div style="flex:1;min-width:0"><div style="font-size:10px;font-weight:700">${escapeHtml(ct.name || '?')}</div></div>
-      <div style="display:flex;gap:10px;font-size:9px;color:var(--text3)">
-        <span title="CPU">${escapeHtml(ct.cpu || '—')}</span>
-        <span title="RAM">${escapeHtml(ct.mem?.split(' / ')[0] || '—')}</span>
+  const ctRows = containers.length > 0 ? containers.map(ct => {
+    const cpuStr = ct.cpu || '0%';
+    const cpuPct = parseFloat(cpuStr) || 0;
+    const cpuBar = cpuPct > 0 ? `<div style="width:60px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-top:2px">
+      <div style="width:${Math.min(cpuPct,100)}%;height:100%;background:${cpuPct>80?'var(--red-b)':cpuPct>50?'var(--warn)':'var(--vio-b)'}"></div></div>` : '';
+    const memParts = (ct.mem || '').split(' / ');
+    const memUsedStr = memParts[0] || '—';
+    const memTotalStr = memParts[1] || '';
+    return `
+    <div class="loc-row" style="align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(ct.name || '?')}</div>
+        ${cpuBar}
       </div>
-    </div>`).join('') : '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune donnée.</div>';
+      <div style="display:flex;gap:12px;font-size:9px;text-align:right">
+        <div>
+          <div style="color:var(--vio-b);font-weight:700">${escapeHtml(cpuStr)}</div>
+          <div style="color:var(--text3);font-size:8px">CPU</div>
+        </div>
+        <div>
+          <div style="color:var(--text2);font-weight:700">${escapeHtml(memUsedStr)}</div>
+          ${memTotalStr ? `<div style="color:var(--text3);font-size:8px">${escapeHtml(memTotalStr)}</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('') : '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune donnée.</div>';
 
   c.innerHTML = `
     <div class="settings-card">
@@ -4559,6 +4577,41 @@ async function loadNetwork() {
     `<tr><td>${escapeHtml(r.dst || 'default')}</td><td>${escapeHtml(r.gateway || '—')}</td><td>${escapeHtml(r.dev || '—')}</td><td>${escapeHtml(String(r.metric ?? ''))}</td></tr>`
   ).join('');
 
+  // Ports exposés par les apps installées (depuis docker ps -a)
+  let appPortsHtml = '';
+  if (S.apps.length) {
+    const portsData = await fetch('/sys/ports').then(r => r.json()).catch(() => null);
+    if (portsData?.ports?.length) {
+      const portRows = portsData.ports.map(p => `
+        <tr>
+          <td>${escapeHtml(p.container || '—')}</td>
+          <td>${escapeHtml(p.host_port || '—')}</td>
+          <td>${escapeHtml(p.container_port || '—')}</td>
+          <td><span style="color:${p.state === 'running' ? 'var(--green-b)' : 'var(--text3)'}">${escapeHtml(p.state || '—')}</span></td>
+        </tr>`).join('');
+      appPortsHtml = `<div class="net-section-title" style="margin-top:24px">// PORTS APPS</div>
+      <div class="table-wrap">
+        <table class="sys-table"><thead><tr><th>CONTENEUR</th><th>PORT HÔTE</th><th>PORT CONTAINER</th><th>ÉTAT</th></tr></thead>
+        <tbody>${portRows}</tbody></table>
+      </div>`;
+    } else {
+      // Fallback: afficher les domaines apps depuis S.apps
+      const appRows = S.apps.filter(a => a.domain).map(a => `
+        <tr>
+          <td>${escapeHtml(a.name || a.id)}</td>
+          <td>${escapeHtml(a.domain || '—')}</td>
+          <td><span style="color:${a.status==='running'?'var(--green-b)':'var(--text3)'}">${a.status?.toUpperCase()}</span></td>
+        </tr>`).join('');
+      if (appRows) {
+        appPortsHtml = `<div class="net-section-title" style="margin-top:24px">// SERVICES EXPOSÉS</div>
+        <div class="table-wrap">
+          <table class="sys-table"><thead><tr><th>APP</th><th>DOMAINE</th><th>ÉTAT</th></tr></thead>
+          <tbody>${appRows}</tbody></table>
+        </div>`;
+      }
+    }
+  }
+
   el.innerHTML = `
     <div class="net-section-title">// INTERFACES PHYSIQUES</div>
     <div class="net-grid">${ifaceCards || '<div class="empty-msg">Aucune interface physique détectée</div>'}</div>
@@ -4566,7 +4619,8 @@ async function loadNetwork() {
     <div class="table-wrap">
       <table class="sys-table"><thead><tr><th>DESTINATION</th><th>PASSERELLE</th><th>INTERFACE</th><th>MÉTRIQUE</th></tr></thead>
       <tbody>${routeRows}</tbody></table>
-    </div>` : ''}`;
+    </div>` : ''}
+    ${appPortsHtml}`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

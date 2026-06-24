@@ -912,6 +912,9 @@ func main() {
 	mux.HandleFunc("/sys/journal", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleSysJournal(w, r)
 	}))
+	mux.HandleFunc("/sys/ports", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysPorts(w, r)
+	}))
 
 	// API proxy (session requise) — logs en streaming aussi
 	mux.HandleFunc("/api/", requireSession(func(w http.ResponseWriter, r *http.Request) {

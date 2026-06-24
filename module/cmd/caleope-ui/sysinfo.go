@@ -304,6 +304,70 @@ type journalEntry struct {
 	Message  string `json:"message"`
 }
 
+// ── Ports exposés par les conteneurs Docker ───────────────────────────────────
+
+type containerPort struct {
+	Container     string `json:"container"`
+	HostPort      string `json:"host_port"`
+	ContainerPort string `json:"container_port"`
+	State         string `json:"state"`
+}
+
+func handleSysPorts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	// docker ps -a --format '{{.Names}}\t{{.Ports}}\t{{.State}}'
+	out, err := exec.Command("docker", "ps", "-a",
+		"--format", "{{.Names}}\t{{.Ports}}\t{{.State}}").Output()
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ports": []containerPort{}, "success": true})
+		return
+	}
+
+	var ports []containerPort
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		name, portsStr, state := parts[0], parts[1], parts[2]
+		if portsStr == "" {
+			ports = append(ports, containerPort{Container: name, HostPort: "—", ContainerPort: "—", State: state})
+			continue
+		}
+		// Format: "0.0.0.0:8080->80/tcp, 0.0.0.0:4430->443/tcp"
+		for _, mapping := range strings.Split(portsStr, ", ") {
+			mapping = strings.TrimSpace(mapping)
+			if mapping == "" {
+				continue
+			}
+			hostPort, containerPort_ := "", ""
+			if idx := strings.Index(mapping, "->"); idx >= 0 {
+				left := mapping[:idx]
+				right := strings.Split(mapping[idx+2:], "/")[0]
+				// left may be "0.0.0.0:8080" or ":::8080"
+				if colonIdx := strings.LastIndex(left, ":"); colonIdx >= 0 {
+					hostPort = left[colonIdx+1:]
+				} else {
+					hostPort = left
+				}
+				containerPort_ = right
+			} else {
+				containerPort_ = strings.Split(mapping, "/")[0]
+			}
+			ports = append(ports, containerPort{Container: name, HostPort: hostPort, ContainerPort: containerPort_, State: state})
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ports": ports, "success": true})
+}
+
 func handleSysJournal(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
