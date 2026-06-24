@@ -826,6 +826,11 @@ function appCard(app) {
             <i class="ti ti-settings"></i>
             <span class="btn-label">CONFIG</span>
           </button>` : ''}
+          ${isRunning ? `
+          <button class="action-btn" onclick="openInspect('${app.id}')" title="Inspecter le conteneur">
+            <i class="ti ti-info-circle"></i>
+            <span class="btn-label">INSPECT</span>
+          </button>` : ''}
           <button class="action-btn danger" onclick="removeApp('${app.id}')" title="Supprimer">
             <i class="ti ti-trash"></i>
             <span class="btn-label">SUPPRIMER</span>
@@ -882,7 +887,8 @@ function appListRow(app) {
       ${domain ? `<a class="btn-sm" href="${domain}" target="_blank" rel="noopener" title="Ouvrir" style="text-decoration:none"><i class="ti ti-external-link" style="font-size:10px"></i></a>` : ''}
       <button class="btn-sm" onclick="openLogs('${app.id}')" title="Logs"><i class="ti ti-terminal-2" style="font-size:10px"></i></button>
       ${isRunning
-        ? `<button class="btn-sm" onclick="appAction('${app.id}','restart')" title="Redémarrer"><i class="ti ti-refresh" style="font-size:10px"></i></button>
+        ? `<button class="btn-sm" onclick="openInspect('${app.id}')" title="Inspecter"><i class="ti ti-info-circle" style="font-size:10px"></i></button>
+           <button class="btn-sm" onclick="appAction('${app.id}','restart')" title="Redémarrer"><i class="ti ti-refresh" style="font-size:10px"></i></button>
            <button class="btn-sm danger" onclick="appAction('${app.id}','stop')" title="Arrêter"><i class="ti ti-player-pause" style="font-size:10px"></i></button>`
         : `<button class="btn-sm success" onclick="appAction('${app.id}','start')" title="Démarrer"><i class="ti ti-player-play" style="font-size:10px"></i></button>`}
       <button class="btn-sm${pinned?' active':''}" onclick="togglePinApp('${app.id}')" title="${pinned?'Retirer':'Épingler'}">
@@ -1392,8 +1398,32 @@ async function loadBackups() {
 
   S.backupApp = S.backupApp || S.apps[0]?.id;
 
+  // Charger les tâches planifiées pour afficher la prochaine sauvegarde
+  let nextBackupHtml = '';
+  try {
+    const tasksData = await api.get('/api/v1/tasks');
+    const backupTasks = (tasksData?.data || []).filter(t => t.type === 'backup' && t.enabled);
+    if (backupTasks.length) {
+      const nextRuns = backupTasks.map(t => ({ t, next: computeNextRun(t) })).filter(x => x.next).sort((a, b) => a.next - b.next);
+      if (nextRuns.length) {
+        const { t, next } = nextRuns[0];
+        const label = TASK_SCOPE_LABELS[t.scope] || 'Complète';
+        nextBackupHtml = `
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;margin-bottom:12px">
+            <i class="ti ti-clock-play" style="color:var(--accent);font-size:14px;flex-shrink:0"></i>
+            <div style="flex:1">
+              <div style="font-size:9px;font-weight:700">PROCHAINE SAUVEGARDE PLANIFIÉE</div>
+              <div style="font-size:8px;color:var(--text3)">${escapeHtml(label)} — ${next.toLocaleString('fr-FR', {weekday:'long',hour:'2-digit',minute:'2-digit'})} <span style="color:var(--accent)">(${formatRelTime(next)})</span></div>
+            </div>
+            <button class="btn-sm" onclick="goSection('tasks')" style="font-size:8px;flex-shrink:0"><i class="ti ti-settings" style="font-size:9px"></i></button>
+          </div>`;
+      }
+    }
+  } catch(e) {}
+
   const runningApps = S.apps.filter(a => a.status === 'running');
   c.innerHTML = `
+    ${nextBackupHtml}
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
       <span style="font-size:9px;color:var(--text3);letter-spacing:.5px">AFFICHER LES SAUVEGARDES DE</span>
       <select class="log-select" id="backup-select" onchange="changeBackupApp()" style="flex:0;min-width:160px">
@@ -2885,6 +2915,37 @@ async function loadTasks() {
   c.innerHTML = `<div class="settings-list">${tasks.map(taskRow).join('')}</div>`;
 }
 
+function computeNextRun(t) {
+  if (!t.enabled || !t.schedule) return null;
+  const now = new Date();
+  const h = t.schedule.hour ?? 0;
+  const m = t.schedule.minute ?? 0;
+  const days = t.schedule.days; // undefined = every day, or [0-6]
+
+  // Start from today
+  for (let offset = 0; offset <= 7; offset++) {
+    const candidate = new Date(now);
+    candidate.setDate(now.getDate() + offset);
+    candidate.setHours(h, m, 0, 0);
+    if (candidate <= now) continue;
+    if (!days?.length || days.includes(candidate.getDay())) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function formatRelTime(d) {
+  if (!d) return null;
+  const diff = d - Date.now();
+  if (diff < 0) return 'maintenant';
+  const h = Math.floor(diff / 3600000);
+  const min = Math.floor((diff % 3600000) / 60000);
+  if (h > 23) return `dans ${Math.floor(h/24)}j ${h%24}h`;
+  if (h > 0) return `dans ${h}h ${min}m`;
+  return `dans ${min}m`;
+}
+
 function taskRow(t) {
   const typeLabel  = TASK_TYPE_LABELS[t.type]  || t.type;
   const scopeLabel = t.scope ? ` — ${TASK_SCOPE_LABELS[t.scope] || t.scope}` : '';
@@ -2898,6 +2959,8 @@ function taskRow(t) {
     ? new Date(t.last_run).toLocaleString('fr-FR') : '—';
   const lastStatus = t.last_status || '';
   const statusDot  = lastStatus === 'ok' ? 'dot-ok' : lastStatus === 'error' ? 'dot-err' : 'dot-idle';
+  const nextRun    = computeNextRun(t);
+  const nextRunStr = nextRun ? nextRun.toLocaleString('fr-FR', {weekday:'short',hour:'2-digit',minute:'2-digit'}) + ` (${formatRelTime(nextRun)})` : '—';
 
   return `
     <div class="settings-card" style="display:flex;align-items:center;gap:10px;padding:10px 12px">
@@ -2916,6 +2979,7 @@ function taskRow(t) {
           Dernière exécution : ${escapeHtml(lastRun)}
           ${lastStatus ? `&nbsp;<span class="srv-dot ${statusDot}" style="display:inline-block;margin-left:2px"></span>` : ''}
         </div>
+        ${nextRun ? `<div style="font-size:8px;color:var(--accent);margin-top:1px"><i class="ti ti-clock-play" style="font-size:8px"></i> Prochaine : ${escapeHtml(nextRunStr)}</div>` : ''}
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
         <button class="btn-sm" title="Exécuter maintenant" onclick="runTaskNow('${escapeHtml(t.id)}')">
@@ -7407,6 +7471,132 @@ function quickNavKey(e) {
 function qnGo(id) {
   closeQuickNav();
   goSection(id);
+}
+
+// ── Container inspect modal ───────────────────────────────────────────────────
+let _inspectData = null;
+
+async function openInspect(appId) {
+  const overlay = document.getElementById('inspect-overlay');
+  const title   = document.getElementById('inspect-title');
+  const body    = document.getElementById('inspect-body');
+  const tab     = document.getElementById('inspect-tab');
+  if (!overlay) return;
+
+  overlay.style.display = 'flex';
+  title.textContent = `// INSPECT — ${appId.toUpperCase()}`;
+  if (tab) tab.value = 'summary';
+  body.innerHTML = `<div class="dash-loading"><span class="spinner"></span> Chargement...</div>`;
+  _inspectData = null;
+
+  try {
+    const r = await fetch(`/sys/docker-inspect/${encodeURIComponent(appId)}`);
+    if (r.ok) {
+      const d = await r.json();
+      _inspectData = d.container;
+    }
+  } catch(e) {}
+
+  if (!_inspectData) {
+    body.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-alert-circle"></i></div><div class="empty-title">INTROUVABLE</div><div class="empty-sub">Le conteneur ${appId} n'est pas trouvable via Docker inspect.</div></div>`;
+    return;
+  }
+
+  renderInspectTab('summary');
+}
+
+function closeInspect() {
+  const overlay = document.getElementById('inspect-overlay');
+  if (overlay) overlay.style.display = 'none';
+  _inspectData = null;
+}
+
+function switchInspectTab(tab) {
+  renderInspectTab(tab);
+}
+
+function renderInspectTab(tab) {
+  const body = document.getElementById('inspect-body');
+  if (!body || !_inspectData) return;
+  const d = _inspectData;
+
+  if (tab === 'summary') {
+    const state  = d.State || {};
+    const config = d.Config || {};
+    const net    = d.NetworkSettings || {};
+    const created = d.Created ? new Date(d.Created).toLocaleString('fr-FR') : '—';
+    const started = state.StartedAt ? new Date(state.StartedAt).toLocaleString('fr-FR') : '—';
+    const upSince = state.StartedAt ? formatRelTime(new Date(Date.now() + (Date.now() - new Date(state.StartedAt).getTime()) * -1) * -1) : '—';
+    const stateColor = state.Running ? 'var(--green-b)' : 'var(--red-b)';
+    const stateLabel = state.Running ? 'EN COURS' : state.Status?.toUpperCase() || '—';
+    const image = config.Image || '—';
+    const hostname = config.Hostname || '—';
+    const restartCount = d.RestartCount ?? '—';
+    const networks = Object.entries(net.Networks || {}).map(([name, info]) =>
+      `<div class="setting-row"><span>${escapeHtml(name)}</span><span class="setting-val" style="font-family:monospace">${escapeHtml(info.IPAddress || '—')}</span></div>`
+    ).join('');
+
+    body.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${stateColor}"></span>
+        <span style="font-size:11px;font-weight:700;color:${stateColor}">${stateLabel}</span>
+        <span style="font-size:8px;color:var(--text3)">· ${escapeHtml(d.Name?.replace(/^\//,'') || '?')}</span>
+      </div>
+      <div class="settings-card" style="margin-bottom:8px">
+        <div class="settings-title">INFOS</div>
+        <div class="setting-row"><span>IMAGE</span><span class="setting-val" style="font-family:monospace;font-size:8px">${escapeHtml(image)}</span></div>
+        <div class="setting-row"><span>HOSTNAME</span><span class="setting-val">${escapeHtml(hostname)}</span></div>
+        <div class="setting-row"><span>CRÉÉ</span><span class="setting-val">${escapeHtml(created)}</span></div>
+        <div class="setting-row"><span>DÉMARRÉ</span><span class="setting-val">${escapeHtml(started)}</span></div>
+        <div class="setting-row"><span>REDÉMARRAGES</span><span class="setting-val${restartCount > 3 ? ';color:var(--warn)' : ''}">${restartCount}</span></div>
+      </div>
+      ${networks ? `<div class="settings-card"><div class="settings-title">RÉSEAUX</div>${networks}</div>` : ''}`;
+  } else if (tab === 'env') {
+    const envVars = (_inspectData.Config?.Env || []).sort();
+    if (!envVars.length) { body.innerHTML = `<div class="empty-state"><div class="empty-title">AUCUNE VARIABLE</div></div>`; return; }
+    body.innerHTML = `<div style="display:flex;flex-direction:column;gap:3px">
+      ${envVars.map(e => {
+        const [key, ...rest] = e.split('=');
+        const val = rest.join('=');
+        const isSensitive = /password|secret|key|token|api/i.test(key);
+        return `<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);align-items:baseline">
+          <span style="font-family:monospace;font-size:8px;color:var(--accent);flex-shrink:0;min-width:120px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(key)}</span>
+          <span style="font-family:monospace;font-size:8px;color:${isSensitive?'var(--text3)':'var(--text2)'};word-break:break-all">${isSensitive?'••••••••':escapeHtml(val)}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+  } else if (tab === 'mounts') {
+    const mounts = _inspectData.Mounts || [];
+    if (!mounts.length) { body.innerHTML = `<div class="empty-state"><div class="empty-title">AUCUN MONTAGE</div></div>`; return; }
+    body.innerHTML = `<div style="display:flex;flex-direction:column;gap:4px">
+      ${mounts.map(m => `
+        <div style="background:var(--bg3);border-radius:4px;padding:6px 10px;border:1px solid var(--border)">
+          <div style="font-size:8px;color:var(--text3);margin-bottom:2px">${escapeHtml(m.Type || 'bind').toUpperCase()} · ${m.RW ? 'RW' : 'RO'}</div>
+          <div style="font-family:monospace;font-size:8px;color:var(--text2)">
+            <span style="color:var(--text3)">HÔTE:</span> ${escapeHtml(m.Source || '—')}<br>
+            <span style="color:var(--text3)">CONT:</span> ${escapeHtml(m.Destination || '—')}
+          </div>
+        </div>`).join('')}
+    </div>`;
+  } else if (tab === 'ports') {
+    const ports = _inspectData.NetworkSettings?.Ports || {};
+    const portEntries = Object.entries(ports);
+    if (!portEntries.length) { body.innerHTML = `<div class="empty-state"><div class="empty-title">AUCUN PORT EXPOSÉ</div></div>`; return; }
+    body.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:9px">
+      <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+        <th style="padding:4px 8px;text-align:left">PORT CONTAINER</th>
+        <th style="padding:4px 8px;text-align:left">PORT HÔTE</th>
+      </tr></thead>
+      <tbody>${portEntries.map(([cPort, bindings]) => `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:4px 8px;font-family:monospace;color:var(--text1)">${escapeHtml(cPort)}</td>
+          <td style="padding:4px 8px;font-family:monospace;color:var(--text2)">${(bindings||[]).map(b=>escapeHtml(b.HostPort||'?')).join(', ') || '—'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  } else if (tab === 'raw') {
+    body.innerHTML = `<pre style="font-size:8px;color:var(--text2);overflow:auto;white-space:pre-wrap;word-break:break-all">${escapeHtml(JSON.stringify(_inspectData, null, 2))}</pre>`;
+  }
 }
 
 // ── Help modal ────────────────────────────────────────────────────────────────

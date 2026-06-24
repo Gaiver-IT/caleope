@@ -1018,6 +1018,9 @@ func main() {
 	mux.HandleFunc("/sys/processes", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleSysProcesses(w, r)
 	}))
+	mux.HandleFunc("/sys/docker-inspect/", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerInspect(w, r)
+	}))
 	mux.HandleFunc("/sys/firewall", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleSysFirewall(w, r)
 	}))

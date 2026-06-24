@@ -536,6 +536,38 @@ func handleSysProcesses(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"processes": procs, "success": true})
 }
 
+// ── Docker inspect ────────────────────────────────────────────────────────────
+
+func handleDockerInspect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/sys/docker-inspect/")
+	name = strings.Trim(name, "/")
+	if name == "" || strings.Contains(name, "..") || strings.Contains(name, "/") {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid name"})
+		return
+	}
+
+	out, err := exec.Command("docker", "inspect", name).Output()
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error(), "success": false})
+		return
+	}
+
+	var result []json.RawMessage
+	if err := json.Unmarshal(out, &result); err != nil || len(result) == 0 {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "parse error", "success": false})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"container": result[0], "success": true})
+}
+
 // ── Firewall UFW ──────────────────────────────────────────────────────────────
 
 type fwRule struct {
