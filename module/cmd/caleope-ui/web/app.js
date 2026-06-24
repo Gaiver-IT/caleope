@@ -4199,7 +4199,7 @@ async function loadMemosRecent() {
   const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
     class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR MEMOS</a>` : '';
 
-  const r = await fetch('/ui/proxy/memos/api/v1/memos?limit=20&rowStatus=NORMAL');
+  const r = await fetch('/ui/proxy/memos/api/v1/memos?pageSize=20');
   if (!r.ok) {
     c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-notes"></i></div>
       <div class="empty-title">MEMOS INDISPONIBLE</div>
@@ -4212,7 +4212,9 @@ async function loadMemosRecent() {
   const list = Array.isArray(memos) ? memos : (memos.memos || []);
 
   const rows = list.slice(0, 10).map(m => {
-    const date = m.createdAt ? new Date(m.createdAt * 1000).toLocaleDateString('fr-FR') : '';
+    // memos v0.29+ retourne createTime/updateTime en ISO string ; v0.x retourne createdTs en unix
+    const ts = m.createTime || m.createdAt;
+    const date = ts ? new Date(typeof ts === 'number' ? ts * 1000 : ts).toLocaleDateString('fr-FR') : '';
     const preview = (m.content || '').slice(0, 120).replace(/\n/g, ' ');
     return `
       <div class="loc-row" style="flex-direction:column;align-items:flex-start;gap:2px">
