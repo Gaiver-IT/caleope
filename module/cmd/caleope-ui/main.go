@@ -481,6 +481,9 @@ func main() {
 
 		// PhotoPrism — gestionnaire de photos
 		"photoprism": {containerName: "photoprism", containerPort: 2342},
+
+		// Kavita — lecteur manga/comics/ebooks
+		"kavita": {containerName: "kavita", containerPort: 5000},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.

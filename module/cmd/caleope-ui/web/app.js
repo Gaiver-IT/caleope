@@ -477,6 +477,11 @@ const HARDCODED_PARAMS = {
     { id: 'PHOTOPRISM_ADMIN_PASSWORD', label: 'Mot de passe admin', type: 'secret', default: '', required: false,
       description: 'Mot de passe du compte admin' },
   ],
+
+  'kavita': [
+    { id: 'KAVITA_PORT_WEB', label: 'Port web', type: 'port', default: '5001', required: false,
+      description: 'Port d\'accès à l\'interface Kavita' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -2435,6 +2440,13 @@ const APP_PANELS = {
     icon: 'ti-camera',
     panels: [
       { id: 'panel-photoprism-stats', label: 'STATISTIQUES', icon: 'ti-chart-bar', load: loadPhotoprismStats },
+    ],
+  },
+  'kavita': {
+    group: '// MÉDIAS',
+    icon: 'ti-books',
+    panels: [
+      { id: 'panel-kavita-library', label: 'BIBLIOTHÈQUE', icon: 'ti-books', load: loadKavitaLibrary },
     ],
   },
 };
@@ -4858,6 +4870,25 @@ async function loadCalibreBooks() {
         <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
     </div>
     ${rows}`;
+}
+
+// ── Kavita — Bibliothèque manga/comics ───────────────────────────────────────
+async function loadKavitaLibrary() {
+  const c = document.getElementById('content-panel-kavita-library');
+  if (!c) return;
+
+  const appDomain = S.apps.find(a => a.id === 'kavita')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR KAVITA</a>`
+    : '';
+
+  // Kavita n'expose pas d'API public sans auth — on affiche juste un iframe
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${adminLink}</div>
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:300px">
+      <iframe src="/ui/proxy/kavita/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+        allow="fullscreen" title="Kavita"></iframe>
+    </div>`;
 }
 
 // ── Navidrome — Bibliothèque musicale ────────────────────────────────────────
