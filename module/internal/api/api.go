@@ -1502,6 +1502,33 @@ func (s *Server) handleSystemInfo() (map[string]interface{}, error) {
 		kernel = strings.TrimSpace(string(out))
 	}
 
+	// RAM depuis /proc/meminfo
+	var memTotal, memAvailable uint64
+	if raw, err := os.ReadFile("/proc/meminfo"); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			var val uint64
+			if strings.HasPrefix(line, "MemTotal:") {
+				fmt.Sscanf(strings.TrimPrefix(line, "MemTotal:"), "%d", &val)
+				memTotal = val * 1024
+			} else if strings.HasPrefix(line, "MemAvailable:") {
+				fmt.Sscanf(strings.TrimPrefix(line, "MemAvailable:"), "%d", &val)
+				memAvailable = val * 1024
+			}
+		}
+	}
+
+	// Disque depuis syscall.Statfs sur le répertoire base
+	var diskTotal, diskFree uint64
+	if stat, err := os.Stat(s.baseDir); err == nil && stat.IsDir() {
+		out, err2 := exec.Command("df", "-B1", "--output=size,avail", s.baseDir).Output()
+		if err2 == nil {
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if len(lines) >= 2 {
+				fmt.Sscanf(strings.TrimSpace(lines[1]), "%d %d", &diskTotal, &diskFree)
+			}
+		}
+	}
+
 	return map[string]interface{}{
 		"hostname":        hostname,
 		"uptime_seconds":  uptimeSec,
@@ -1509,6 +1536,12 @@ func (s *Server) handleSystemInfo() (map[string]interface{}, error) {
 		"os":              osName,
 		"cpu_count":       cpuCount,
 		"kernel":          kernel,
+		"mem_total":       memTotal,
+		"mem_available":   memAvailable,
+		"mem_used":        memTotal - memAvailable,
+		"disk_total":      diskTotal,
+		"disk_free":       diskFree,
+		"disk_used":       diskTotal - diskFree,
 	}, nil
 }
 

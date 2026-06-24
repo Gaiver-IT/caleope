@@ -54,6 +54,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -215,7 +216,7 @@ func (s *Server) StartHTTP(port int) error {
 	// /api/v1/tasks/{id}[/action]
 	mux.Handle("/api/v1/tasks/", s.auth(http.HandlerFunc(s.routeTask)))
 
-	// GET /api/v1/system — informations système (hostname, uptime, OS, CPU)
+	// GET /api/v1/system — informations système (hostname, uptime, OS, CPU, RAM, disque)
 	mux.Handle("/api/v1/system", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
@@ -227,6 +228,35 @@ func (s *Server) StartHTTP(port int) error {
 			return
 		}
 		s.httpOK(w, data)
+	})))
+
+	// GET /api/v1/containers — stats Docker de tous les conteneurs (docker stats --no-stream)
+	mux.Handle("/api/v1/containers", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		out, err := exec.Command("docker", "stats", "--no-stream",
+			"--format", `{"name":"{{.Name}}","cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","mem_pct":"{{.MemPerc}}","net_io":"{{.NetIO}}","block_io":"{{.BlockIO}}"}`).Output()
+		if err != nil {
+			s.httpOK(w, map[string]interface{}{"containers": []interface{}{}})
+			return
+		}
+		var containers []map[string]string
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var ct map[string]string
+			if err2 := json.Unmarshal([]byte(line), &ct); err2 == nil {
+				containers = append(containers, ct)
+			}
+		}
+		if containers == nil {
+			containers = []map[string]string{}
+		}
+		s.httpOK(w, map[string]interface{}{"containers": containers})
 	})))
 
 	addr := fmt.Sprintf(":%d", port)

@@ -1349,12 +1349,14 @@ async function removeLocation(id) {
 
 // ── SECTION: STATS (dashboard) ────────────────────────────────────────────────
 async function loadStats() {
-  const [statsResp, sysResp] = await Promise.all([
+  const [statsResp, sysResp, ctResp] = await Promise.all([
     api.get('/api/v1/stats?disk=true'),
     api.get('/api/v1/system'),
+    api.get('/api/v1/containers'),
   ]);
-  S.stats  = statsResp?.data || {};
-  S.sysinfo = sysResp?.data  || {};
+  S.stats      = statsResp?.data || {};
+  S.sysinfo    = sysResp?.data   || {};
+  S.containers = ctResp?.data?.containers || [];
   renderStats();
 }
 
@@ -1362,13 +1364,32 @@ function renderStats() {
   const c = document.getElementById('content-stats');
   if (!c) return;
 
-  const ramUsedGb  = S.stats.mem_used_mb  ? (S.stats.mem_used_mb  / 1024).toFixed(1) : '—';
-  const ramTotalGb = S.stats.mem_total_mb ? (S.stats.mem_total_mb / 1024).toFixed(1) : '—';
-  const ram  = S.stats.mem_total_mb ? Math.round(S.stats.mem_used_mb  / S.stats.mem_total_mb  * 100) : 0;
-  const disk = S.stats.disk_total_gb ? Math.round(S.stats.disk_used_gb / S.stats.disk_total_gb * 100) : 0;
-  const diskUsedGb  = S.stats.disk_used_gb  ? S.stats.disk_used_gb.toFixed(1)  : '—';
-  const diskTotalGb = S.stats.disk_total_gb ? S.stats.disk_total_gb.toFixed(1) : '—';
   const sys = S.sysinfo || {};
+
+  // RAM : priorité aux données de /api/v1/system (bytes), fallback /api/v1/stats (MB)
+  const memTotal  = sys.mem_total  || (S.stats.mem_total_mb  ? S.stats.mem_total_mb  * 1024 * 1024 : 0);
+  const memUsed   = sys.mem_used   || (S.stats.mem_used_mb   ? S.stats.mem_used_mb   * 1024 * 1024 : 0);
+  const ramUsedGb  = memTotal  ? (memUsed  / 1073741824).toFixed(1) : '—';
+  const ramTotalGb = memTotal  ? (memTotal / 1073741824).toFixed(1) : '—';
+  const ram = memTotal ? Math.round(memUsed / memTotal * 100) : 0;
+
+  // Disque : priorité /api/v1/system (bytes), fallback /api/v1/stats (GB)
+  const diskTotal = sys.disk_total || (S.stats.disk_total_gb ? S.stats.disk_total_gb * 1073741824 : 0);
+  const diskUsed  = sys.disk_used  || (S.stats.disk_used_gb  ? S.stats.disk_used_gb  * 1073741824 : 0);
+  const diskUsedGb  = diskTotal ? (diskUsed  / 1073741824).toFixed(1) : '—';
+  const diskTotalGb = diskTotal ? (diskTotal / 1073741824).toFixed(1) : '—';
+  const disk = diskTotal ? Math.round(diskUsed / diskTotal * 100) : 0;
+
+  // Stats conteneurs
+  const containers = S.containers || [];
+  const ctRows = containers.length > 0 ? containers.map(ct => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0"><div style="font-size:10px;font-weight:700">${escapeHtml(ct.name || '?')}</div></div>
+      <div style="display:flex;gap:10px;font-size:9px;color:var(--text3)">
+        <span title="CPU">${escapeHtml(ct.cpu || '—')}</span>
+        <span title="RAM">${escapeHtml(ct.mem?.split(' / ')[0] || '—')}</span>
+      </div>
+    </div>`).join('') : '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune donnée.</div>';
 
   c.innerHTML = `
     <div class="settings-card">
@@ -1390,6 +1411,11 @@ function renderStats() {
         <div class="seg-bar">${segBar(disk, 20, 'on-ok')}</div>
       </div>
     </div>
+    ${containers.length > 0 ? `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">CONTENEURS (${containers.length})</div>
+      <div style="padding:0 12px 12px">${ctRows}</div>
+    </div>` : ''}
     <div class="settings-card">
       <div class="settings-title">DAEMON</div>
       <div class="setting-row"><span>SOCKET</span><span class="setting-val">/run/caleoped.sock</span></div>
