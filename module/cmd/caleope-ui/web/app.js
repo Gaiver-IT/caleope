@@ -134,12 +134,16 @@ function startClock() {
     el.textContent = new Date().toLocaleTimeString('fr-FR', { hour12: false });
     // Countdown pour le dashboard
     if (S._dashRefreshedAt && S.section === 'dashboard') {
-      const elapsed = Math.floor((Date.now() - S._dashRefreshedAt) / 1000);
-      const remaining = Math.max(0, 30 - (elapsed % 30));
+      const interval = parseInt(localStorage.getItem('caleope-refresh-interval') || '30');
       const cntEl = document.getElementById('dash-next-refresh');
       if (cntEl) {
-        cntEl.textContent = remaining <= 5 ? `dans ${remaining}s…` : `prochain dans ${remaining}s`;
-        cntEl.style.color = remaining <= 5 ? 'var(--warn)' : 'var(--accent)';
+        if (!interval) { cntEl.textContent = 'auto OFF'; cntEl.style.color = 'var(--text3)'; }
+        else {
+          const elapsed = Math.floor((Date.now() - S._dashRefreshedAt) / 1000);
+          const remaining = Math.max(0, interval - (elapsed % interval));
+          cntEl.textContent = remaining <= 5 ? `dans ${remaining}s…` : `prochain dans ${remaining}s`;
+          cntEl.style.color = remaining <= 5 ? 'var(--warn)' : 'var(--accent)';
+        }
       }
     }
   };
@@ -2161,7 +2165,9 @@ async function loadStatsDockerWidget() {
             return `${m}m`;
           })();
           return `<tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:3px 8px 3px 12px;font-weight:600;color:var(--text1)">${escapeHtml(s.name.replace(/^\//, ''))}</td>
+            <td style="padding:3px 8px 3px 12px;font-weight:600;color:var(--accent);cursor:pointer"
+              title="Voir les logs" onclick="openLogs('${escapeHtml(s.name.replace(/^\//, ''))}')">
+              ${escapeHtml(s.name.replace(/^\//, ''))}</td>
             <td style="padding:3px 6px;text-align:right;font-family:monospace;color:${cpu>50?'var(--red-b)':cpu>20?'var(--warn)':'var(--ok)'}">${escapeHtml(s.cpu)}</td>
             <td style="padding:3px 6px;text-align:right;font-family:monospace;color:${mem>80?'var(--red-b)':mem>50?'var(--warn)':'var(--text1)'}">${escapeHtml(s.mem)}</td>
             <td style="padding:3px 6px;text-align:right;font-family:monospace;color:var(--text3)">${escapeHtml(s.net_io)}</td>
@@ -2315,6 +2321,17 @@ async function loadSettings() {
       <div class="settings-title">EXPORT SYSTÈME</div>
       <div style="font-size:10px;color:var(--text3);margin-bottom:10px">Télécharger un snapshot JSON de l'état courant (apps, tâches, événements)</div>
       <button id="snapshot-btn" class="btn" onclick="exportSystemSnapshot()"><i class="ti ti-download"></i> SNAPSHOT</button>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">ACTUALISATION AUTOMATIQUE</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">Intervalle de rafraîchissement du tableau de bord et des stats</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        ${[15,30,60,120,0].map(v => {
+          const cur = parseInt(localStorage.getItem('caleope-refresh-interval') || '30');
+          const label = v === 0 ? 'OFF' : v < 60 ? `${v}s` : `${v/60}m`;
+          return `<button class="btn-sm${cur===v?' active':''}" onclick="setRefreshInterval(${v})" style="font-size:9px">${label}</button>`;
+        }).join('')}
+      </div>
     </div>
     <div class="settings-card">
       <div class="settings-title">SESSION</div>
@@ -7176,19 +7193,31 @@ function showApp() {
   restoreSbGroups();
   startClock();
   goSection('dashboard');
-  // Auto-refresh dashboard + stats toutes les 30s
+  // Auto-refresh dashboard + stats (interval configurable)
+  _startDashRefresh();
+  pollEventsBadge();
+}
+
+function _startDashRefresh() {
   if (_dashRefreshInterval) clearInterval(_dashRefreshInterval);
+  const interval = parseInt(localStorage.getItem('caleope-refresh-interval') || '30');
+  if (!interval) return;
   _dashRefreshInterval = setInterval(async () => {
     if (S.section === 'dashboard') loadDashboard();
     else if (S.section === 'stats') loadStats();
     else {
-      // Refresh sysbar stats en arrière-plan même hors dashboard
       const r = await api.get('/api/v1/stats').catch(() => null);
       if (r?.data) { Object.assign(S.stats, r.data); updateTbSysbar(); }
     }
     pollEventsBadge();
-  }, 30000);
-  pollEventsBadge();
+  }, interval * 1000);
+}
+
+function setRefreshInterval(seconds) {
+  try { localStorage.setItem('caleope-refresh-interval', String(seconds)); } catch(e) {}
+  _startDashRefresh();
+  loadSettings();
+  notify(seconds ? `Actualisation : ${seconds < 60 ? seconds+'s' : seconds/60+'m'}` : 'Actualisation désactivée', 'ok');
 }
 
 function refreshSection() {
