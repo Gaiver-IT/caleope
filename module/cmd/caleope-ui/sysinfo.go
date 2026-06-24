@@ -680,13 +680,14 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 }
 
 type dockerStatEntry struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	CPU     string `json:"cpu"`
-	Mem     string `json:"mem"`
-	MemPerc string `json:"mem_perc"`
-	NetIO   string `json:"net_io"`
-	BlockIO string `json:"block_io"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	CPU       string `json:"cpu"`
+	Mem       string `json:"mem"`
+	MemPerc   string `json:"mem_perc"`
+	NetIO     string `json:"net_io"`
+	BlockIO   string `json:"block_io"`
+	StartedAt string `json:"started_at,omitempty"`
 }
 
 func handleDockerStats(w http.ResponseWriter, r *http.Request) {
@@ -711,6 +712,28 @@ func handleDockerStats(w http.ResponseWriter, r *http.Request) {
 	}
 	if stats == nil {
 		stats = []dockerStatEntry{}
+	}
+	// Enrich with start time from docker inspect
+	if len(stats) > 0 {
+		names := make([]string, len(stats))
+		for i, s := range stats {
+			names[i] = s.Name
+		}
+		inspectOut, err := exec.Command("docker", append([]string{"inspect", "--format", `{{.Name}}|{{.State.StartedAt}}`}, names...)...).Output()
+		if err == nil {
+			inspectSc := bufio.NewScanner(bytes.NewReader(inspectOut))
+			startMap := map[string]string{}
+			for inspectSc.Scan() {
+				parts := strings.SplitN(inspectSc.Text(), "|", 2)
+				if len(parts) == 2 {
+					startMap[strings.TrimPrefix(parts[0], "/")] = parts[1]
+				}
+			}
+			for i := range stats {
+				cleanName := strings.TrimPrefix(stats[i].Name, "/")
+				stats[i].StartedAt = startMap[cleanName]
+			}
+		}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"stats": stats})
 }

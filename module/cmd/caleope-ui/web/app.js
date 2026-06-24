@@ -2098,16 +2098,28 @@ async function loadStatsDockerWidget() {
           <th style="padding:3px 8px 3px 12px;text-align:left">NOM</th>
           <th style="padding:3px 6px;text-align:right">CPU</th>
           <th style="padding:3px 6px;text-align:right">RAM</th>
-          <th style="padding:3px 12px 3px 6px;text-align:right">NET I/O</th>
+          <th style="padding:3px 6px;text-align:right">NET I/O</th>
+          <th style="padding:3px 12px 3px 6px;text-align:right">UPTIME</th>
         </tr></thead>
         <tbody>${sorted.map(s => {
           const cpu = cpuNum(s.cpu);
           const mem = memNum(s.mem_perc);
+          const uptimeStr = (() => {
+            if (!s.started_at) return '—';
+            const diff = Date.now() - new Date(s.started_at).getTime();
+            if (diff < 0) return '—';
+            const h = Math.floor(diff / 3600000);
+            const m = Math.floor((diff % 3600000) / 60000);
+            if (h > 48) return `${Math.floor(h/24)}j`;
+            if (h > 0) return `${h}h${m}m`;
+            return `${m}m`;
+          })();
           return `<tr style="border-bottom:1px solid var(--border)">
             <td style="padding:3px 8px 3px 12px;font-weight:600;color:var(--text1)">${escapeHtml(s.name.replace(/^\//, ''))}</td>
             <td style="padding:3px 6px;text-align:right;font-family:monospace;color:${cpu>50?'var(--red-b)':cpu>20?'var(--warn)':'var(--ok)'}">${escapeHtml(s.cpu)}</td>
             <td style="padding:3px 6px;text-align:right;font-family:monospace;color:${mem>80?'var(--red-b)':mem>50?'var(--warn)':'var(--text1)'}">${escapeHtml(s.mem)}</td>
-            <td style="padding:3px 12px 3px 6px;text-align:right;font-family:monospace;color:var(--text3)">${escapeHtml(s.net_io)}</td>
+            <td style="padding:3px 6px;text-align:right;font-family:monospace;color:var(--text3)">${escapeHtml(s.net_io)}</td>
+            <td style="padding:3px 12px 3px 6px;text-align:right;font-family:monospace;color:var(--text3)">${uptimeStr}</td>
           </tr>`;
         }).join('')}
         </tbody>
@@ -5116,17 +5128,27 @@ async function loadMemosRecent() {
   const memos = await r.json();
   const list = Array.isArray(memos) ? memos : (memos.memos || []);
 
-  const rows = list.slice(0, 10).map(m => {
-    // memos v0.29+ retourne createTime/updateTime en ISO string ; v0.x retourne createdTs en unix
+  window._memosAll = list;
+
+  const memoRow = m => {
     const ts = m.createTime || m.createdAt;
     const date = ts ? new Date(typeof ts === 'number' ? ts * 1000 : ts).toLocaleDateString('fr-FR') : '';
-    const preview = (m.content || '').slice(0, 120).replace(/\n/g, ' ');
+    const preview = (m.content || '').slice(0, 140).replace(/\n/g, ' ');
+    const memoId = m.name || m.uid || m.id;
     return `
-      <div class="loc-row" style="flex-direction:column;align-items:flex-start;gap:2px">
-        <div style="font-size:9px;color:var(--text3)">${escapeHtml(date)}</div>
-        <div style="font-size:10px;color:var(--text2)">${escapeHtml(preview)}${preview.length >= 120 ? '…' : ''}</div>
+      <div class="loc-row" style="flex-direction:column;align-items:flex-start;gap:2px;position:relative" data-memo-id="${escapeHtml(String(memoId))}">
+        <div style="display:flex;align-items:center;gap:6px;width:100%">
+          <span style="font-size:8px;color:var(--text3);flex:1">${escapeHtml(date)}</span>
+          <button class="btn-sm danger" title="Supprimer" style="padding:1px 5px;font-size:8px"
+            onclick="deleteMemo('${escapeHtml(String(memoId))}')">
+            <i class="ti ti-trash" style="font-size:9px"></i>
+          </button>
+        </div>
+        <div style="font-size:10px;color:var(--text2)">${escapeHtml(preview)}${preview.length >= 140 ? '…' : ''}</div>
       </div>`;
-  }).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune note.</div>';
+  };
+
+  const rows = list.slice(0, 20).map(memoRow).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune note.</div>';
 
   c.innerHTML = `
     <div class="settings-card" style="padding:12px;margin-bottom:12px">
@@ -5146,12 +5168,58 @@ async function loadMemosRecent() {
       </div>
     </div>
     <div class="settings-card" style="padding:0">
-      <div class="settings-title" style="padding:10px 12px">
-        <i class="ti ti-file-text" style="font-size:12px"></i> NOTES RÉCENTES (${list.length})
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 12px 6px">
+        <div class="settings-title" style="flex:1;margin:0">
+          <i class="ti ti-file-text" style="font-size:12px"></i> NOTES (${list.length})
+        </div>
+        <input id="memos-search" type="search" placeholder="Rechercher…"
+          oninput="filterMemos(this.value)"
+          style="font-size:9px;padding:3px 7px;background:var(--card);border:1px solid var(--border);
+                 border-radius:4px;color:var(--text1);width:120px;outline:none">
+        <button class="btn-sm" onclick="loadMemosRecent()"><i class="ti ti-refresh" style="font-size:9px"></i></button>
       </div>
-      <div style="padding:0 12px 12px">${rows}</div>
+      <div id="memos-rows" style="padding:0 12px 12px">${rows}</div>
     </div>
     ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+function filterMemos(q) {
+  const el = document.getElementById('memos-rows');
+  if (!el || !window._memosAll) return;
+  const qLow = q.toLowerCase();
+  const filtered = qLow
+    ? window._memosAll.filter(m => (m.content || '').toLowerCase().includes(qLow))
+    : window._memosAll;
+
+  const memoRow = m => {
+    const ts = m.createTime || m.createdAt;
+    const date = ts ? new Date(typeof ts === 'number' ? ts * 1000 : ts).toLocaleDateString('fr-FR') : '';
+    const preview = (m.content || '').slice(0, 140).replace(/\n/g, ' ');
+    const memoId = m.name || m.uid || m.id;
+    return `<div class="loc-row" style="flex-direction:column;align-items:flex-start;gap:2px" data-memo-id="${escapeHtml(String(memoId))}">
+      <div style="display:flex;align-items:center;gap:6px;width:100%">
+        <span style="font-size:8px;color:var(--text3);flex:1">${escapeHtml(date)}</span>
+        <button class="btn-sm danger" title="Supprimer" style="padding:1px 5px;font-size:8px"
+          onclick="deleteMemo('${escapeHtml(String(memoId))}')">
+          <i class="ti ti-trash" style="font-size:9px"></i>
+        </button>
+      </div>
+      <div style="font-size:10px;color:var(--text2)">${escapeHtml(preview)}${preview.length >= 140 ? '…' : ''}</div>
+    </div>`;
+  };
+
+  el.innerHTML = filtered.slice(0, 20).map(memoRow).join('') ||
+    '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun résultat.</div>';
+}
+
+async function deleteMemo(memoId) {
+  if (!confirm('Supprimer cette note ?')) return;
+  // memos v0.29+ uses name like "memos/123", DELETE /api/v1/{name}
+  // v0.x uses numeric id, DELETE /api/v1/memo/{id}
+  const url = memoId.includes('/') ? `/ui/proxy/memos/api/v1/${memoId}` : `/ui/proxy/memos/api/v1/memo/${memoId}`;
+  const r = await fetch(url, { method: 'DELETE' });
+  if (r.ok) { notify('Note supprimée', 'ok'); loadMemosRecent(); }
+  else { notify('Erreur suppression', 'err'); }
 }
 
 async function createMemo() {
