@@ -3,13 +3,17 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ── Services systemd ──────────────────────────────────────────────────────────
@@ -709,6 +713,62 @@ func handleDockerStats(w http.ResponseWriter, r *http.Request) {
 		stats = []dockerStatEntry{}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"stats": stats})
+}
+
+type certInfo struct {
+	File      string `json:"file"`
+	Subject   string `json:"subject"`
+	Issuer    string `json:"issuer"`
+	NotBefore string `json:"not_before"`
+	NotAfter  string `json:"not_after"`
+	DaysLeft  int    `json:"days_left"`
+	Expired   bool   `json:"expired"`
+	SelfSigned bool  `json:"self_signed"`
+}
+
+func handleSysCerts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	certDir := "/opt/gaiver-it/caleope/data/traefik/certs"
+	entries, err := os.ReadDir(certDir)
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error(), "certs": []interface{}{}})
+		return
+	}
+	now := time.Now()
+	var certs []certInfo
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".crt") {
+			continue
+		}
+		path := filepath.Join(certDir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		block, _ := pem.Decode(data)
+		if block == nil {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			continue
+		}
+		daysLeft := int(cert.NotAfter.Sub(now).Hours() / 24)
+		certs = append(certs, certInfo{
+			File:       e.Name(),
+			Subject:    cert.Subject.CommonName,
+			Issuer:     cert.Issuer.CommonName,
+			NotBefore:  cert.NotBefore.Format("2006-01-02"),
+			NotAfter:   cert.NotAfter.Format("2006-01-02"),
+			DaysLeft:   daysLeft,
+			Expired:    now.After(cert.NotAfter),
+			SelfSigned: cert.Subject.CommonName == cert.Issuer.CommonName,
+		})
+	}
+	if certs == nil {
+		certs = []certInfo{}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"certs": certs})
 }
 
 func handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {

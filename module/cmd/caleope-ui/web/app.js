@@ -2250,6 +2250,9 @@ async function loadSettings() {
         <button class="btn-sm" onclick="resetTheme()" style="font-size:9px;color:var(--text3)">DÉFAUT</button>
       </div>
     </div>
+    <div class="settings-card" id="settings-certs-card">
+      <div class="settings-title">CERTIFICATS SSL <span style="font-size:8px;color:var(--text3);font-weight:400;letter-spacing:0">Chargement…</span></div>
+    </div>
     <div class="settings-card">
       <div class="settings-title">EXPORT SYSTÈME</div>
       <div style="font-size:10px;color:var(--text3);margin-bottom:10px">Télécharger un snapshot JSON de l'état courant (apps, tâches, événements)</div>
@@ -2263,6 +2266,42 @@ async function loadSettings() {
       </div>
     </div>
   `;
+  loadSettingsCerts();
+}
+
+async function loadSettingsCerts() {
+  const card = document.getElementById('settings-certs-card');
+  if (!card) return;
+  let data = null;
+  try {
+    const r = await fetch('/sys/certs');
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+
+  if (!data?.certs?.length) {
+    card.innerHTML = `<div class="settings-title">CERTIFICATS SSL</div>
+      <div style="font-size:9px;color:var(--text3)">Aucun certificat trouvé dans /opt/gaiver-it/caleope/data/traefik/certs/</div>`;
+    return;
+  }
+
+  const rows = data.certs.map(c => {
+    const color = c.expired ? 'var(--red-b)' : c.days_left < 14 ? 'var(--warn)' : 'var(--ok)';
+    const label = c.expired ? 'EXPIRÉ' : c.days_left < 14 ? `${c.days_left}j` : `${c.days_left}j`;
+    const badge = `<span style="font-size:8px;color:${color};font-weight:700">${label}</span>`;
+    return `<div class="setting-row" style="align-items:flex-start;padding:5px 0">
+      <div>
+        <div style="font-size:9px;font-weight:700">${escapeHtml(c.file)}</div>
+        <div style="font-size:8px;color:var(--text3);margin-top:2px">${escapeHtml(c.subject)} · ${c.self_signed ? 'auto-signé' : escapeHtml(c.issuer)}</div>
+        <div style="font-size:8px;color:var(--text3)">${escapeHtml(c.not_before)} → ${escapeHtml(c.not_after)}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+        ${badge}
+        ${c.self_signed ? '<span style="font-size:7px;color:var(--text3)">AUTO-SIGNÉ</span>' : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  card.innerHTML = `<div class="settings-title">CERTIFICATS SSL <span style="font-size:8px;color:var(--text3);font-weight:400;letter-spacing:0">${data.certs.length}</span></div>${rows}`;
 }
 
 async function exportSystemSnapshot() {
