@@ -1012,6 +1012,18 @@ func main() {
 	mux.HandleFunc("/sys/ports", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleSysPorts(w, r)
 	}))
+	mux.HandleFunc("/sys/netstat", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysNetstat(w, r)
+	}))
+	mux.HandleFunc("/sys/processes", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysProcesses(w, r)
+	}))
+	mux.HandleFunc("/sys/firewall", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysFirewall(w, r)
+	}))
+	mux.HandleFunc("/sys/docker-prune", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerPrune(w, r)
+	}))
 
 	// Notes post-install d'une app
 	mux.HandleFunc("/sys/app-notes/", requireSession(func(w http.ResponseWriter, r *http.Request) {

@@ -21,6 +21,10 @@
   --ok:      #5DCAA5;
   --warn:    #EF9F27;
   --err:     #E24B4A;
+  --green-b: #5DCAA5;
+  --red-b:   #E24B4A;
+  --accent:  #A78BFA;
+  --card:    #0e0e0e;
   --mono:    'JetBrains Mono', 'Fira Code', monospace;
 }
 

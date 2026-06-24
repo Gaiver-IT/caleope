@@ -1285,18 +1285,39 @@ function clearLogs() {
 }
 
 function filterLogLevel(level) {
+  S._logLevelFilter = level;
+  _applyLogFilters();
+}
+
+function filterLogText(q) {
+  S._logTextFilter = q.trim().toLowerCase();
+  _applyLogFilters();
+}
+
+function _applyLogFilters() {
   const body = document.getElementById('log-body');
   if (!body) return;
-  const lines = body.querySelectorAll('.log-line');
-  lines.forEach(line => {
-    if (!level) { line.style.display = ''; return; }
+  const level = S._logLevelFilter || '';
+  const q = S._logTextFilter || '';
+  body.querySelectorAll('.log-line').forEach(line => {
     const text = line.textContent.toLowerCase();
-    const visible =
+    const levelOk = !level ||
       (level === 'error' && (text.includes('error') || text.includes('err') || line.querySelector('.log-err'))) ||
       (level === 'warn'  && (text.includes('warn')  || line.querySelector('.log-warn'))) ||
       (level === 'info'  && (text.includes('info')  || line.querySelector('.log-step') || line.querySelector('.log-ok')));
-    line.style.display = visible ? '' : 'none';
+    const textOk = !q || text.includes(q);
+    line.style.display = (levelOk && textOk) ? '' : 'none';
   });
+}
+
+function toggleLogWrap() {
+  const body = document.getElementById('log-body');
+  const btn = document.getElementById('log-wrap-btn');
+  if (!body) return;
+  const isWrap = body.style.whiteSpace === 'pre-wrap';
+  body.style.whiteSpace = isWrap ? 'pre' : 'pre-wrap';
+  body.style.overflowX = isWrap ? 'auto' : 'hidden';
+  if (btn) btn.style.background = isWrap ? '' : 'var(--bg3)';
 }
 
 function appendLog(line) {
@@ -1658,9 +1679,15 @@ async function loadSecrets() {
     const bodyId = `secret-body-${a.app_id}`;
     const varsHtml = appVars
       ? Object.entries(appVars).map(([k, v]) => `
-          <div class="setting-row" style="font-family:monospace;font-size:9px">
+          <div class="setting-row" style="font-family:monospace;font-size:9px;align-items:center">
             <span style="color:var(--text2)">${escapeHtml(k)}</span>
-            <span class="setting-val" style="font-size:9px;word-break:break-all">${escapeHtml(v)}</span>
+            <div style="display:flex;align-items:center;gap:4px">
+              <span class="setting-val" style="font-size:9px;word-break:break-all">${escapeHtml(v)}</span>
+              <button class="btn-sm" title="Copier" style="padding:2px 5px;flex-shrink:0"
+                onclick="navigator.clipboard.writeText(${JSON.stringify(v)}).then(()=>notify('Copié','ok'))">
+                <i class="ti ti-copy" style="font-size:9px"></i>
+              </button>
+            </div>
           </div>`).join('')
       : `<div style="font-size:9px;color:var(--text3);padding:4px 0">Saisir le mot de passe maître pour afficher les valeurs.</div>`;
     return `
@@ -1893,7 +1920,12 @@ function renderStats() {
 
   // Stats conteneurs avec barres CPU/RAM
   const containers = S.containers || [];
-  const ctRows = containers.length > 0 ? containers.map(ct => {
+  const ctSorted = [...containers].sort((a, b) => {
+    const memA = parseFloat((a.mem || '').split(' / ')[0]) || 0;
+    const memB = parseFloat((b.mem || '').split(' / ')[0]) || 0;
+    return memB - memA;
+  });
+  const ctRows = containers.length > 0 ? ctSorted.map(ct => {
     const cpuStr = ct.cpu || '0%';
     const cpuPct = parseFloat(cpuStr) || 0;
     const cpuBar = cpuPct > 0 ? `<div style="width:60px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-top:2px">
@@ -1920,7 +1952,42 @@ function renderStats() {
     </div>`;
   }).join('') : '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune donnée.</div>';
 
+  // Score de santé simplifié
+  let healthScore = 100;
+  const healthIssues = [];
+  if (ram > 90)  { healthScore -= 30; healthIssues.push('RAM critique'); }
+  else if (ram > 80) { healthScore -= 10; healthIssues.push('RAM élevée'); }
+  if (disk > 90) { healthScore -= 30; healthIssues.push('Disque critique'); }
+  else if (disk > 80) { healthScore -= 10; healthIssues.push('Disque élevé'); }
+  const failedApps = S.apps.filter(a => a.status === 'error' || a.status === 'failed');
+  if (failedApps.length) { healthScore -= failedApps.length * 15; healthIssues.push(`${failedApps.length} app(s) en erreur`); }
+  healthScore = Math.max(0, Math.min(100, healthScore));
+  const healthColor = healthScore >= 80 ? 'var(--green-b)' : healthScore >= 50 ? 'var(--warn)' : 'var(--red-b)';
+  const healthLabel = healthScore >= 80 ? 'BON' : healthScore >= 50 ? 'DÉGRADÉ' : 'CRITIQUE';
+
   c.innerHTML = `
+    <div class="settings-card" style="padding:12px 14px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="position:relative;width:50px;height:50px;flex-shrink:0">
+          <svg viewBox="0 0 36 36" style="width:50px;height:50px;transform:rotate(-90deg)">
+            <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--bg3)" stroke-width="3"/>
+            <circle cx="18" cy="18" r="15.9" fill="none" stroke="${healthColor}" stroke-width="3"
+              stroke-dasharray="${healthScore} ${100-healthScore}" stroke-linecap="round"/>
+          </svg>
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:${healthColor}">${healthScore}</div>
+        </div>
+        <div style="flex:1">
+          <div style="font-size:8px;color:var(--text3);letter-spacing:1px">SANTÉ SYSTÈME</div>
+          <div style="font-size:14px;font-weight:900;color:${healthColor};letter-spacing:1.5px">${healthLabel}</div>
+          ${healthIssues.length ? `<div style="font-size:8px;color:var(--text3);margin-top:2px">${healthIssues.join(' · ')}</div>` : '<div style="font-size:8px;color:var(--text3);margin-top:2px">Aucun problème détecté</div>'}
+        </div>
+        <div style="text-align:right;font-size:9px;color:var(--text3)">
+          <div>${S.apps.filter(a=>a.status==='running').length} actives</div>
+          <div style="color:${S.apps.filter(a=>a.status==='error').length?'var(--red-b)':'var(--text3)'}">${S.apps.filter(a=>a.status==='error').length} erreurs</div>
+          <div>${containers.length} conteneurs</div>
+        </div>
+      </div>
+    </div>
     <div class="settings-card">
       <div class="settings-title">HÔTE</div>
       <div class="setting-row"><span>HOSTNAME</span><span class="setting-val">${escapeHtml(sys.hostname || '—')}</span></div>
@@ -1952,6 +2019,7 @@ function renderStats() {
       <div class="setting-row"><span>SOCKET</span><span class="setting-val">/run/caleoped.sock</span></div>
       <div class="setting-row"><span>APPS ACTIVES</span><span class="setting-val text-vio">${S.apps.filter(a => a.status === 'running').length}</span></div>
     </div>
+    <div id="stats-processes-widget" style="margin-top:8px"></div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">
       <div style="font-size:9px;color:var(--text3)">
         <i class="ti ti-refresh" style="font-size:9px"></i>
@@ -1971,6 +2039,58 @@ function renderStats() {
     clearInterval(S._statsTimer);
     S._statsTimer = setInterval(() => { if (S.section === 'stats') loadStats(); }, 5000);
   }
+  loadStatsProcessWidget();
+}
+
+async function loadStatsProcessWidget() {
+  const w = document.getElementById('stats-processes-widget');
+  if (!w) return;
+  w.innerHTML = `<div class="settings-card" style="padding:10px 12px">
+    <div class="settings-title" style="margin-bottom:6px">TOP PROCESSUS</div>
+    <div style="font-size:9px;color:var(--text3)"><span class="spinner" style="width:8px;height:8px;border-width:1px"></span> Chargement…</div>
+  </div>`;
+
+  const sortBy = w.dataset.sort || 'cpu';
+  let data = null;
+  try {
+    const r = await fetch('/sys/processes?sort=' + sortBy);
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+
+  if (!data?.processes?.length) { w.innerHTML = ''; return; }
+
+  const procs = data.processes;
+  w.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div style="display:flex;align-items:center;padding:10px 12px 6px;gap:8px">
+        <div class="settings-title" style="flex:1;margin:0">TOP PROCESSUS</div>
+        <button class="btn-sm${sortBy==='cpu'?' active':''}" onclick="statsSetProcSort('cpu')" style="font-size:8px">CPU</button>
+        <button class="btn-sm${sortBy==='mem'?' active':''}" onclick="statsSetProcSort('mem')" style="font-size:8px">RAM</button>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:8px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="padding:3px 8px 3px 12px;text-align:left">PID</th>
+          <th style="padding:3px 6px;text-align:left">UTILISATEUR</th>
+          <th style="padding:3px 6px;text-align:right">CPU%</th>
+          <th style="padding:3px 6px;text-align:right">RAM%</th>
+          <th style="padding:3px 12px 3px 6px;text-align:left">COMMANDE</th>
+        </tr></thead>
+        <tbody>${procs.map(p => `
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:3px 8px 3px 12px;font-family:monospace;color:var(--text3)">${escapeHtml(p.pid)}</td>
+            <td style="padding:3px 6px;color:var(--text2)">${escapeHtml(p.user)}</td>
+            <td style="padding:3px 6px;text-align:right;color:${parseFloat(p.cpu)>30?'var(--red-b)':parseFloat(p.cpu)>10?'var(--warn)':'var(--text1)'};font-family:monospace">${escapeHtml(p.cpu)}%</td>
+            <td style="padding:3px 6px;text-align:right;color:${parseFloat(p.mem)>20?'var(--red-b)':parseFloat(p.mem)>10?'var(--warn)':'var(--text1)'};font-family:monospace">${escapeHtml(p.mem)}%</td>
+            <td style="padding:3px 12px 3px 6px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="${escapeHtml(p.cmd)}">${escapeHtml(p.cmd)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function statsSetProcSort(sort) {
+  const w = document.getElementById('stats-processes-widget');
+  if (w) { w.dataset.sort = sort; loadStatsProcessWidget(); }
 }
 
 let _statsRefreshTimer = null;
@@ -2038,6 +2158,26 @@ async function loadSettings() {
       </div>
     </div>
     <div class="settings-card">
+      <div class="settings-title">THÈME</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">Couleur d'accentuation de l'interface</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        ${[
+          {name:'Violet', vio:'#7C3AED', vioB:'#A78BFA', vioDim:'#4C1D95', vioG:'#7C3AED14', accent:'#A78BFA'},
+          {name:'Bleu',   vio:'#1D6FDB', vioB:'#60A5FA', vioDim:'#1E3A6E', vioG:'#1D6FDB14', accent:'#60A5FA'},
+          {name:'Cyan',   vio:'#0E7490', vioB:'#22D3EE', vioDim:'#164E63', vioG:'#0E749014', accent:'#22D3EE'},
+          {name:'Vert',   vio:'#059669', vioB:'#34D399', vioDim:'#064E3B', vioG:'#05966914', accent:'#34D399'},
+          {name:'Rose',   vio:'#BE185D', vioB:'#F472B6', vioDim:'#831843', vioG:'#BE185D14', accent:'#F472B6'},
+          {name:'Orange', vio:'#C2410C', vioB:'#FB923C', vioDim:'#7C2D12', vioG:'#C2410C14', accent:'#FB923C'},
+        ].map(t => `
+          <button class="btn-sm" onclick="applyTheme(${JSON.stringify(t).replace(/"/g,"'")})"
+            style="display:flex;align-items:center;gap:5px;font-size:9px">
+            <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${t.vioB}"></span>
+            ${t.name}
+          </button>`).join('')}
+        <button class="btn-sm" onclick="resetTheme()" style="font-size:9px;color:var(--text3)">DÉFAUT</button>
+      </div>
+    </div>
+    <div class="settings-card">
       <div class="settings-title">SESSION</div>
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
@@ -2045,6 +2185,35 @@ async function loadSettings() {
       </div>
     </div>
   `;
+}
+
+function applyTheme(t) {
+  const root = document.documentElement;
+  root.style.setProperty('--vio', t.vio);
+  root.style.setProperty('--vio-b', t.vioB);
+  root.style.setProperty('--vio-dim', t.vioDim);
+  root.style.setProperty('--vio-g', t.vioG);
+  root.style.setProperty('--accent', t.accent);
+  try { localStorage.setItem('caleope-theme', JSON.stringify(t)); } catch(e) {}
+  notify(`Thème ${t.name} appliqué`, 'ok');
+}
+
+function resetTheme() {
+  const root = document.documentElement;
+  root.style.removeProperty('--vio');
+  root.style.removeProperty('--vio-b');
+  root.style.removeProperty('--vio-dim');
+  root.style.removeProperty('--vio-g');
+  root.style.removeProperty('--accent');
+  try { localStorage.removeItem('caleope-theme'); } catch(e) {}
+  notify('Thème réinitialisé', 'ok');
+}
+
+function loadSavedTheme() {
+  try {
+    const t = JSON.parse(localStorage.getItem('caleope-theme') || 'null');
+    if (t) applyTheme(t);
+  } catch(e) {}
 }
 
 async function changePassword() {
@@ -2394,6 +2563,38 @@ async function loadDashboard() {
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MONITORING</div>
       <div id="dash-uptime-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
+
+    ${(() => {
+      const pins = getPins().map(id => S.apps.find(a => a.id === id)).filter(Boolean);
+      if (!pins.length) return '';
+      return `
+        <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// FAVORIS</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px">
+          ${pins.map(a => {
+            const domain = a.domain ? `https://${a.domain}` : null;
+            const isRun = a.status === 'running';
+            const dotColor = isRun ? 'var(--green-b)' : 'var(--red-b)';
+            const hasPanel = APP_PANELS[a.id];
+            return `<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-size:15px">${icon(a.id)}</span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:9px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(a.name || a.id)}</div>
+                  <div style="display:flex;align-items:center;gap:4px;margin-top:1px">
+                    <span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${dotColor}"></span>
+                    <span style="font-size:7px;color:var(--text3)">${isRun ? 'EN LIGNE' : (a.status || 'ARRÊTÉ').toUpperCase()}</span>
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;gap:4px">
+                ${domain ? `<a href="${domain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px;flex:1;text-align:center"><i class="ti ti-external-link" style="font-size:9px"></i></a>` : ''}
+                ${hasPanel ? `<button class="btn-sm" style="font-size:8px;flex:1" onclick="goSection('${APP_PANELS[a.id].panels[0]?.id}')"><i class="ti ti-layout-sidebar-right" style="font-size:9px"></i></button>` : ''}
+                ${!isRun ? `<button class="btn-sm" style="font-size:8px;color:var(--green-b)" onclick="appAction('${a.id}','start');setTimeout(loadDashboard,2000)" title="Démarrer"><i class="ti ti-player-play" style="font-size:9px"></i></button>` : `<button class="btn-sm" style="font-size:8px;color:var(--warn)" onclick="appAction('${a.id}','stop');setTimeout(loadDashboard,2000)" title="Arrêter"><i class="ti ti-player-stop" style="font-size:9px"></i></button>`}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>`;
+    })()}
 
     <div id="dash-resources-widget"></div>
 
@@ -5368,6 +5569,7 @@ async function loadCrowdsecDecisions() {
           <th style="text-align:left;padding:4px 6px">RAISON</th>
           <th style="text-align:left;padding:4px 6px">DURÉE</th>
           <th style="text-align:left;padding:4px 6px">ORIGINE</th>
+          <th style="padding:4px 6px"></th>
         </tr></thead>
         <tbody>${decisions.map(d => `
           <tr style="border-bottom:1px solid var(--border)">
@@ -5376,6 +5578,12 @@ async function loadCrowdsecDecisions() {
             <td style="padding:5px 6px;color:var(--text2)">${escapeHtml(d.scenario || d.reason || '—')}</td>
             <td style="padding:5px 6px;color:var(--text3)">${escapeHtml(d.duration || '—')}</td>
             <td style="padding:5px 6px;color:var(--text3)">${escapeHtml(d.origin || '—')}</td>
+            <td style="padding:5px 6px">
+              <button class="btn-sm" style="font-size:7px;color:var(--warn)" title="Débloquer cette IP"
+                onclick="crowdsecUnban(${d.id}, '${escapeHtml(d.value || '')}')">
+                <i class="ti ti-ban" style="font-size:9px"></i> LEVER
+              </button>
+            </td>
           </tr>`).join('')}
         </tbody>
       </table>`;
@@ -5383,10 +5591,22 @@ async function loadCrowdsecDecisions() {
   c.innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
       <span style="font-size:9px;color:var(--text3)">${(decisions || []).length} décision(s) active(s)</span>
-      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadCrowdsecDecisions()">
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="openCrowdsecBanModal()">
+        <i class="ti ti-shield-x"></i> BANNIR IP</button>
+      <button class="btn" style="font-size:9px" onclick="loadCrowdsecDecisions()">
         <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
     </div>
-    ${rows}`;
+    ${rows}
+    <div id="crowdsec-ban-form" style="display:none;margin-top:12px;padding:12px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--text3);margin-bottom:8px">BANNIR UNE IP MANUELLEMENT</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="cs-ban-ip" class="field-input" placeholder="IP ou CIDR (ex: 1.2.3.4)" style="flex:2;min-width:120px;font-size:10px;padding:5px 8px">
+        <input id="cs-ban-duration" class="field-input" placeholder="Durée (ex: 24h)" value="24h" style="flex:1;min-width:80px;font-size:10px;padding:5px 8px">
+        <input id="cs-ban-reason" class="field-input" placeholder="Raison" value="manual" style="flex:2;min-width:100px;font-size:10px;padding:5px 8px">
+        <button class="btn btn-vio" style="font-size:9px" onclick="crowdsecBan()"><i class="ti ti-shield-x"></i> BANNIR</button>
+        <button class="btn" style="font-size:9px" onclick="document.getElementById('crowdsec-ban-form').style.display='none'">ANNULER</button>
+      </div>
+    </div>`;
 }
 
 async function loadCrowdsecAlerts() {
@@ -5433,6 +5653,57 @@ async function loadCrowdsecAlerts() {
         <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
     </div>
     ${rows}`;
+}
+
+// ── CrowdSec — Unban / Ban manuel ────────────────────────────────────────────
+function openCrowdsecBanModal() {
+  const form = document.getElementById('crowdsec-ban-form');
+  if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+async function crowdsecUnban(decisionId, ip) {
+  if (!confirm(`Lever le ban de ${ip} ?`)) return;
+  try {
+    const r = await fetch(`/ui/proxy/crowdsec/v1/decisions/${decisionId}`, { method: 'DELETE' });
+    if (r.ok) {
+      notify(`Ban levé pour ${ip}`, 'ok');
+      loadCrowdsecDecisions();
+    } else {
+      notify(`Erreur lors du déblocage (${r.status})`, 'err');
+    }
+  } catch(e) {
+    notify('Erreur réseau', 'err');
+  }
+}
+
+async function crowdsecBan() {
+  const ip       = document.getElementById('cs-ban-ip')?.value?.trim();
+  const duration = document.getElementById('cs-ban-duration')?.value?.trim() || '24h';
+  const reason   = document.getElementById('cs-ban-reason')?.value?.trim() || 'manual';
+
+  if (!ip) { notify('IP requise', 'err'); return; }
+
+  const scope = ip.includes('/') ? 'Range' : 'Ip';
+  const body = [{ value: ip, type: 'ban', duration, reason: reason, scope, origin: 'caleope-ui', simulated: false }];
+
+  try {
+    const r = await fetch('/ui/proxy/crowdsec/v1/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      notify(`${ip} banni pour ${duration}`, 'ok');
+      document.getElementById('cs-ban-ip').value = '';
+      document.getElementById('crowdsec-ban-form').style.display = 'none';
+      loadCrowdsecDecisions();
+    } else {
+      const t = await r.text();
+      notify(`Erreur ban (${r.status}): ${t.slice(0, 80)}`, 'err');
+    }
+  } catch(e) {
+    notify('Erreur réseau', 'err');
+  }
 }
 
 // ── Gotify — Messages récents ─────────────────────────────────────────────────
@@ -6240,12 +6511,19 @@ async function loadEvents() {
     </div>`;
   }).join('');
 
-  c.innerHTML = `<div class="settings-card" style="padding:0">
+  const types = [...new Set(evts.map(e => e.event || e.type || '').filter(Boolean))].sort();
+  const filterBtns = `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">
+    <button class="tab-btn active" style="font-size:8px;padding:2px 7px" onclick="filterEvents(this,'')">TOUT</button>
+    ${types.map(t => `<button class="tab-btn" style="font-size:8px;padding:2px 7px" onclick="filterEvents(this,'${escapeHtml(t)}')">${escapeHtml(t.replace('app.','').toUpperCase())}</button>`).join('')}
+  </div>`;
+
+  c.innerHTML = `${filterBtns}<div class="settings-card" style="padding:0">
     <div class="settings-title" style="padding:10px 12px">HISTORIQUE DES ÉVÉNEMENTS
       <span style="color:var(--text3);font-size:9px;margin-left:6px">${evts.length}</span>
     </div>
-    <div style="padding:0 12px 12px">${rows}</div>
+    <div id="events-rows" style="padding:0 12px 12px">${rows}</div>
   </div>`;
+  window._evtRows = [...evts].reverse();
 }
 
 // ── Audit ────────────────────────────────────────────────────────────────────
@@ -6279,7 +6557,56 @@ async function loadAudit() {
       <span class="log-txt">${escapeHtml(appId)}${result ? ' — ' + escapeHtml(result) : ''}</span>
     </div>`;
   }).join('');
-  c.innerHTML = `<div class="log-wrap"><div class="log-body">${lines}</div></div>`;
+  c.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:9px;color:var(--text3)">${rawLines.length} ENTRÉES</div>
+      <button class="btn-sm" onclick="exportAudit()" title="Exporter le journal d'audit">
+        <i class="ti ti-download" style="font-size:10px"></i> EXPORTER
+      </button>
+    </div>
+    <div class="log-wrap"><div class="log-body">${lines}</div></div>`;
+  // Store raw lines for export
+  window._auditLines = rawLines;
+}
+
+function filterEvents(btn, type) {
+  document.querySelectorAll('#content-events .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+  const evts = window._evtRows || [];
+  const container = document.getElementById('events-rows');
+  if (!container) return;
+  const filtered = type ? evts.filter(e => (e.event || e.type || '') === type) : evts;
+  container.innerHTML = filtered.map(e => {
+    const evType = e.event || e.type || '';
+    const appId = e.app || e.app_id || e.appId || '';
+    const ico = EVENT_ICONS[evType] || 'ti-circle';
+    const isErr = evType.includes('failed') || evType.includes('error');
+    const dotCls = isErr ? 'var(--err)' : evType.includes('removed') ? 'var(--warn)' : 'var(--ok)';
+    const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('fr-FR') : '';
+    return `<div class="loc-row" style="gap:12px">
+      <div style="width:30px;height:30px;border-radius:2px;background:var(--bg3);flex-shrink:0;
+        display:flex;align-items:center;justify-content:center">
+        <i class="ti ${ico}" style="font-size:13px;color:${dotCls}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(evType || '—')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(appId || '—')}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;font-size:8px;color:var(--text3)">${escapeHtml(ts)}</div>
+    </div>`;
+  }).join('') || '<div style="font-size:9px;color:var(--text3);padding:12px">Aucun événement de ce type.</div>';
+}
+
+function exportAudit() {
+  const lines = window._auditLines || [];
+  if (!lines.length) { notify('Aucune donnée à exporter', 'err'); return; }
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `caleope-audit-${new Date().toISOString().slice(0,10)}.log`;
+  a.click();
+  URL.revokeObjectURL(url);
+  notify('Export téléchargé', 'ok');
 }
 
 // ── Login screen ──────────────────────────────────────────────────────────────
@@ -6341,17 +6668,58 @@ function refreshSection() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  loadSavedTheme();
   const ok = await checkAuth();
   if (ok) { showApp(); }
   else    { showLogin(); }
 
   // Ctrl+K / Cmd+K → quick nav (enregistré une seule fois au démarrage)
+  let _gChordActive = false;
+  let _gChordTimer = null;
   document.addEventListener('keydown', e => {
+    const tag = document.activeElement?.tagName?.toLowerCase();
+    const inInput = tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable;
+
+    // Ctrl+K: quick nav
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
       e.preventDefault();
       const overlay = document.getElementById('quicknav-overlay');
       if (overlay && overlay.style.display !== 'none') closeQuickNav();
       else openQuickNav();
+      return;
+    }
+
+    if (inInput) return;
+
+    // Escape: close modals / return to dashboard
+    if (e.key === 'Escape') {
+      if (document.getElementById('help-overlay')?.style.display !== 'none') { closeHelp(); return; }
+      if (document.getElementById('quicknav-overlay')?.style.display !== 'none') { closeQuickNav(); return; }
+      const openModal = document.querySelector('.modal-overlay.open');
+      if (openModal) { openModal.classList.remove('open'); return; }
+      if (S.section !== 'dashboard') { goSection('dashboard'); }
+      return;
+    }
+
+    // ?: help modal
+    if (e.key === '?') { openHelp(); return; }
+
+    // R: refresh current section
+    if (e.key === 'r' || e.key === 'R') { refreshSection(); return; }
+
+    // G+x chords for section navigation
+    if (e.key === 'g' || e.key === 'G') {
+      _gChordActive = true;
+      clearTimeout(_gChordTimer);
+      _gChordTimer = setTimeout(() => { _gChordActive = false; }, 1200);
+      return;
+    }
+    if (_gChordActive) {
+      _gChordActive = false;
+      clearTimeout(_gChordTimer);
+      const CHORD_MAP = { d: 'dashboard', a: 'apps', l: 'logs', b: 'backups', s: 'stats', t: 'terminal', n: 'network', j: 'journal', e: 'events', k: 'secrets', v: 'services', x: 'storage' };
+      const dest = CHORD_MAP[e.key.toLowerCase()];
+      if (dest) { e.preventDefault(); goSection(dest); }
     }
   });
 
@@ -6625,7 +6993,113 @@ async function loadNetwork() {
       <table class="sys-table"><thead><tr><th>DESTINATION</th><th>PASSERELLE</th><th>INTERFACE</th><th>MÉTRIQUE</th></tr></thead>
       <tbody>${routeRows}</tbody></table>
     </div>` : ''}
-    ${appPortsHtml}`;
+    ${appPortsHtml}
+    <div id="net-bandwidth-widget" style="margin-top:24px"></div>
+    <div id="net-firewall-widget" style="margin-top:24px"></div>`;
+
+  loadNetBandwidthWidget();
+  loadNetFirewallWidget();
+}
+
+async function loadNetBandwidthWidget() {
+  const w = document.getElementById('net-bandwidth-widget');
+  if (!w) return;
+
+  // Deux lectures espacées de 1s pour calculer le débit
+  let s1 = null, s2 = null;
+  try {
+    const r1 = await fetch('/sys/netstat');
+    if (r1.ok) s1 = await r1.json();
+    await new Promise(res => setTimeout(res, 1000));
+    const r2 = await fetch('/sys/netstat');
+    if (r2.ok) s2 = await r2.json();
+  } catch(e) {}
+
+  if (!s1?.ifaces?.length || !s2?.ifaces?.length) return;
+
+  const rates = s1.ifaces.map(i1 => {
+    const i2 = s2.ifaces.find(i => i.name === i1.name);
+    if (!i2) return null;
+    const rxBps = Math.max(0, i2.rx_bytes - i1.rx_bytes);
+    const txBps = Math.max(0, i2.tx_bytes - i1.tx_bytes);
+    return { name: i1.name, rxBps, txBps, rxTotal: i2.rx_bytes, txTotal: i2.tx_bytes };
+  }).filter(Boolean);
+
+  const fmtBytes = b => {
+    if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' Go/s';
+    if (b >= 1048576)    return (b / 1048576).toFixed(1) + ' Mo/s';
+    if (b >= 1024)       return (b / 1024).toFixed(0) + ' Ko/s';
+    return b + ' o/s';
+  };
+  const fmtTotal = b => {
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' Go';
+    if (b >= 1048576)    return (b / 1048576).toFixed(0) + ' Mo';
+    if (b >= 1024)       return (b / 1024).toFixed(0) + ' Ko';
+    return b + ' o';
+  };
+
+  w.innerHTML = `
+    <div class="net-section-title">// BANDE PASSANTE (1s)</div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${rates.map(r => `
+        <div class="settings-card" style="padding:8px 12px">
+          <div style="font-size:9px;font-weight:700;color:var(--text3);margin-bottom:6px">${escapeHtml(r.name)}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <div style="font-size:8px;color:var(--text3)">↓ RX</div>
+              <div style="font-size:11px;font-weight:700;color:var(--green-b);font-family:monospace">${fmtBytes(r.rxBps)}</div>
+              <div style="font-size:8px;color:var(--text3)">${fmtTotal(r.rxTotal)} total</div>
+            </div>
+            <div>
+              <div style="font-size:8px;color:var(--text3)">↑ TX</div>
+              <div style="font-size:11px;font-weight:700;color:var(--accent);font-family:monospace">${fmtBytes(r.txBps)}</div>
+              <div style="font-size:8px;color:var(--text3)">${fmtTotal(r.txTotal)} total</div>
+            </div>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+
+async function loadNetFirewallWidget() {
+  const w = document.getElementById('net-firewall-widget');
+  if (!w) return;
+
+  let data = null;
+  try {
+    const r = await fetch('/sys/firewall');
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+
+  if (!data?.rules?.length) { w.innerHTML = ''; return; }
+
+  const actionColor = a => {
+    const up = a.toUpperCase();
+    if (up.includes('ALLOW')) return 'var(--green-b)';
+    if (up.includes('DENY') || up.includes('REJECT')) return 'var(--red-b)';
+    if (up.includes('LIMIT')) return 'var(--warn)';
+    return 'var(--text2)';
+  };
+
+  w.innerHTML = `
+    <div class="net-section-title">// PARE-FEU (UFW) — ${escapeHtml(data.status || 'inconnu')}</div>
+    <div class="settings-card" style="padding:0">
+      <table style="width:100%;border-collapse:collapse;font-size:9px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="padding:5px 12px;text-align:left">PORT / SERVICE</th>
+          <th style="padding:5px 8px;text-align:left">ACTION</th>
+          <th style="padding:5px 8px;text-align:left">SOURCE</th>
+          <th style="padding:5px 12px 5px 8px;text-align:left">NOTE</th>
+        </tr></thead>
+        <tbody>${data.rules.map(r => `
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:4px 12px;font-family:monospace;color:var(--text1)">${escapeHtml(r.to || '—')}</td>
+            <td style="padding:4px 8px"><span style="font-size:8px;font-weight:700;color:${actionColor(r.action)}">${escapeHtml(r.action || '—')}</span></td>
+            <td style="padding:4px 8px;color:var(--text2);font-family:monospace">${escapeHtml(r.from || 'Anywhere')}</td>
+            <td style="padding:4px 12px 4px 8px;color:var(--text3);font-style:italic">${escapeHtml(r.note || '')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -6681,7 +7155,46 @@ async function loadStorage() {
     <div class="disk-list">${diskRows || '<div class="empty-msg">Aucune partition montée</div>'}</div>
     ${availCards ? `
     <div class="net-section-title" style="margin-top:24px">// DISQUES DISPONIBLES</div>
-    <div class="disk-list">${availCards}</div>` : ''}`;
+    <div class="disk-list">${availCards}</div>` : ''}
+    <div class="net-section-title" style="margin-top:24px">// DOCKER</div>
+    <div class="settings-card" style="padding:10px 14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:9px;font-weight:700;color:var(--text1)">NETTOYAGE DOCKER</div>
+          <div style="font-size:8px;color:var(--text3);margin-top:2px">Supprimer les images, volumes et réseaux non utilisés</div>
+        </div>
+        <button class="btn" id="docker-prune-btn" onclick="runDockerPrune()" style="font-size:9px;flex-shrink:0">
+          <i class="ti ti-trash"></i> PRUNE
+        </button>
+      </div>
+      <div id="docker-prune-result" style="display:none;margin-top:10px;font-size:9px;font-family:monospace;color:var(--text2);background:var(--bg1);padding:8px;border-radius:4px;max-height:120px;overflow-y:auto;white-space:pre-wrap"></div>
+    </div>`;
+}
+
+async function runDockerPrune() {
+  const btn = document.getElementById('docker-prune-btn');
+  const res = document.getElementById('docker-prune-result');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> EN COURS...';
+  try {
+    const r = await fetch('/sys/docker-prune', { method: 'POST' });
+    const d = await r.json();
+    if (res) {
+      res.style.display = 'block';
+      res.textContent = [
+        d.images ? '▸ Images:\n' + d.images.trim() : '',
+        d.volumes ? '▸ Volumes:\n' + d.volumes.trim() : '',
+        d.networks ? '▸ Réseaux:\n' + d.networks.trim() : '',
+      ].filter(Boolean).join('\n\n') || 'Rien à supprimer.';
+    }
+    notify('Nettoyage Docker terminé', 'ok');
+  } catch(e) {
+    notify('Erreur Docker prune', 'err');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-trash"></i> PRUNE';
+  }
 }
 
 function openDiskMountModal(device, label, size) {
@@ -6894,6 +7407,16 @@ function quickNavKey(e) {
 function qnGo(id) {
   closeQuickNav();
   goSection(id);
+}
+
+// ── Help modal ────────────────────────────────────────────────────────────────
+function openHelp() {
+  const overlay = document.getElementById('help-overlay');
+  if (overlay) { overlay.style.display = 'flex'; }
+}
+function closeHelp() {
+  const overlay = document.getElementById('help-overlay');
+  if (overlay) { overlay.style.display = 'none'; }
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -417,6 +418,228 @@ func priorityToStr(p string) string {
 	default:
 		return p
 	}
+}
+
+// ── Stats réseau (/proc/net/dev) ──────────────────────────────────────────────
+
+type ifaceStats struct {
+	Name    string `json:"name"`
+	RxBytes uint64 `json:"rx_bytes"`
+	TxBytes uint64 `json:"tx_bytes"`
+	RxPkts  uint64 `json:"rx_pkts"`
+	TxPkts  uint64 `json:"tx_pkts"`
+}
+
+func handleSysNetstat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	data, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ifaces": []ifaceStats{}, "success": false, "error": err.Error()})
+		return
+	}
+
+	var ifaces []ifaceStats
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		// Skip header lines
+		if !strings.Contains(line, ":") {
+			continue
+		}
+		colonIdx := strings.Index(line, ":")
+		name := strings.TrimSpace(line[:colonIdx])
+		if !isPhysicalIface(name) {
+			continue
+		}
+		fields := strings.Fields(line[colonIdx+1:])
+		if len(fields) < 9 {
+			continue
+		}
+		var rxB, txB, rxP, txP uint64
+		fmt.Sscan(fields[0], &rxB)
+		fmt.Sscan(fields[1], &rxP)
+		fmt.Sscan(fields[8], &txB)
+		fmt.Sscan(fields[9], &txP)
+		ifaces = append(ifaces, ifaceStats{Name: name, RxBytes: rxB, TxBytes: txB, RxPkts: rxP, TxPkts: txP})
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ifaces": ifaces, "success": true})
+}
+
+// ── Top processus ──────────────────────────────────────────────────────────────
+
+type procInfo struct {
+	PID    string `json:"pid"`
+	User   string `json:"user"`
+	CPU    string `json:"cpu"`
+	Mem    string `json:"mem"`
+	VSZ    string `json:"vsz"`
+	RSS    string `json:"rss"`
+	Cmd    string `json:"cmd"`
+}
+
+func handleSysProcesses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	sortBy := r.URL.Query().Get("sort")
+	if sortBy == "" {
+		sortBy = "cpu"
+	}
+	limit := 20
+	if sortBy != "cpu" && sortBy != "mem" {
+		sortBy = "cpu"
+	}
+
+	out, err := exec.Command("ps", "aux", "--sort=-"+sortBy, "--no-headers").Output()
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"processes": []procInfo{}, "success": false})
+		return
+	}
+
+	var procs []procInfo
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	count := 0
+	for sc.Scan() {
+		if count >= limit {
+			break
+		}
+		line := sc.Text()
+		fields := strings.Fields(line)
+		if len(fields) < 11 {
+			continue
+		}
+		cmd := strings.Join(fields[10:], " ")
+		if len(cmd) > 60 {
+			cmd = cmd[:60] + "…"
+		}
+		procs = append(procs, procInfo{
+			PID:  fields[1],
+			User: fields[0],
+			CPU:  fields[2],
+			Mem:  fields[3],
+			VSZ:  fields[4],
+			RSS:  fields[5],
+			Cmd:  cmd,
+		})
+		count++
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"processes": procs, "success": true})
+}
+
+// ── Firewall UFW ──────────────────────────────────────────────────────────────
+
+type fwRule struct {
+	To     string `json:"to"`
+	Action string `json:"action"`
+	From   string `json:"from"`
+	Proto  string `json:"proto"`
+	Note   string `json:"note"`
+}
+
+func handleSysFirewall(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	out, err := exec.Command("sudo", "ufw", "status", "verbose").Output()
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "unavailable", "rules": []fwRule{}, "success": false})
+		return
+	}
+
+	lines := strings.Split(string(out), "\n")
+	status := "unknown"
+	var rules []fwRule
+	inRules := false
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Status:") {
+			status = strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
+		}
+		if strings.HasPrefix(line, "To ") && strings.Contains(line, "Action") {
+			inRules = true
+			continue
+		}
+		if strings.HasPrefix(line, "--") {
+			continue
+		}
+		if !inRules || line == "" {
+			continue
+		}
+		// Parse rule line: "22/tcp   ALLOW IN   Anywhere  # SSH"
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		rule := fwRule{To: fields[0]}
+		// Find action (ALLOW/DENY/LIMIT/REJECT)
+		for i := 1; i < len(fields); i++ {
+			up := strings.ToUpper(fields[i])
+			if up == "ALLOW" || up == "DENY" || up == "LIMIT" || up == "REJECT" {
+				action := fields[i]
+				direction := ""
+				if i+1 < len(fields) {
+					d := strings.ToUpper(fields[i+1])
+					if d == "IN" || d == "OUT" || d == "FWD" {
+						direction = " " + fields[i+1]
+						i++
+					}
+				}
+				rule.Action = action + direction
+				// Everything after is From + note
+				rest := strings.Join(fields[i+1:], " ")
+				// Split note
+				if idx := strings.Index(rest, "#"); idx >= 0 {
+					rule.Note = strings.TrimSpace(rest[idx+1:])
+					rule.From = strings.TrimSpace(rest[:idx])
+				} else {
+					rule.From = strings.TrimSpace(rest)
+				}
+				break
+			}
+		}
+		if rule.Action != "" {
+			rules = append(rules, rule)
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": status, "rules": rules, "success": true})
+}
+
+// ── Docker prune ──────────────────────────────────────────────────────────────
+
+func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Pruner les images, volumes et networks non utilisés
+	imgOut, _ := exec.Command("docker", "image", "prune", "-f").Output()
+	volOut, _ := exec.Command("docker", "volume", "prune", "-f").Output()
+	netOut, _ := exec.Command("docker", "network", "prune", "-f").Output()
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"images":  string(imgOut),
+		"volumes": string(volOut),
+		"networks": string(netOut),
+		"success": true,
+	})
 }
 
 func parseJournalJSON(raw []byte) []journalEntry {
