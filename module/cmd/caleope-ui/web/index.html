@@ -482,6 +482,28 @@
   </div>
 </div>
 
+<!-- ── POST-INSTALL NOTES ────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="post-install-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <span id="post-install-title" class="modal-title">Notes d'installation</span>
+      <button class="modal-close" onclick="document.getElementById('post-install-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <pre id="post-install-body" style="font-family:monospace;font-size:10px;color:var(--text2);white-space:pre-wrap;
+        background:var(--bg1);border:1px solid var(--border1);border-radius:4px;padding:10px 12px;
+        max-height:340px;overflow-y:auto;line-height:1.6"></pre>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-vio" onclick="document.getElementById('post-install-modal').classList.remove('open')">
+        <i class="ti ti-check"></i>OK
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ── NOTIFICATIONS ────────────────────────────────────────────────────────── -->
 <div class="notif-stack" id="notif-stack" aria-live="polite"></div>
 

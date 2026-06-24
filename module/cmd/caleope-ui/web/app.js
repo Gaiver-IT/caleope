@@ -975,10 +975,26 @@ async function confirmInstall() {
     S.tab = 'installed';
     goSection('apps');
     setTimeout(loadApps, 1000);
+    // Afficher les notes post-install si disponibles
+    showPostInstallNotes(S.installTarget, appLabel);
   } else {
     taskDone(taskId, r?.error || 'Erreur inconnue', false);
     notify(r?.error || 'Erreur installation', 'err');
   }
+}
+
+async function showPostInstallNotes(appId, appLabel) {
+  try {
+    const r = await fetch(`/sys/app-notes/${encodeURIComponent(appId)}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.found || !d.notes?.trim()) return;
+    const modal = document.getElementById('post-install-modal');
+    if (!modal) return;
+    document.getElementById('post-install-title').textContent = appLabel + ' — Notes d\'installation';
+    document.getElementById('post-install-body').textContent = d.notes;
+    modal.classList.add('open');
+  } catch(e) {}
 }
 
 // ── SECTION: LOGS ─────────────────────────────────────────────────────────────

@@ -955,6 +955,24 @@ func main() {
 		handleSysPorts(w, r)
 	}))
 
+	// Notes post-install d'une app
+	mux.HandleFunc("/sys/app-notes/", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		appID := strings.TrimPrefix(r.URL.Path, "/sys/app-notes/")
+		appID = strings.Trim(appID, "/")
+		if appID == "" || strings.Contains(appID, "..") {
+			http.Error(w, "invalid app id", http.StatusBadRequest)
+			return
+		}
+		notesPath := filepath.Join(*baseDir, "app-config", appID, "post-install.txt")
+		data, err := os.ReadFile(notesPath)
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"notes": "", "found": false})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"notes": string(data), "found": true})
+	}))
+
 	// API proxy (session requise) — logs en streaming aussi
 	mux.HandleFunc("/api/", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		// SSE : désactiver le buffering
