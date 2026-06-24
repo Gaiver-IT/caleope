@@ -604,13 +604,15 @@ func (s *Server) handleUpdate(args map[string]string) error {
 	// Si channel=alpha est explicitement demandé, forcer la branche alpha sur tous les repos officiels.
 	// Sinon lire le canal depuis caleope.conf pour les repos sans branche explicite.
 	channel := ""
+	ghToken := ""
 	if args != nil {
 		channel = args["channel"]
 	}
-	if channel == "" {
-		if cfg, err := s.rt.GetConfig(); err == nil {
+	if cfg, err := s.rt.GetConfig(); err == nil {
+		if channel == "" {
 			channel = cfg.Channel
 		}
+		ghToken = cfg.GithubToken
 	}
 
 	var syncErr error
@@ -624,7 +626,14 @@ func (s *Server) handleUpdate(args map[string]string) error {
 				r.Branch = "main"
 			}
 		}
-		if err := s.st.SyncRepo(r); err != nil {
+		// Injecter le token GitHub dans l'URL pour les repos privés
+		repoURL := r.URL
+		if ghToken != "" && strings.HasPrefix(repoURL, "https://github.com/") {
+			repoURL = "https://" + ghToken + "@github.com/" + repoURL[len("https://github.com/"):]
+		}
+		rCopy := *r
+		rCopy.URL = repoURL
+		if err := s.st.SyncRepo(&rCopy); err != nil {
 			fmt.Printf("⚠️  Erreur sync repo %s: %v\n", r.Name, err)
 			syncErr = err
 		}
@@ -905,6 +914,20 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		channel = "stable"
 	}
 
+	// Récupérer le token GitHub si configuré (nécessaire pour les repos privés)
+	ghToken := ""
+	if cfg, err := s.rt.GetConfig(); err == nil {
+		ghToken = cfg.GithubToken
+	}
+	curlGH := func(url string) ([]byte, error) {
+		args := []string{"-fsSL"}
+		if ghToken != "" {
+			args = append(args, "-H", "Authorization: token "+ghToken)
+		}
+		args = append(args, url)
+		return exec.Command("curl", args...).Output()
+	}
+
 	// Choisir l'endpoint GitHub selon le canal
 	// stable → /releases/latest (ignore les pré-releases)
 	// alpha  → /releases?per_page=20, filtré sur prerelease:true
@@ -915,8 +938,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		apiURL = "https://api.github.com/repos/gaiver-it/caleope/releases/latest"
 	}
 
-	cmd := exec.Command("curl", "-fsSL", apiURL)
-	out, err := cmd.Output()
+	out, err := curlGH(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("impossible de contacter GitHub: %w", err)
 	}
@@ -1009,10 +1031,12 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		{"caleope-linux-amd64", "/usr/local/bin/caleope.new"},
 		{"caleope-ui-linux-amd64", "/usr/local/bin/caleope-ui.new"},
 	} {
-		dlCmd := exec.Command("curl", "-fsSL",
-			fmt.Sprintf("%s/%s", baseURL, bin.name),
-			"-o", bin.dest,
-		)
+		dlArgs := []string{"-fsSL"}
+		if ghToken != "" {
+			dlArgs = append(dlArgs, "-H", "Authorization: token "+ghToken)
+		}
+		dlArgs = append(dlArgs, fmt.Sprintf("%s/%s", baseURL, bin.name), "-o", bin.dest)
+		dlCmd := exec.Command("curl", dlArgs...)
 		if err := dlCmd.Run(); err != nil {
 			return nil, fmt.Errorf("téléchargement %s échoué: %w", bin.name, err)
 		}

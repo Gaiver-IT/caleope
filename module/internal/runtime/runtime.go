@@ -395,6 +395,8 @@ type Config struct {
 	SMTPUser string
 	SMTPPass string
 	SMTPFrom string
+	// Token GitHub pour les repos privés (upgrade, update store)
+	GithubToken string
 }
 
 // GetConfig lit et parse caleope.conf.
@@ -443,6 +445,8 @@ func (m *Manager) GetConfig() (*Config, error) {
 			cfg.SMTPPass = val
 		case "CALEOPE_SMTP_FROM":
 			cfg.SMTPFrom = val
+		case "CALEOPE_GITHUB_TOKEN":
+			cfg.GithubToken = val
 		}
 	}
 	return cfg, nil
