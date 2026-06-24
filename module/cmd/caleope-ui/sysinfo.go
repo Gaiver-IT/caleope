@@ -674,6 +674,42 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type dockerStatEntry struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	CPU     string `json:"cpu"`
+	Mem     string `json:"mem"`
+	MemPerc string `json:"mem_perc"`
+	NetIO   string `json:"net_io"`
+	BlockIO string `json:"block_io"`
+}
+
+func handleDockerStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	out, err := exec.Command("docker", "stats", "--no-stream",
+		"--format", `{"id":"{{.ID}}","name":"{{.Name}}","cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}","mem_perc":"{{.MemPerc}}","net_io":"{{.NetIO}}","block_io":"{{.BlockIO}}"}`).Output()
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error(), "stats": []interface{}{}})
+		return
+	}
+	var stats []dockerStatEntry
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var entry dockerStatEntry
+		if err := json.Unmarshal(line, &entry); err == nil {
+			stats = append(stats, entry)
+		}
+	}
+	if stats == nil {
+		stats = []dockerStatEntry{}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"stats": stats})
+}
+
 func parseJournalJSON(raw []byte) []journalEntry {
 	var entries []journalEntry
 	sc := bufio.NewScanner(bytes.NewReader(raw))

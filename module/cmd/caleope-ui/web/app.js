@@ -2050,6 +2050,7 @@ function renderStats() {
       <div class="setting-row"><span>APPS ACTIVES</span><span class="setting-val text-vio">${S.apps.filter(a => a.status === 'running').length}</span></div>
     </div>
     <div id="stats-processes-widget" style="margin-top:8px"></div>
+    <div id="stats-docker-widget" style="margin-top:8px"></div>
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px">
       <div style="font-size:9px;color:var(--text3)">
         <i class="ti ti-refresh" style="font-size:9px"></i>
@@ -2070,6 +2071,48 @@ function renderStats() {
     S._statsTimer = setInterval(() => { if (S.section === 'stats') loadStats(); }, 5000);
   }
   loadStatsProcessWidget();
+  loadStatsDockerWidget();
+}
+
+async function loadStatsDockerWidget() {
+  const w = document.getElementById('stats-docker-widget');
+  if (!w) return;
+  let data = null;
+  try {
+    const r = await fetch('/sys/docker-stats');
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+
+  if (!data?.stats?.length) { w.innerHTML = ''; return; }
+
+  const cpuNum = s => parseFloat(s?.replace('%','') || '0');
+  const memNum = s => parseFloat(s?.replace('%','') || '0');
+  const sorted = [...data.stats].sort((a,b) => cpuNum(b.cpu) - cpuNum(a.cpu));
+  w.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div style="padding:10px 12px 6px">
+        <div class="settings-title" style="margin:0">CONTENEURS — RESSOURCES</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:8px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="padding:3px 8px 3px 12px;text-align:left">NOM</th>
+          <th style="padding:3px 6px;text-align:right">CPU</th>
+          <th style="padding:3px 6px;text-align:right">RAM</th>
+          <th style="padding:3px 12px 3px 6px;text-align:right">NET I/O</th>
+        </tr></thead>
+        <tbody>${sorted.map(s => {
+          const cpu = cpuNum(s.cpu);
+          const mem = memNum(s.mem_perc);
+          return `<tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:3px 8px 3px 12px;font-weight:600;color:var(--text1)">${escapeHtml(s.name.replace(/^\//, ''))}</td>
+            <td style="padding:3px 6px;text-align:right;font-family:monospace;color:${cpu>50?'var(--red-b)':cpu>20?'var(--warn)':'var(--ok)'}">${escapeHtml(s.cpu)}</td>
+            <td style="padding:3px 6px;text-align:right;font-family:monospace;color:${mem>80?'var(--red-b)':mem>50?'var(--warn)':'var(--text1)'}">${escapeHtml(s.mem)}</td>
+            <td style="padding:3px 12px 3px 6px;text-align:right;font-family:monospace;color:var(--text3)">${escapeHtml(s.net_io)}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 async function loadStatsProcessWidget() {
@@ -2208,6 +2251,11 @@ async function loadSettings() {
       </div>
     </div>
     <div class="settings-card">
+      <div class="settings-title">EXPORT SYSTÈME</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:10px">Télécharger un snapshot JSON de l'état courant (apps, tâches, événements)</div>
+      <button id="snapshot-btn" class="btn" onclick="exportSystemSnapshot()"><i class="ti ti-download"></i> SNAPSHOT</button>
+    </div>
+    <div class="settings-card">
       <div class="settings-title">SESSION</div>
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
@@ -2215,6 +2263,38 @@ async function loadSettings() {
       </div>
     </div>
   `;
+}
+
+async function exportSystemSnapshot() {
+  const btn = document.getElementById('snapshot-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> EXPORT...'; }
+  try {
+    const [sysR, appsR, tasksR, eventsR] = await Promise.all([
+      api.get('/api/v1/system').catch(() => null),
+      api.get('/api/v1/apps').catch(() => null),
+      api.get('/api/v1/tasks').catch(() => null),
+      api.get('/api/v1/events?limit=50').catch(() => null),
+    ]);
+    const snapshot = {
+      exported_at: new Date().toISOString(),
+      version: '0.5',
+      system: sysR?.data || null,
+      apps: appsR?.data || [],
+      tasks: tasksR?.data || [],
+      events: eventsR?.data || [],
+    };
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `caleope-snapshot-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    notify('Snapshot exporté', 'ok');
+  } catch(e) {
+    notify('Erreur export', 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-download"></i> SNAPSHOT'; }
+  }
 }
 
 function applyTheme(t) {
@@ -2453,22 +2533,22 @@ async function loadDashboard() {
       </button>
     </div>
     <div class="metrics" style="margin-bottom:20px">
-      <div class="mc mc-vio">
+      <div class="mc mc-vio" style="cursor:pointer" onclick="goSection('apps')" title="Voir les applications">
         <div class="mc-label">APPS ACTIVES</div>
         <div class="mc-val">${String(running).padStart(2,'0')}</div>
         <div class="mc-sub">${stopped} arrêtée${stopped !== 1 ? 's' : ''}</div>
       </div>
-      <div class="mc">
+      <div class="mc" style="cursor:pointer" onclick="goSection('apps')" title="Voir le catalogue">
         <div class="mc-label">INSTALLÉES</div>
         <div class="mc-val">${String(S.apps.length).padStart(2,'0')}</div>
         <div class="mc-sub">SUR ${S.catalog.length} DISPO</div>
       </div>
-      <div class="mc">
+      <div class="mc" style="cursor:pointer" onclick="goSection('stats')" title="Voir les ressources système">
         <div class="mc-label">RAM</div>
         <div class="mc-val ${ram > 85 ? 'mc-err' : ''}">${ram || '—'}${ram ? '%' : ''}</div>
         <div class="mc-sub"><div class="seg-bar" style="margin-top:4px">${segBar(ram, 12, ram > 85 ? 'on-err' : ram > 70 ? 'on-warn' : 'on')}</div></div>
       </div>
-      <div class="mc">
+      <div class="mc" style="cursor:pointer" onclick="goSection('storage')" title="Voir le stockage">
         <div class="mc-label">DISQUE</div>
         <div class="mc-val ${disk > 85 ? 'mc-err' : ''}">${disk || '—'}${disk ? '%' : ''}</div>
         <div class="mc-sub"><div class="seg-bar" style="margin-top:4px">${segBar(disk, 12, disk > 85 ? 'on-err' : disk > 70 ? 'on-warn' : 'on-ok')}</div></div>
@@ -2639,6 +2719,9 @@ async function loadDashboard() {
 
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// ÉVÉNEMENTS RÉCENTS</div>
     <div id="dash-events-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+
+    <div style="font-size:9px;color:var(--red-b);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// ERREURS SYSTÈME RÉCENTES</div>
+    <div id="dash-journal-errors-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
   `;
 
   // Charger les widgets async
@@ -2653,6 +2736,47 @@ async function loadDashboard() {
     loadDashGotifyWidget();
   }
   loadDashEventsWidget();
+  loadDashJournalErrorsWidget();
+}
+
+async function loadDashJournalErrorsWidget() {
+  const w = document.getElementById('dash-journal-errors-widget');
+  if (!w) return;
+  let data = null;
+  try {
+    const r = await fetch('/sys/journal?n=200');
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+
+  const errors = (data?.entries || []).filter(e =>
+    e.priority === 'err' || e.priority === 'crit' || e.priority === 'alert' || e.priority === 'emerg'
+  ).slice(-10).reverse();
+
+  if (!errors.length) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;border-left:3px solid var(--green-b)">
+      <i class="ti ti-circle-check" style="color:var(--green-b);font-size:13px"></i>
+      <span style="font-size:9px;color:var(--text2)">Aucune erreur système récente</span>
+    </div>`;
+    return;
+  }
+
+  const rows = errors.map(e => {
+    const ts = e.time ? new Date(parseInt(e.time.replace('.',''))/1000).toLocaleTimeString('fr-FR') : '';
+    return `<div class="log-line" style="border-bottom:1px solid var(--border);padding:4px 10px">
+      <span class="log-ts">${escapeHtml(ts)}</span>
+      <span class="log-app" style="color:var(--blue)">${escapeHtml(e.unit || '—')}</span>
+      <span class="log-level" style="color:var(--red-b)">${escapeHtml(e.priority || '')}</span>
+      <span class="log-msg" style="color:var(--red-b)">${escapeHtml(e.message || '')}</span>
+    </div>`;
+  }).join('');
+
+  w.innerHTML = `<div style="background:var(--card);border:1px solid var(--border);border-left:3px solid var(--red-b);border-radius:6px;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border)">
+      <span style="font-size:9px;font-weight:700;color:var(--red-b)">${errors.length} ERREUR(S)</span>
+      <button class="btn-sm" onclick="goSection('journal')" style="font-size:8px">VOIR LE JOURNAL <i class="ti ti-arrow-right" style="font-size:9px"></i></button>
+    </div>
+    <div style="font-family:monospace;font-size:9px">${rows}</div>
+  </div>`;
 }
 
 async function loadDashUptimeWidget() {
@@ -5822,10 +5946,54 @@ async function loadGotifyMessages() {
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
       ${adminLink}
       <span style="font-size:9px;color:var(--text3)">${messages.length} message(s)</span>
+      <button class="btn" style="font-size:9px" onclick="sendGotifyTest()">
+        <i class="ti ti-send"></i> TEST</button>
       <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadGotifyMessages()">
         <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
     </div>
+    <div id="gotify-send-form" style="display:none;margin-bottom:12px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <div style="font-size:9px;font-weight:700;letter-spacing:1px;color:var(--text3);margin-bottom:8px">ENVOYER UN MESSAGE TEST</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="gotify-test-title" class="field-input" placeholder="Titre" value="Test Caleope" style="flex:2;min-width:120px;font-size:10px;padding:5px 8px">
+        <input id="gotify-test-msg" class="field-input" placeholder="Message" value="Message de test depuis Caleope UI" style="flex:3;min-width:150px;font-size:10px;padding:5px 8px">
+        <select id="gotify-test-prio" class="field-input" style="flex:1;min-width:80px;font-size:10px;padding:5px 8px">
+          <option value="2">INFO</option>
+          <option value="5" selected>NORMAL</option>
+          <option value="8">URGENT</option>
+        </select>
+        <button class="btn btn-vio" style="font-size:9px" onclick="confirmGotifyTest()"><i class="ti ti-send"></i> ENVOYER</button>
+        <button class="btn" style="font-size:9px" onclick="document.getElementById('gotify-send-form').style.display='none'">ANNULER</button>
+      </div>
+    </div>
     ${rows}`;
+}
+
+function sendGotifyTest() {
+  const form = document.getElementById('gotify-send-form');
+  if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+async function confirmGotifyTest() {
+  const title = document.getElementById('gotify-test-title')?.value || 'Test';
+  const msg   = document.getElementById('gotify-test-msg')?.value || 'Test';
+  const prio  = parseInt(document.getElementById('gotify-test-prio')?.value || '5');
+
+  try {
+    const r = await fetch('/ui/proxy/gotify/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, message: msg, priority: prio }),
+    });
+    if (r.ok) {
+      notify('Message Gotify envoyé', 'ok');
+      document.getElementById('gotify-send-form').style.display = 'none';
+      setTimeout(loadGotifyMessages, 500);
+    } else {
+      notify(`Erreur Gotify (${r.status})`, 'err');
+    }
+  } catch(e) {
+    notify('Erreur réseau', 'err');
+  }
 }
 
 // ── Homarr — Dashboard iframe ─────────────────────────────────────────────────
@@ -6926,7 +7094,7 @@ async function loadServices() {
   const stateLabel = s => s === 'active' ? 'ACTIF' : s === 'failed' ? 'ERREUR' : s === 'inactive' ? 'INACTIF' : s?.toUpperCase() || '—';
 
   const rows = data.services.map(s => `
-    <div class="svc-row">
+    <div class="svc-row" data-svc-state="${escapeHtml(s.active || '')}">
       <div class="svc-dot" style="background:${stateColor(s.active)}"></div>
       <div class="svc-info">
         <div class="svc-name">${escapeHtml(s.name)}</div>
@@ -6943,7 +7111,37 @@ async function loadServices() {
       </div>
     </div>`).join('');
 
-  el.innerHTML = `<div class="svc-list">${rows}</div>`;
+  const counts = { all: data.services.length, active: 0, failed: 0, inactive: 0 };
+  data.services.forEach(s => {
+    if (s.active === 'active') counts.active++;
+    else if (s.active === 'failed') counts.failed++;
+    else counts.inactive++;
+  });
+
+  el.innerHTML = `
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">
+      <button class="tab-btn active" onclick="filterServices(this,'all')" data-svc-filter="all">
+        TOUS <span style="margin-left:3px;font-size:8px;color:var(--text3)">${counts.all}</span>
+      </button>
+      <button class="tab-btn" onclick="filterServices(this,'active')" data-svc-filter="active" style="color:var(--ok)">
+        ACTIFS <span style="margin-left:3px;font-size:8px;color:var(--text3)">${counts.active}</span>
+      </button>
+      ${counts.failed ? `<button class="tab-btn" onclick="filterServices(this,'failed')" data-svc-filter="failed" style="color:var(--red-b)">
+        ERREUR <span style="margin-left:3px;font-size:8px;color:var(--text3)">${counts.failed}</span>
+      </button>` : ''}
+      <button class="tab-btn" onclick="filterServices(this,'inactive')" data-svc-filter="inactive" style="color:var(--text3)">
+        INACTIFS <span style="margin-left:3px;font-size:8px;color:var(--text3)">${counts.inactive}</span>
+      </button>
+    </div>
+    <div class="svc-list" id="svc-list">${rows}</div>`;
+}
+
+function filterServices(btn, state) {
+  document.querySelectorAll('[data-svc-filter]').forEach(b => b.classList.toggle('active', b === btn));
+  document.querySelectorAll('.svc-row').forEach(row => {
+    const rowState = row.dataset.svcState || '';
+    row.style.display = (state === 'all' || rowState === state) ? '' : 'none';
+  });
 }
 
 async function svcAction(name, action) {
@@ -7329,18 +7527,45 @@ async function loadJournal() {
 
   const priColor = p => ({ err:'var(--err)', warning:'var(--warn)', crit:'var(--err)', alert:'var(--err)', emerg:'var(--err)', debug:'var(--text3)' }[p] || 'var(--text2)');
 
-  const lines = data.entries.map(e => {
-    const ts = e.time ? new Date(parseInt(e.time.replace('.',''))/1000).toLocaleTimeString('fr-FR') : '';
-    return `<div class="log-line">
-      <span class="log-ts">${escapeHtml(ts)}</span>
-      <span class="log-app" style="color:var(--blue)">${escapeHtml(e.unit || '—')}</span>
-      <span class="log-level" style="color:${priColor(e.priority)}">${escapeHtml(e.priority || '')}</span>
-      <span class="log-msg">${escapeHtml(e.message || '')}</span>
-    </div>`;
-  }).join('');
+  window._journalEntries = data.entries;
+  renderJournalLines();
+}
 
-  el.innerHTML = lines || '<div class="empty-msg">Aucune entrée</div>';
+function _journalLineHtml(e) {
+  const priColor = p => ({ err:'var(--err)', warning:'var(--warn)', crit:'var(--err)', alert:'var(--err)', emerg:'var(--err)', debug:'var(--text3)' }[p] || 'var(--text2)');
+  const ts = e.time ? new Date(parseInt(e.time.replace('.',''))/1000).toLocaleTimeString('fr-FR') : '';
+  return `<div class="log-line" data-pri="${escapeHtml(e.priority || '')}">
+    <span class="log-ts">${escapeHtml(ts)}</span>
+    <span class="log-app" style="color:var(--blue)">${escapeHtml(e.unit || '—')}</span>
+    <span class="log-level" style="color:${priColor(e.priority)}">${escapeHtml(e.priority || '')}</span>
+    <span class="log-msg">${escapeHtml(e.message || '')}</span>
+  </div>`;
+}
+
+let _journalPriFilter = '';
+
+function renderJournalLines() {
+  const el = document.getElementById('journal-body');
+  if (!el) return;
+  const entries = window._journalEntries || [];
+  const search  = document.getElementById('journal-search')?.value?.toLowerCase() || '';
+  const filtered = entries.filter(e => {
+    if (_journalPriFilter && e.priority !== _journalPriFilter) return false;
+    if (search && !(e.message || '').toLowerCase().includes(search) && !(e.unit || '').toLowerCase().includes(search)) return false;
+    return true;
+  });
+  el.innerHTML = filtered.map(_journalLineHtml).join('') || '<div class="empty-msg">Aucune entrée</div>';
   el.scrollTop = el.scrollHeight;
+}
+
+function setJournalPriFilter(btn, pri) {
+  _journalPriFilter = pri;
+  document.querySelectorAll('#journal-pri-filters .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+  renderJournalLines();
+}
+
+function filterJournalLines() {
+  renderJournalLines();
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
@@ -7607,6 +7832,47 @@ function openHelp() {
 function closeHelp() {
   const overlay = document.getElementById('help-overlay');
   if (overlay) { overlay.style.display = 'none'; }
+}
+
+// ── Quick Memo ────────────────────────────────────────────────────────────────
+
+function openQuickMemo() {
+  const overlay = document.getElementById('quickmemo-overlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+  // Populate app selector
+  const sel = document.getElementById('quickmemo-app');
+  if (sel && S.apps.length) {
+    sel.innerHTML = '<option value="">— Aucune app —</option>' +
+      S.apps.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name || a.id)}</option>`).join('');
+  }
+  document.getElementById('quickmemo-title')?.focus();
+}
+
+function closeQuickMemo() {
+  const overlay = document.getElementById('quickmemo-overlay');
+  if (overlay) overlay.style.display = 'none';
+  const t = document.getElementById('quickmemo-title');
+  const b = document.getElementById('quickmemo-body');
+  if (t) t.value = '';
+  if (b) b.value = '';
+}
+
+async function saveQuickMemo() {
+  const title  = document.getElementById('quickmemo-title')?.value?.trim() || '';
+  const body   = document.getElementById('quickmemo-body')?.value?.trim() || '';
+  const appId  = document.getElementById('quickmemo-app')?.value || '';
+  if (!body) { notify('Le contenu ne peut pas être vide', 'err'); return; }
+  const payload = { title: title || 'Note rapide', content: body };
+  if (appId) payload.app_id = appId;
+  const r = await api.post('/api/v1/memos', payload);
+  if (r?.data?.id || r?.id) {
+    notify('Note sauvegardée', 'ok');
+    closeQuickMemo();
+    if (S.section === 'locations') loadLocations();
+  } else {
+    notify(r?.error || 'Erreur sauvegarde', 'err');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

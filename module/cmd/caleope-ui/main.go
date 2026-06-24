@@ -1027,6 +1027,9 @@ func main() {
 	mux.HandleFunc("/sys/docker-prune", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleDockerPrune(w, r)
 	}))
+	mux.HandleFunc("/sys/docker-stats", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerStats(w, r)
+	}))
 
 	// Notes post-install d'une app
 	mux.HandleFunc("/sys/app-notes/", requireSession(func(w http.ResponseWriter, r *http.Request) {
