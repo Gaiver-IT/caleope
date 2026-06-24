@@ -771,6 +771,40 @@ func handleSysCerts(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"certs": certs})
 }
 
+func handleNetTool(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	toolType := r.URL.Query().Get("type")
+	host     := r.URL.Query().Get("host")
+
+	// Validate host: no spaces, no shell metacharacters
+	for _, ch := range host {
+		if ch == ' ' || ch == ';' || ch == '&' || ch == '|' || ch == '$' || ch == '`' || ch == '\'' || ch == '"' || ch == '\\' || ch == '>' || ch == '<' {
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "hôte invalide"})
+			return
+		}
+	}
+	if host == "" {
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "hôte requis"})
+		return
+	}
+
+	var cmd *exec.Cmd
+	switch toolType {
+	case "ping":
+		cmd = exec.Command("ping", "-c", "4", "-W", "2", host)
+	case "dns":
+		cmd = exec.Command("dig", "+short", host)
+	case "trace":
+		cmd = exec.Command("traceroute", "-m", "15", "-w", "2", host)
+	default:
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "type invalide"})
+		return
+	}
+
+	out, _ := cmd.CombinedOutput()
+	_ = json.NewEncoder(w).Encode(map[string]string{"output": string(out)})
+}
+
 func handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	// Traefik dashboard API runs on port 8080 by default

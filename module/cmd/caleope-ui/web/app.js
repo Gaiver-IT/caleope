@@ -7421,10 +7421,54 @@ async function loadNetwork() {
     </div>` : ''}
     ${appPortsHtml}
     <div id="net-bandwidth-widget" style="margin-top:24px"></div>
-    <div id="net-firewall-widget" style="margin-top:24px"></div>`;
+    <div id="net-firewall-widget" style="margin-top:24px"></div>
+    <div style="margin-top:24px">
+      <div class="net-section-title">// OUTILS RÉSEAU</div>
+      <div class="settings-card" style="padding:12px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+          <input id="net-tool-host" class="param-input" placeholder="hôte / IP (ex: 1.1.1.1)"
+            style="flex:1;min-width:160px;max-width:240px"
+            onkeydown="if(event.key==='Enter')runNetTool()">
+          <select id="net-tool-type" class="log-select" style="width:auto">
+            <option value="ping">PING</option>
+            <option value="dns">DNS LOOKUP</option>
+            <option value="trace">TRACEROUTE</option>
+          </select>
+          <button class="btn" onclick="runNetTool()"><i class="ti ti-terminal"></i>EXÉCUTER</button>
+          <button class="btn-sm" onclick="clearNetTool()"><i class="ti ti-eraser"></i></button>
+        </div>
+        <pre id="net-tool-output" style="font-family:monospace;font-size:9px;color:var(--text2);background:var(--bg1);
+          padding:8px;border-radius:4px;border:1px solid var(--border);min-height:40px;max-height:200px;
+          overflow-y:auto;white-space:pre-wrap;display:none"></pre>
+      </div>
+    </div>`;
 
   loadNetBandwidthWidget();
   loadNetFirewallWidget();
+}
+
+async function runNetTool() {
+  const host = document.getElementById('net-tool-host')?.value?.trim();
+  const type = document.getElementById('net-tool-type')?.value || 'ping';
+  const out  = document.getElementById('net-tool-output');
+  if (!out) return;
+  if (!host) { notify('Saisissez un hôte', 'err'); return; }
+  out.style.display = 'block';
+  out.textContent = `Exécution de ${type} vers ${host}…`;
+  try {
+    const r = await fetch(`/sys/nettool?type=${encodeURIComponent(type)}&host=${encodeURIComponent(host)}`);
+    const d = await r.json();
+    out.textContent = d.output || d.error || 'Aucun résultat';
+  } catch(e) {
+    out.textContent = `Erreur : ${e.message}`;
+  }
+}
+
+function clearNetTool() {
+  const out = document.getElementById('net-tool-output');
+  if (out) { out.textContent = ''; out.style.display = 'none'; }
+  const inp = document.getElementById('net-tool-host');
+  if (inp) inp.value = '';
 }
 
 async function loadNetBandwidthWidget() {

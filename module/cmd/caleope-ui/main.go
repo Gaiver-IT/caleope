@@ -1036,6 +1036,9 @@ func main() {
 	mux.HandleFunc("/sys/certs", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleSysCerts(w, r)
 	}))
+	mux.HandleFunc("/sys/nettool", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleNetTool(w, r)
+	}))
 	mux.HandleFunc("/sys/traefik-services", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleTraefikServices(w, r)
 	}))
