@@ -185,6 +185,7 @@
         <span id="tb-app-ctrl" style="display:none;margin-left:12px;display:none"></span>
       </div>
       <div class="tb-right">
+        <span id="tb-sysbar" style="display:none;align-items:center;gap:6px;font-size:8px;color:var(--text3);letter-spacing:.5px"></span>
         <span class="sys-clock" id="clock">--:--:--</span>
         <button class="btn" id="refresh-btn" onclick="refreshSection()" title="Actualiser la section courante">
           <i class="ti ti-refresh"></i>
@@ -211,6 +212,12 @@
             <span id="log-live-badge" class="badge badge-ok" style="display:none;font-size:8px;animation:pulse 1.5s infinite">
               <i class="ti ti-radio" style="font-size:9px"></i>&nbsp;LIVE
             </span>
+            <select id="log-level-filter" class="log-select" onchange="filterLogLevel(this.value)" title="Filtrer par niveau">
+              <option value="">TOUS</option>
+              <option value="error">ERREUR</option>
+              <option value="warn">WARN</option>
+              <option value="info">INFO</option>
+            </select>
             <button class="btn-sm" onclick="clearLogs()" title="Effacer l'affichage">
               <i class="ti ti-eraser"></i>EFFACER
             </button>

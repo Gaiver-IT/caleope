@@ -530,6 +530,7 @@ async function loadApps() {
   S.apps    = apps?.data    || [];
   S.catalog = store?.data   || [];
   S.stats   = { ...(stats?.data || {}), version: ping?.data?.version };
+  updateTbSysbar();
   buildDynamicNav();
   renderApps();
 }
@@ -1039,6 +1040,21 @@ async function loadLogs() {
 function clearLogs() {
   const body = document.getElementById('log-body');
   if (body) body.innerHTML = '';
+}
+
+function filterLogLevel(level) {
+  const body = document.getElementById('log-body');
+  if (!body) return;
+  const lines = body.querySelectorAll('.log-line');
+  lines.forEach(line => {
+    if (!level) { line.style.display = ''; return; }
+    const text = line.textContent.toLowerCase();
+    const visible =
+      (level === 'error' && (text.includes('error') || text.includes('err') || line.querySelector('.log-err'))) ||
+      (level === 'warn'  && (text.includes('warn')  || line.querySelector('.log-warn'))) ||
+      (level === 'info'  && (text.includes('info')  || line.querySelector('.log-step') || line.querySelector('.log-ok')));
+    line.style.display = visible ? '' : 'none';
+  });
 }
 
 function appendLog(line) {
@@ -1552,6 +1568,7 @@ async function loadStats() {
   S.stats      = statsResp?.data || {};
   S.sysinfo    = sysResp?.data   || {};
   S.containers = ctResp?.data?.containers || [];
+  updateTbSysbar();
   renderStats();
 }
 
@@ -5444,6 +5461,28 @@ function showLogin() {
 
 let _dashRefreshInterval = null;
 
+function updateTbSysbar() {
+  const el = document.getElementById('tb-sysbar');
+  if (!el) return;
+  const ram  = S.stats.mem_total_mb  ? Math.round(S.stats.mem_used_mb  / S.stats.mem_total_mb  * 100) : null;
+  const disk = S.stats.disk_total_gb ? Math.round(S.stats.disk_used_gb / S.stats.disk_total_gb * 100) : null;
+  if (ram === null && disk === null) { el.style.display = 'none'; return; }
+
+  const pill = (label, pct) => {
+    const col = pct > 85 ? 'var(--red-b)' : pct > 70 ? 'var(--warn)' : 'var(--green-b)';
+    return `<span style="display:inline-flex;align-items:center;gap:3px">
+      <span style="color:var(--text3)">${label}</span>
+      <span style="font-weight:700;color:${col}">${pct}%</span>
+    </span>`;
+  };
+
+  el.style.display = 'inline-flex';
+  el.innerHTML = [
+    ram  !== null ? pill('RAM',   ram)  : '',
+    disk !== null ? pill('DISK',  disk) : '',
+  ].filter(Boolean).join('<span style="color:var(--border1)">·</span>');
+}
+
 function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').classList.add('visible');
@@ -5452,9 +5491,14 @@ function showApp() {
   goSection('dashboard');
   // Auto-refresh dashboard + stats toutes les 30s
   if (_dashRefreshInterval) clearInterval(_dashRefreshInterval);
-  _dashRefreshInterval = setInterval(() => {
+  _dashRefreshInterval = setInterval(async () => {
     if (S.section === 'dashboard') loadDashboard();
     else if (S.section === 'stats') loadStats();
+    else {
+      // Refresh sysbar stats en arrière-plan même hors dashboard
+      const r = await api.get('/api/v1/stats').catch(() => null);
+      if (r?.data) { Object.assign(S.stats, r.data); updateTbSysbar(); }
+    }
     pollEventsBadge();
   }, 30000);
   pollEventsBadge();
