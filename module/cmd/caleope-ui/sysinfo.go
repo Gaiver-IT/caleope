@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -708,6 +709,34 @@ func handleDockerStats(w http.ResponseWriter, r *http.Request) {
 		stats = []dockerStatEntry{}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"stats": stats})
+}
+
+func handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	// Traefik dashboard API runs on port 8080 by default
+	traefikURL := "http://localhost:8080/api/http/routers?per_page=100"
+	resp, err := http.Get(traefikURL)
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error(), "routers": []interface{}{}})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	// Proxy the raw JSON array as-is
+	w.Write(body)
+}
+
+func handleTraefikServices(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	traefikURL := "http://localhost:8080/api/http/services?per_page=100"
+	resp, err := http.Get(traefikURL)
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error(), "services": []interface{}{}})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	w.Write(body)
 }
 
 func parseJournalJSON(raw []byte) []journalEntry {

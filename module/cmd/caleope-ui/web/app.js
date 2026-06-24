@@ -3521,6 +3521,14 @@ const APP_PANELS = {
       { id: 'panel-scrutiny-disks', label: 'DISQUES', icon: 'ti-database', load: loadScrutinyDisks },
     ],
   },
+  'traefik': {
+    group: '// RÉSEAU',
+    icon: 'ti-route',
+    panels: [
+      { id: 'panel-traefik-routes',   label: 'ROUTES',   icon: 'ti-route',   load: loadTraefikRoutes   },
+      { id: 'panel-traefik-services', label: 'SERVICES', icon: 'ti-server',  load: loadTraefikServices },
+    ],
+  },
 };
 
 // ── Sidebar collapsible ───────────────────────────────────────────────────────
@@ -6219,6 +6227,123 @@ async function loadScrutinyDisks() {
       <span style="font-size:9px;color:var(--text3);margin-left:auto">${devices.length} DISQUE${devices.length > 1 ? 'S' : ''}</span>
     </div>
     ${rows}`;
+}
+
+async function loadTraefikRoutes() {
+  const c = document.getElementById('content-panel-traefik-routes');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+  let routers = null;
+  try {
+    const r = await fetch('/sys/traefik-routes');
+    if (r.ok) routers = await r.json();
+  } catch(e) {}
+
+  if (!Array.isArray(routers)) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-route"></i></div><div class="empty-title">ROUTES INDISPONIBLES</div><div class="empty-sub">Traefik API non accessible (port 8080).</div></div>`;
+    return;
+  }
+
+  const dockerRouters = routers.filter(r => r.provider === 'docker' || r.provider?.startsWith('docker'));
+  const internalRouters = routers.filter(r => r.provider === 'internal' || r.provider === 'file');
+  const errRouters = routers.filter(r => r.status !== 'enabled');
+
+  const routerRow = r => {
+    const host = r.rule?.match(/Host\(`([^`]+)`\)/)?.[1] || '';
+    const ep = (r.entryPoints || []).join(', ');
+    const hasTLS = !!r.tls;
+    const ok = r.status === 'enabled';
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:5px 12px;font-weight:700;color:var(--text1);font-size:9px">${escapeHtml(r.name || r.service || '—')}</td>
+      <td style="padding:5px 8px;font-size:9px">
+        ${host ? `<span style="color:var(--accent)">${escapeHtml(host)}</span>` : `<span style="color:var(--text3);font-size:8px;font-family:monospace">${escapeHtml(r.rule || '—')}</span>`}
+      </td>
+      <td style="padding:5px 8px;font-size:8px;color:var(--text3)">${escapeHtml(ep)}</td>
+      <td style="padding:5px 8px;text-align:center">
+        ${hasTLS ? '<i class="ti ti-lock" style="font-size:10px;color:var(--green-b)" title="TLS"></i>' : '<i class="ti ti-lock-open" style="font-size:10px;color:var(--text3)" title="No TLS"></i>'}
+      </td>
+      <td style="padding:5px 12px 5px 8px;text-align:center">
+        <span style="font-size:8px;color:${ok ? 'var(--ok)' : 'var(--err)'}">${ok ? '●' : '✗'}</span>
+      </td>
+    </tr>`;
+  };
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <div style="font-size:9px;color:var(--text3)">${routers.length} ROUTE${routers.length !== 1 ? 'S' : ''}</div>
+      ${errRouters.length ? `<span style="font-size:8px;color:var(--err);font-weight:700">${errRouters.length} EN ERREUR</span>` : ''}
+      <button class="btn-sm" style="margin-left:auto" onclick="loadTraefikRoutes()"><i class="ti ti-refresh"></i>REFRESH</button>
+    </div>
+    ${dockerRouters.length ? `
+    <div class="settings-card" style="padding:0;margin-bottom:8px">
+      <div class="settings-title" style="padding:8px 12px">DOCKER (${dockerRouters.length})</div>
+      <table style="width:100%;border-collapse:collapse;font-size:9px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="padding:4px 12px;text-align:left">NOM</th>
+          <th style="padding:4px 8px;text-align:left">HÔTE / RÈGLE</th>
+          <th style="padding:4px 8px;text-align:left">ENTRY</th>
+          <th style="padding:4px 8px;text-align:center">TLS</th>
+          <th style="padding:4px 12px 4px 8px;text-align:center">ÉTAT</th>
+        </tr></thead>
+        <tbody>${dockerRouters.map(routerRow).join('')}</tbody>
+      </table>
+    </div>` : ''}
+    ${internalRouters.length ? `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:8px 12px">INTERNES / FICHIER (${internalRouters.length})</div>
+      <table style="width:100%;border-collapse:collapse;font-size:9px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="padding:4px 12px;text-align:left">NOM</th>
+          <th style="padding:4px 8px;text-align:left">HÔTE / RÈGLE</th>
+          <th style="padding:4px 8px;text-align:left">ENTRY</th>
+          <th style="padding:4px 8px;text-align:center">TLS</th>
+          <th style="padding:4px 12px 4px 8px;text-align:center">ÉTAT</th>
+        </tr></thead>
+        <tbody>${internalRouters.map(routerRow).join('')}</tbody>
+      </table>
+    </div>` : ''}`;
+}
+
+async function loadTraefikServices() {
+  const c = document.getElementById('content-panel-traefik-services');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+  let services = null;
+  try {
+    const r = await fetch('/sys/traefik-services');
+    if (r.ok) services = await r.json();
+  } catch(e) {}
+
+  if (!Array.isArray(services)) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-server"></i></div><div class="empty-title">SERVICES INDISPONIBLES</div></div>`;
+    return;
+  }
+
+  const dockerSvcs = services.filter(s => s.provider === 'docker');
+  const rows = dockerSvcs.map(s => {
+    const servers = s.loadBalancer?.servers || [];
+    const healthy = servers.filter(sv => sv.status === 'UP' || !sv.status).length;
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:5px 12px;font-weight:700;font-size:9px;color:var(--text1)">${escapeHtml(s.name || '—')}</td>
+      <td style="padding:5px 8px;font-size:8px;font-family:monospace;color:var(--text2)">${servers.map(sv => escapeHtml(sv.url || '')).join('<br>')}</td>
+      <td style="padding:5px 8px;text-align:center;font-size:9px;color:${healthy === servers.length ? 'var(--ok)' : 'var(--err)'}">${healthy}/${servers.length}</td>
+      <td style="padding:5px 12px 5px 8px;font-size:8px;color:var(--text3)">${escapeHtml(s.type || '—')}</td>
+    </tr>`;
+  }).join('');
+
+  c.innerHTML = `
+    <div style="font-size:9px;color:var(--text3);margin-bottom:12px">${dockerSvcs.length} SERVICE${dockerSvcs.length !== 1 ? 'S' : ''} DOCKER</div>
+    <div class="settings-card" style="padding:0">
+      <table style="width:100%;border-collapse:collapse;font-size:9px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="padding:4px 12px;text-align:left">NOM</th>
+          <th style="padding:4px 8px;text-align:left">SERVEURS</th>
+          <th style="padding:4px 8px;text-align:center">SANTÉ</th>
+          <th style="padding:4px 12px 4px 8px;text-align:left">TYPE</th>
+        </tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--text3)">Aucun service Docker</td></tr>'}</tbody>
+      </table>
+    </div>`;
 }
 
 async function loadKavitaLibrary() {
