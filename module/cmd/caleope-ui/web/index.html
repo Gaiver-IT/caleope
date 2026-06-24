@@ -209,8 +209,14 @@
             <span id="log-live-badge" class="badge badge-ok" style="display:none;font-size:8px;animation:pulse 1.5s infinite">
               <i class="ti ti-radio" style="font-size:9px"></i>&nbsp;LIVE
             </span>
+            <button class="btn-sm" onclick="clearLogs()" title="Effacer l'affichage">
+              <i class="ti ti-eraser"></i>EFFACER
+            </button>
             <button class="btn-sm" style="margin-left:auto" onclick="loadLogs()">
               <i class="ti ti-refresh"></i>REFRESH
+            </button>
+            <button class="btn-sm" onclick="exportLogs()" title="Télécharger les logs">
+              <i class="ti ti-download"></i>EXPORT
             </button>
           </div>
           <div class="log-body" id="log-body"></div>

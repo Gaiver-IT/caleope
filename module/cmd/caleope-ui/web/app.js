@@ -944,6 +944,20 @@ function changeLogApp() {
   if (select) { S.logApp = select.value; loadLogs(); }
 }
 
+function exportLogs() {
+  const body = document.getElementById('log-body');
+  if (!body) return;
+  const lines = Array.from(body.querySelectorAll('.log-line')).map(el => el.textContent.trim()).join('\n');
+  if (!lines) { notify('Aucun log à exporter', 'info'); return; }
+  const blob = new Blob([lines], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `caleope-logs-${S.logApp || 'app'}-${new Date().toISOString().slice(0,19).replace(/[T:]/g,'-')}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── SECTION: BACKUPS ──────────────────────────────────────────────────────────
 async function loadBackups() {
   const c = document.getElementById('content-backups');
@@ -1703,6 +1717,32 @@ async function loadDashboard() {
         </button>
       `).join('')}
     </div>
+
+    ${(() => {
+      const downApps = S.apps.filter(a => a.status !== 'running' && a.status !== 'installing');
+      if (!downApps.length) return '';
+      return `
+        <div style="font-size:9px;color:var(--red-b);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">
+          <i class="ti ti-alert-circle" style="font-size:10px"></i> ALERTES (${downApps.length})
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:4px">
+          ${downApps.map(a => `
+            <div style="display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);
+                        border-left:3px solid var(--red-b);border-radius:4px;padding:8px 10px">
+              <span style="font-size:12px">${icon(a.id)}</span>
+              <div style="flex:1">
+                <div style="font-size:10px;font-weight:700">${escapeHtml(a.name || a.id)}</div>
+                <div style="font-size:8px;color:var(--text3)">${a.status?.toUpperCase() || 'INCONNU'}</div>
+              </div>
+              <button class="btn-sm" onclick="appAction('${a.id}','start');loadDashboard()" title="Démarrer">
+                <i class="ti ti-player-play" style="font-size:10px"></i> DÉMARRER
+              </button>
+              <button class="btn-sm" onclick="openLogs('${a.id}')" title="Voir les logs">
+                <i class="ti ti-terminal-2" style="font-size:10px"></i>
+              </button>
+            </div>`).join('')}
+        </div>`;
+    })()}
 
     ${S.apps.length ? `
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// APPLICATIONS</div>
