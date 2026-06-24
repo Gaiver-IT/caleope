@@ -391,6 +391,12 @@ const HARDCODED_PARAMS = {
     { id: 'admin_last',  label: 'Nom',                  type: 'text',   default: 'Caleope', required: false },
   ],
 
+  // ── mealie (recettes) ────────────────────────────────────────────────────────
+  'mealie': [
+    { id: 'MEALIE_PORT_WEB', label: 'Port web', type: 'port', default: '9000', required: false,
+      description: 'Port d\'accès à l\'interface Mealie' },
+  ],
+
   // ── ntfy (notifications push) ────────────────────────────────────────────────
   'ntfy': [
     { id: 'NTFY_PORT_WEB', label: 'Port web', type: 'port', default: '8070', required: false,
@@ -3817,6 +3823,22 @@ async function loadLinkdingBookmarks() {
     </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun favori.</div>';
 
   c.innerHTML = `
+    <div class="settings-card" style="padding:12px;margin-bottom:12px">
+      <div class="settings-title" style="margin-bottom:8px">AJOUTER UN FAVORI</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <input id="linkding-url-input" type="url" placeholder="https://..." autocomplete="url"
+          style="flex:1;font-size:9px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text1)">
+      </div>
+      <div style="display:flex;gap:6px">
+        <input id="linkding-title-input" type="text" placeholder="Titre (optionnel)"
+          style="flex:1;font-size:9px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text1)">
+        <input id="linkding-tags-input" type="text" placeholder="tags, séparés, par, virgule"
+          style="flex:1;font-size:9px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text1)">
+        <button class="btn-sm" onclick="addLinkdingBookmark()">
+          <i class="ti ti-plus" style="font-size:10px"></i> AJOUTER
+        </button>
+      </div>
+    </div>
     <div class="settings-card" style="padding:0">
       <div class="settings-title" style="padding:10px 12px">
         <i class="ti ti-bookmark" style="font-size:12px"></i> FAVORIS (${data.count || bookmarks.length})
@@ -3824,6 +3846,29 @@ async function loadLinkdingBookmarks() {
       <div style="padding:0 12px 12px">${rows}</div>
     </div>
     ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+async function addLinkdingBookmark() {
+  const url   = document.getElementById('linkding-url-input')?.value?.trim();
+  const title = document.getElementById('linkding-title-input')?.value?.trim();
+  const tags  = document.getElementById('linkding-tags-input')?.value?.trim();
+  if (!url) { notify('URL requise', 'err'); return; }
+  const body = { url, title: title || '', tag_names: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [] };
+  const r = await fetch('/ui/proxy/linkding/api/bookmarks/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (r.ok) {
+    notify('Favori ajouté', 'ok');
+    document.getElementById('linkding-url-input').value = '';
+    document.getElementById('linkding-title-input').value = '';
+    document.getElementById('linkding-tags-input').value = '';
+    loadLinkdingBookmarks();
+  } else {
+    const err = await r.json().catch(() => ({}));
+    notify(err.url?.[0] || 'Erreur ajout favori', 'err');
+  }
 }
 
 async function loadLinkdingTags() {
