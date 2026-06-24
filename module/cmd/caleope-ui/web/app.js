@@ -5761,6 +5761,16 @@ async function init() {
   if (ok) { showApp(); }
   else    { showLogin(); }
 
+  // Ctrl+K / Cmd+K → quick nav (enregistré une seule fois au démarrage)
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      const overlay = document.getElementById('quicknav-overlay');
+      if (overlay && overlay.style.display !== 'none') closeQuickNav();
+      else openQuickNav();
+    }
+  });
+
   // Login form handler
   document.getElementById('login-form')?.addEventListener('submit', async e => {
     e.preventDefault();
@@ -5858,16 +5868,6 @@ function loadTerminal() {
 
   // Redimensionner quand la fenêtre change
   window.addEventListener('resize', fitTerminal);
-
-  // Ctrl+K / Cmd+K → quick nav
-  document.addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-      e.preventDefault();
-      const overlay = document.getElementById('quicknav-overlay');
-      if (overlay && overlay.style.display !== 'none') closeQuickNav();
-      else openQuickNav();
-    }
-  });
 }
 
 function fitTerminal() {
