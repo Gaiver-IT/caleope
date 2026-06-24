@@ -407,6 +407,17 @@ func main() {
 		// AdGuard Home — Basic auth (ADGUARD_USERNAME / ADGUARD_PASSWORD)
 		"adguard": {basicUserKey: "ADGUARD_USERNAME", basicPassKey: "ADGUARD_PASSWORD",
 			authScheme: "Basic", containerName: "adguardhome", containerPort: 3000},
+
+		// Portainer — X-API-Key header (PORTAINER_API_TOKEN)
+		"portainer": {tokenKey: "PORTAINER_API_TOKEN", authScheme: "X-Api-Key",
+			containerName: "portainer", containerPort: 9000},
+
+		// Uptime Kuma — pas d'auth sur l'API status-page publique
+		"uptime-kuma": {containerName: "uptime-kuma", containerPort: 3001},
+
+		// Memos — Bearer token (généré après login)
+		"memos": {tokenKey: "MEMOS_API_TOKEN", authScheme: "Bearer",
+			containerName: "memos", containerPort: 5230},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.

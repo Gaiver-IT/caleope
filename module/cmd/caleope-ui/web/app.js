@@ -1932,6 +1932,29 @@ const APP_PANELS = {
       { id: 'panel-adguard-stats', label: 'STATISTIQUES', icon: 'ti-chart-bar', load: loadAdGuardStats },
     ],
   },
+  'uptime-kuma': {
+    group: '// MONITORING',
+    icon: 'ti-heartbeat',
+    panels: [
+      { id: 'panel-uptime-monitors',  label: 'MONITEURS',    icon: 'ti-activity',  load: loadUptimeMonitors },
+      { id: 'panel-uptime-incidents', label: 'INCIDENTS',    icon: 'ti-alert-circle', load: loadUptimeIncidents },
+    ],
+  },
+  'portainer': {
+    group: '// INFRA',
+    icon: 'ti-ship',
+    panels: [
+      { id: 'panel-portainer-stacks',     label: 'STACKS',      icon: 'ti-layers',   load: loadPortainerStacks },
+      { id: 'panel-portainer-containers', label: 'CONTENEURS',  icon: 'ti-box',      load: loadPortainerContainers },
+    ],
+  },
+  'memos': {
+    group: '// NOTES',
+    icon: 'ti-notes',
+    panels: [
+      { id: 'panel-memos-recent', label: 'NOTES RÉCENTES', icon: 'ti-file-text', load: loadMemosRecent },
+    ],
+  },
 };
 
 // ── Sidebar collapsible ───────────────────────────────────────────────────────
@@ -3232,6 +3255,226 @@ async function loadAdGuardStats() {
         ? '<span style="color:var(--green-b)">ACTIVE</span>'
         : '<span style="color:var(--red-b)">INACTIVE</span>'}
     </div>` : ''}
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+// ── Uptime Kuma — Moniteurs ───────────────────────────────────────────────────
+async function loadUptimeMonitors() {
+  const c = document.getElementById('content-panel-uptime-monitors');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT MONITEURS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'uptime-kuma')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR UPTIME KUMA</a>` : '';
+
+  const r = await fetch('/ui/proxy/uptime-kuma/api/status-page/default');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-heartbeat"></i></div>
+      <div class="empty-title">UPTIME KUMA INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier que le service est démarré.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const data = await r.json();
+  const monitors = data.monitorList || {};
+  const list = Object.values(monitors);
+
+  const up = list.filter(m => m.active && m.heartbeat?.status === 1).length;
+  const down = list.filter(m => m.active && m.heartbeat?.status !== 1).length;
+  const paused = list.filter(m => !m.active).length;
+
+  const statusColor = s => s === 1 ? 'var(--green-b)' : (s === 0 ? 'var(--red-b)' : 'var(--text3)');
+  const statusLabel = s => s === 1 ? 'UP' : (s === 0 ? 'DOWN' : 'INCONNU');
+
+  const rows = list.map(m => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(m.name || m.url || '?')}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(m.url || m.hostname || '')}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        ${m.heartbeat?.ping ? `<span style="font-size:9px;color:var(--text3)">${m.heartbeat.ping}ms</span>` : ''}
+        <span style="font-size:9px;font-weight:700;color:${statusColor(m.heartbeat?.status)}">
+          ${statusLabel(m.heartbeat?.status)}
+        </span>
+      </div>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun moniteur.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val" style="color:var(--green-b)">${up}</div><div class="stat-lbl">UP</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--red-b)">${down}</div><div class="stat-lbl">DOWN</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--text3)">${paused}</div><div class="stat-lbl">PAUSÉS</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-activity" style="font-size:12px"></i> MONITEURS (${list.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+async function loadUptimeIncidents() {
+  const c = document.getElementById('content-panel-uptime-incidents');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/uptime-kuma/api/status-page/default');
+  if (!r.ok) { c.innerHTML = `<div class="empty-msg">Indisponible.</div>`; return; }
+
+  const data = await r.json();
+  const incident = data.incident;
+
+  if (!incident) {
+    c.innerHTML = `<div class="empty-state">
+      <div class="empty-icon" style="color:var(--green-b)"><i class="ti ti-circle-check"></i></div>
+      <div class="empty-title" style="color:var(--green-b)">AUCUN INCIDENT</div>
+      <div class="empty-sub">Tous les services fonctionnent normalement.</div>
+    </div>`;
+    return;
+  }
+
+  c.innerHTML = `
+    <div class="settings-card" style="border-left:3px solid var(--red-b);padding:12px">
+      <div style="font-size:11px;font-weight:700;color:var(--red-b);margin-bottom:4px">
+        ${escapeHtml(incident.title || 'Incident en cours')}
+      </div>
+      <div style="font-size:9px;color:var(--text2)">${escapeHtml(incident.content || '')}</div>
+    </div>`;
+}
+
+// ── Portainer — Stacks & Conteneurs ──────────────────────────────────────────
+async function loadPortainerStacks() {
+  const c = document.getElementById('content-panel-portainer-stacks');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT STACKS...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'portainer')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR PORTAINER</a>` : '';
+
+  const r = await fetch('/ui/proxy/portainer/api/stacks');
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    const missingToken = text.includes('unauthorized') || r.status === 401;
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-ship"></i></div>
+      <div class="empty-title">PORTAINER ${missingToken ? 'NON CONFIGURÉ' : 'INDISPONIBLE'}</div>
+      <div class="empty-sub">${missingToken
+        ? 'PORTAINER_API_TOKEN manquant dans les secrets. Lancer : caleope configure portainer'
+        : 'Vérifier que le service est démarré.'}</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const stacks = await r.json();
+
+  const rows = stacks.map(s => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(s.Name)}</div>
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(s.Type === 1 ? 'Compose' : 'Swarm')} · ${escapeHtml(s.ProjectPath || '')}</div>
+      </div>
+      <span style="font-size:9px;font-weight:700;color:${s.Status === 1 ? 'var(--green-b)' : 'var(--text3)'}">${s.Status === 1 ? 'ACTIF' : 'INACTIF'}</span>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune stack.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-layers" style="font-size:12px"></i> STACKS (${stacks.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+async function loadPortainerContainers() {
+  const c = document.getElementById('content-panel-portainer-containers');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  // Récupérer l'endpoint local (id=1 en général)
+  const rEnv = await fetch('/ui/proxy/portainer/api/endpoints');
+  if (!rEnv.ok) { c.innerHTML = `<div class="empty-msg">Portainer indisponible.</div>`; return; }
+  const envs = await rEnv.json();
+  const envId = envs?.[0]?.Id || 1;
+
+  const r = await fetch(`/ui/proxy/portainer/api/endpoints/${envId}/docker/containers/json?all=1`);
+  if (!r.ok) { c.innerHTML = `<div class="empty-msg">Impossible de lister les conteneurs.</div>`; return; }
+
+  const containers = await r.json();
+  const running = containers.filter(c2 => c2.State === 'running').length;
+  const stopped = containers.filter(c2 => c2.State !== 'running').length;
+
+  const rows = containers.slice(0, 20).map(ct => {
+    const name = (ct.Names?.[0] || ct.Id.slice(0,12)).replace(/^\//, '');
+    const img  = ct.Image?.split(':')[0].split('/').pop() || '';
+    return `
+      <div class="loc-row">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:10px;font-weight:700">${escapeHtml(name)}</div>
+          <div style="font-size:9px;color:var(--text3)">${escapeHtml(img)}</div>
+        </div>
+        <span style="font-size:9px;font-weight:700;color:${ct.State === 'running' ? 'var(--green-b)' : 'var(--red-b)'}">
+          ${ct.State === 'running' ? 'RUN' : ct.State.toUpperCase()}
+        </span>
+      </div>`;
+  }).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun conteneur.</div>';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val" style="color:var(--green-b)">${running}</div><div class="stat-lbl">EN COURS</div></div>
+      <div class="stat-card"><div class="stat-val" style="color:var(--red-b)">${stopped}</div><div class="stat-lbl">ARRÊTÉS</div></div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-box" style="font-size:12px"></i> CONTENEURS (${containers.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>`;
+}
+
+// ── Memos — Notes récentes ────────────────────────────────────────────────────
+async function loadMemosRecent() {
+  const c = document.getElementById('content-panel-memos-recent');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT NOTES...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'memos')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR MEMOS</a>` : '';
+
+  const r = await fetch('/ui/proxy/memos/api/v1/memos?limit=20&rowStatus=NORMAL');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-notes"></i></div>
+      <div class="empty-title">MEMOS INDISPONIBLE</div>
+      <div class="empty-sub">MEMOS_API_TOKEN manquant ou service arrêté.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+
+  const memos = await r.json();
+  const list = Array.isArray(memos) ? memos : (memos.memos || []);
+
+  const rows = list.slice(0, 10).map(m => {
+    const date = m.createdAt ? new Date(m.createdAt * 1000).toLocaleDateString('fr-FR') : '';
+    const preview = (m.content || '').slice(0, 120).replace(/\n/g, ' ');
+    return `
+      <div class="loc-row" style="flex-direction:column;align-items:flex-start;gap:2px">
+        <div style="font-size:9px;color:var(--text3)">${escapeHtml(date)}</div>
+        <div style="font-size:10px;color:var(--text2)">${escapeHtml(preview)}${preview.length >= 120 ? '…' : ''}</div>
+      </div>`;
+  }).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune note.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-file-text" style="font-size:12px"></i> NOTES RÉCENTES (${list.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
     ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
 }
 
