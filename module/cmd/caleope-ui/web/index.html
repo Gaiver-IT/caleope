@@ -145,8 +145,10 @@
           <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
             <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
           </button>
-          <button class="nav-btn" data-section="events" onclick="goSection('events')">
+          <button class="nav-btn" data-section="events" onclick="goSection('events');clearEventsBadge()">
             <i class="ti ti-history" aria-hidden="true"></i>ÉVÉNEMENTS
+            <span id="events-badge" style="display:none;margin-left:auto;background:var(--red-b);color:#fff;
+              font-size:7px;font-weight:900;padding:1px 4px;border-radius:8px;min-width:14px;text-align:center"></span>
           </button>
           <button class="nav-btn" data-section="audit" onclick="goSection('audit')">
             <i class="ti ti-clipboard-list" aria-hidden="true"></i>AUDIT

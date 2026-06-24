@@ -390,6 +390,24 @@ const HARDCODED_PARAMS = {
     { id: 'admin_first', label: 'Prénom',               type: 'text',   default: 'Admin', required: false },
     { id: 'admin_last',  label: 'Nom',                  type: 'text',   default: 'Caleope', required: false },
   ],
+
+  // ── ntfy (notifications push) ────────────────────────────────────────────────
+  'ntfy': [
+    { id: 'NTFY_PORT_WEB', label: 'Port web', type: 'port', default: '8070', required: false,
+      description: 'Port d\'accès à l\'interface ntfy' },
+  ],
+
+  // ── n8n (automation) ─────────────────────────────────────────────────────────
+  'n8n': [
+    { id: 'N8N_PORT_WEB', label: 'Port web', type: 'port', default: '5678', required: false,
+      description: 'Port d\'accès à l\'interface n8n' },
+  ],
+
+  // ── filebrowser ───────────────────────────────────────────────────────────────
+  'filebrowser': [
+    { id: 'FILEBROWSER_PORT_WEB', label: 'Port web', type: 'port', default: '8085', required: false,
+      description: 'Port d\'accès à l\'interface File Browser' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -4181,6 +4199,37 @@ const EVENT_ICONS = {
   'app.failed':      'ti-alert-circle',
 };
 
+async function pollEventsBadge() {
+  if (S.section === 'events') { clearEventsBadge(); return; }
+  try {
+    const resp = await api.get('/api/v1/events?limit=20');
+    const evts = resp?.data || [];
+    if (!evts.length) return;
+    const lastSeen = localStorage.getItem('caleope-events-seen') || '';
+    const newest = evts[evts.length - 1]?.timestamp || evts[0]?.timestamp || '';
+    if (lastSeen && newest <= lastSeen) return;
+    const unseen = evts.filter(e => (e.timestamp || '') > lastSeen).length;
+    const badge = document.getElementById('events-badge');
+    if (badge && unseen > 0) {
+      badge.textContent = unseen > 9 ? '9+' : String(unseen);
+      badge.style.display = '';
+    }
+  } catch(e) {}
+}
+
+function clearEventsBadge() {
+  const badge = document.getElementById('events-badge');
+  if (badge) badge.style.display = 'none';
+  try {
+    const resp = S.events_last_ts;
+    if (resp) localStorage.setItem('caleope-events-seen', resp);
+    else api.get('/api/v1/events?limit=1').then(r => {
+      const ts = r?.data?.[0]?.timestamp || r?.data?.[r?.data?.length-1]?.timestamp;
+      if (ts) localStorage.setItem('caleope-events-seen', ts);
+    });
+  } catch(e) {}
+}
+
 async function loadEvents() {
   const c = document.getElementById('content-events');
   if (!c) return;
@@ -4188,6 +4237,15 @@ async function loadEvents() {
 
   const resp = await api.get('/api/v1/events?limit=100');
   const evts = resp?.data || [];
+
+  // Marquer les événements comme vus
+  if (evts.length) {
+    const newest = evts[evts.length - 1]?.timestamp || evts[0]?.timestamp;
+    if (newest) {
+      try { localStorage.setItem('caleope-events-seen', newest); } catch(e) {}
+    }
+    clearEventsBadge();
+  }
 
   if (!evts.length) {
     c.innerHTML = `<div class="empty-state">
@@ -4279,7 +4337,9 @@ function showApp() {
   _dashRefreshInterval = setInterval(() => {
     if (S.section === 'dashboard') loadDashboard();
     else if (S.section === 'stats') loadStats();
+    pollEventsBadge();
   }, 30000);
+  pollEventsBadge();
 }
 
 function refreshSection() {
