@@ -466,6 +466,9 @@ func main() {
 
 		// Grocy — gestion inventaire maison
 		"grocy": {containerName: "grocy", containerPort: 80},
+
+		// Jellyseerr — demandes médias pour Jellyfin
+		"jellyseerr": {containerName: "jellyseerr", containerPort: 5055},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.

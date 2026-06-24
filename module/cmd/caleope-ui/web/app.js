@@ -443,6 +443,18 @@ const HARDCODED_PARAMS = {
     { id: 'GROCY_PORT_WEB', label: 'Port web', type: 'port', default: '9283', required: false,
       description: 'Port d\'accès à l\'interface Grocy' },
   ],
+
+  'jellyseerr': [
+    { id: 'JELLYSEERR_PORT_WEB', label: 'Port web', type: 'port', default: '5099', required: false,
+      description: 'Port d\'accès à l\'interface Jellyseerr' },
+  ],
+
+  'monica': [
+    { id: 'MONICA_PORT_WEB', label: 'Port web', type: 'port', default: '8082', required: false,
+      description: 'Port d\'accès à l\'interface Monica' },
+    { id: 'MYSQL_PASSWORD', label: 'Mot de passe DB', type: 'secret', default: '', required: false,
+      description: 'Mot de passe MySQL pour le compte monica' },
+  ],
 };
 
 // ── Icons apps (défaut) ───────────────────────────────────────────────────────
@@ -1886,7 +1898,59 @@ async function loadDashboard() {
         </div>
       </div>
     ` : ''}
+
+    ${S.apps.some(a => a.id === 'uptime-kuma' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MONITORING</div>
+      <div id="dash-uptime-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
   `;
+
+  // Charger le widget uptime-kuma async si présent
+  if (S.apps.some(a => a.id === 'uptime-kuma' && a.status === 'running')) {
+    loadDashUptimeWidget();
+  }
+}
+
+async function loadDashUptimeWidget() {
+  const w = document.getElementById('dash-uptime-widget');
+  if (!w) return;
+  let monitors = null;
+  try {
+    const r = await fetch('/ui/proxy/uptime-kuma/api/status-page/heartbeat/default');
+    if (r.ok) {
+      const d = await r.json();
+      monitors = Object.values(d.heartbeatList || {}).map(beats => {
+        const last = beats[beats.length - 1] || {};
+        return { status: last.status, msg: last.msg || '' };
+      });
+    }
+  } catch(e) {}
+
+  if (!monitors) {
+    // Fallback: essai API JSON directe (nécessite clé API)
+    w.innerHTML = '';
+    return;
+  }
+
+  const up   = monitors.filter(m => m.status === 1).length;
+  const down = monitors.filter(m => m.status !== 1).length;
+  const total = monitors.length;
+  const allGood = down === 0;
+
+  w.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--card);
+        border-radius:6px;border:1px solid var(--border);border-left:3px solid ${allGood ? 'var(--green-b)' : 'var(--red-b)'}">
+      <span style="font-size:16px">${allGood ? '✅' : '⚠️'}</span>
+      <div style="flex:1">
+        <div style="font-size:10px;font-weight:700;color:var(--text1)">
+          ${allGood ? 'Tous les services sont opérationnels' : `${down} service(s) en anomalie`}
+        </div>
+        <div style="font-size:8px;color:var(--text3)">${up}/${total} moniteur(s) UP</div>
+      </div>
+      <button class="btn-sm" onclick="goSection('uptime-kuma')">
+        <i class="ti ti-external-link" style="font-size:10px"></i> DÉTAILS
+      </button>
+    </div>`;
 }
 
 // ── SECTION: TASKS ───────────────────────────────────────────────────────────
@@ -2299,6 +2363,13 @@ const APP_PANELS = {
     panels: [
       { id: 'panel-grocy-stock', label: 'STOCK', icon: 'ti-shopping-cart', load: loadGrocyStock },
       { id: 'panel-grocy-tasks', label: 'TÂCHES', icon: 'ti-checklist', load: loadGrocyTasks },
+    ],
+  },
+  'jellyseerr': {
+    group: '// MÉDIAS',
+    icon: 'ti-ticket',
+    panels: [
+      { id: 'panel-jellyseerr-requests', label: 'DEMANDES', icon: 'ti-ticket', load: loadJellyseerrRequests },
     ],
   },
 };
@@ -4579,6 +4650,72 @@ function loadHomarrDashboard() {
       <iframe src="/ui/proxy/homarr/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
         allow="fullscreen" title="Homarr"></iframe>
     </div>`;
+}
+
+// ── Jellyseerr — Demandes médias ─────────────────────────────────────────────
+async function loadJellyseerrRequests() {
+  const c = document.getElementById('content-panel-jellyseerr-requests');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT JELLYSEERR...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'jellyseerr')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR JELLYSEERR</a>`
+    : '';
+
+  let data = null;
+  try {
+    const r = await fetch('/ui/proxy/jellyseerr/api/v1/request?take=20&skip=0&sort=added&requestedBy=0');
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+
+  if (!data) {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">${adminLink}</div>
+      <div class="empty-state"><div class="empty-icon"><i class="ti ti-ticket"></i></div>
+        <div class="empty-title">JELLYSEERR INDISPONIBLE</div>
+        <div class="empty-sub">Vérifiez que Jellyseerr est démarré et configuré.</div></div>`;
+    return;
+  }
+
+  const requests = data.results || [];
+  const pending  = requests.filter(r => r.status === 1).length;
+  const approved = requests.filter(r => r.status === 2).length;
+
+  const statusLabel = s => ({ 1: 'EN ATTENTE', 2: 'APPROUVÉE', 3: 'REFUSÉE', 4: 'DISPONIBLE', 5: 'TRAITÉE' }[s] || String(s));
+  const statusCls   = s => ({ 1: 'badge-warn', 2: 'badge-run', 3: 'badge-err', 4: 'badge-run', 5: 'badge-stop' }[s] || 'badge-stop');
+
+  const rows = requests.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-check"></i></div>
+        <div class="empty-title">AUCUNE DEMANDE</div>
+        <div class="empty-sub">Aucune demande de média pour l'instant.</div></div>`
+    : requests.map(req => {
+        const media = req.media || {};
+        const title = media.originalTitle || req.media?.title || `Media #${media.tmdbId || '?'}`;
+        const type = req.type === 'movie' ? '🎬' : '📺';
+        const date = req.createdAt ? new Date(req.createdAt).toLocaleDateString('fr-FR') : '';
+        const requester = req.requestedBy?.displayName || req.requestedBy?.email || '—';
+        return `
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card);
+              border-radius:6px;border:1px solid var(--border);margin-bottom:5px">
+            <span style="font-size:14px">${type}</span>
+            <div style="flex:1">
+              <div style="font-size:10px;font-weight:600;color:var(--text1)">${escapeHtml(title)}</div>
+              <div style="font-size:8px;color:var(--text3)">${escapeHtml(requester)} · ${escapeHtml(date)}</div>
+            </div>
+            <span class="badge ${statusCls(req.status)}" style="font-size:7px">${statusLabel(req.status)}</span>
+          </div>`;
+      }).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      ${adminLink}
+      <span class="badge badge-warn" style="font-size:7px">${pending} en attente</span>
+      <span class="badge badge-run" style="font-size:7px">${approved} approuvée(s)</span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadJellyseerrRequests()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
 }
 
 // ── Grocy — Stock et tâches ───────────────────────────────────────────────────
