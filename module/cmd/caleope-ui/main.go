@@ -420,7 +420,7 @@ func main() {
 			containerName: "memos", containerPort: 5230},
 
 		// Linkding — Bearer token (LINKDING_API_TOKEN)
-		"linkding": {tokenKey: "LINKDING_API_TOKEN", authScheme: "Bearer",
+		"linkding": {tokenKey: "LINKDING_API_TOKEN", authScheme: "DRFToken",
 			containerName: "linkding", containerPort: 9090},
 
 		// Paperless-NGX — Bearer token (PAPERLESS_API_TOKEN)
@@ -450,10 +450,12 @@ func main() {
 		"mealie": {containerName: "mealie", containerPort: 9000},
 
 		// Changedetection.io — sans auth par défaut
-		"changedetection": {containerName: "changedetection", containerPort: 5000},
+		"changedetection": {tokenKey: "CHANGEDETECTION_API_TOKEN", authScheme: "X-Api-Key",
+			containerName: "changedetection", containerPort: 5000},
 
-		// Gotify — notifications push, auth propre à gotify
-		"gotify": {containerName: "gotify", containerPort: 80},
+		// Gotify — notifications push, client token dans X-Gotify-Key
+		"gotify": {tokenKey: "GOTIFY_CLIENT_TOKEN", authScheme: "X-Gotify-Key",
+			containerName: "gotify", containerPort: 80},
 
 		// Homarr — dashboard de liens, sans auth proxy
 		"homarr": {containerName: "homarr", containerPort: 7575},
@@ -464,8 +466,9 @@ func main() {
 		// CrowdSec — LAPI locale pour consulter alertes/décisions
 		"crowdsec": {containerName: "crowdsec", containerPort: 8080},
 
-		// Grocy — gestion inventaire maison
-		"grocy": {containerName: "grocy", containerPort: 80},
+		// Grocy — gestion inventaire maison, API key dans GROCY-API-KEY header
+		"grocy": {tokenKey: "GROCY_API_KEY", authScheme: "GROCY-API-KEY",
+			containerName: "grocy", containerPort: 80},
 
 		// Jellyseerr — demandes médias pour Jellyfin
 		"jellyseerr": {containerName: "jellyseerr", containerPort: 5055},
@@ -819,6 +822,8 @@ func main() {
 				switch cfg.authScheme {
 				case "Bearer":
 					authHeader, authValue = "Authorization", "Bearer "+token
+				case "DRFToken":
+					authHeader, authValue = "Authorization", "Token "+token
 				default:
 					authHeader, authValue = cfg.authScheme, token
 				}
