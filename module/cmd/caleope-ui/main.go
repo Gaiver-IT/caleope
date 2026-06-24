@@ -436,6 +436,15 @@ func main() {
 
 		// Stirling PDF — sans auth par défaut
 		"stirling-pdf": {containerName: "stirling-pdf", containerPort: 8080},
+
+		// ntfy — notifications push, sans auth sur l'API publique
+		"ntfy": {containerName: "ntfy", containerPort: 80},
+
+		// n8n — automation workflows, sans auth (géré par n8n)
+		"n8n": {containerName: "n8n", containerPort: 5678},
+
+		// File Browser — sans auth proxy (auth propre à filebrowser)
+		"filebrowser": {containerName: "filebrowser", containerPort: 80},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.

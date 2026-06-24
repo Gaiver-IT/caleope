@@ -2158,6 +2158,27 @@ const APP_PANELS = {
       { id: 'panel-stirling-pdf', label: 'STIRLING PDF', icon: 'ti-file-type-pdf', load: loadStirlingPDF },
     ],
   },
+  'ntfy': {
+    group: '// OUTILS',
+    icon: 'ti-bell',
+    panels: [
+      { id: 'panel-ntfy-topics', label: 'TOPICS', icon: 'ti-bell', load: loadNtfyTopics },
+    ],
+  },
+  'n8n': {
+    group: '// AUTOMATION',
+    icon: 'ti-workflow',
+    panels: [
+      { id: 'panel-n8n-workflows', label: 'WORKFLOWS', icon: 'ti-workflow', load: loadN8nWorkflows },
+    ],
+  },
+  'filebrowser': {
+    group: '// OUTILS',
+    icon: 'ti-folder-open',
+    panels: [
+      { id: 'panel-filebrowser', label: 'FICHIERS', icon: 'ti-folder-open', load: loadFileBrowser },
+    ],
+  },
 };
 
 // ── Sidebar collapsible ───────────────────────────────────────────────────────
@@ -3893,6 +3914,111 @@ async function loadFreshRssFeeds() {
       <div style="padding:0 12px 12px">${rows}</div>
     </div>
     ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+// ── ntfy — Topics et messages ─────────────────────────────────────────────────
+async function loadNtfyTopics() {
+  const c = document.getElementById('content-panel-ntfy-topics');
+  if (!c) return;
+  const appDomain = S.apps.find(a => a.id === 'ntfy')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR NTFY</a>` : '';
+
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT NTFY...</div>`;
+
+  const r = await fetch('/ui/proxy/ntfy/v1/stats');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-bell"></i></div>
+      <div class="empty-title">NTFY INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier que le service est démarré.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+  const stats = await r.json();
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card"><div class="stat-val">${stats.messages_published ?? '—'}</div><div class="stat-lbl">MESSAGES</div></div>
+      <div class="stat-card"><div class="stat-val">${stats.open_subscriptions ?? '—'}</div><div class="stat-lbl">ABONNEMENTS</div></div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">ENVOYER UN TEST</div>
+      <div style="display:flex;gap:6px;margin:8px 0">
+        <input id="ntfy-topic-input" type="text" placeholder="Topic (ex: test)" style="flex:1;font-size:9px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text1)">
+        <input id="ntfy-msg-input" type="text" placeholder="Message" style="flex:2;font-size:9px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text1)">
+        <button class="btn-sm" onclick="sendNtfyTest()"><i class="ti ti-send"></i>ENVOYER</button>
+      </div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+async function sendNtfyTest() {
+  const topic = document.getElementById('ntfy-topic-input')?.value?.trim() || 'test';
+  const msg   = document.getElementById('ntfy-msg-input')?.value?.trim() || 'Test depuis Caleope UI';
+  const r = await fetch(`/ui/proxy/ntfy/${encodeURIComponent(topic)}`, {
+    method: 'POST', body: msg, headers: { 'Title': 'Caleope' }
+  });
+  if (r.ok) notify(`Message envoyé sur "${topic}"`, 'ok');
+  else notify('Erreur envoi ntfy', 'err');
+}
+
+// ── n8n — Workflows ───────────────────────────────────────────────────────────
+async function loadN8nWorkflows() {
+  const c = document.getElementById('content-panel-n8n-workflows');
+  if (!c) return;
+  const appDomain = S.apps.find(a => a.id === 'n8n')?.domain;
+  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
+    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR N8N</a>` : '';
+
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT N8N...</div>`;
+
+  const r = await fetch('/ui/proxy/n8n/api/v1/workflows?limit=25', {
+    headers: { 'Accept': 'application/json' }
+  });
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-workflow"></i></div>
+      <div class="empty-title">N8N INDISPONIBLE</div>
+      <div class="empty-sub">Vérifier que le service est démarré.<br>L'API publique n8n nécessite un token API (n8n settings → API).</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+  const data = await r.json();
+  const workflows = data.data || [];
+  const rows = workflows.map(w => `
+    <div class="loc-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;font-weight:700">${escapeHtml(w.name || '?')}</div>
+        <div style="font-size:9px;color:var(--text3)">${w.nodes?.length || 0} nœuds</div>
+      </div>
+      <span style="font-size:9px;font-weight:700;color:${w.active ? 'var(--green-b)' : 'var(--text3)'}">
+        ${w.active ? 'ACTIF' : 'INACTIF'}
+      </span>
+    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun workflow.</div>';
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-workflow" style="font-size:12px"></i> WORKFLOWS (${workflows.length})
+      </div>
+      <div style="padding:0 12px 12px">${rows}</div>
+    </div>
+    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
+}
+
+// ── File Browser — Gestionnaire de fichiers iframe ────────────────────────────
+function loadFileBrowser() {
+  const c = document.getElementById('content-panel-filebrowser');
+  if (!c) return;
+  const appDomain = S.apps.find(a => a.id === 'filebrowser')?.domain;
+  c.innerHTML = `
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 120px);min-height:400px;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center">
+        ${appDomain ? `<a class="btn btn-vio" href="https://${appDomain}" target="_blank" rel="noopener"
+          style="text-decoration:none;font-size:9px"><i class="ti ti-external-link"></i>OUVRIR DANS NOUVEL ONGLET</a>` : ''}
+        <span style="font-size:9px;color:var(--text3)">Identifiants par défaut : admin / admin</span>
+      </div>
+      <iframe src="/ui/proxy/filebrowser/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
+        allow="fullscreen" title="File Browser"></iframe>
+    </div>`;
 }
 
 // ── Stirling-PDF — Embed iframe ───────────────────────────────────────────────
