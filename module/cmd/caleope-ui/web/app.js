@@ -2252,6 +2252,21 @@ const APP_PANELS = {
       { id: 'panel-changedetection-watches', label: 'SURVEILLANCES', icon: 'ti-eye', load: loadChangedetectionWatches },
     ],
   },
+  'wg-easy': {
+    group: '// RÉSEAU',
+    icon: 'ti-vpn',
+    panels: [
+      { id: 'panel-wgeasy-peers', label: 'PAIRS VPN', icon: 'ti-vpn', load: loadWgEasyPeers },
+    ],
+  },
+  'crowdsec': {
+    group: '// SÉCURITÉ',
+    icon: 'ti-shield-check',
+    panels: [
+      { id: 'panel-crowdsec-decisions', label: 'DÉCISIONS', icon: 'ti-shield-check', load: loadCrowdsecDecisions },
+      { id: 'panel-crowdsec-alerts',    label: 'ALERTES',   icon: 'ti-alert-triangle', load: loadCrowdsecAlerts },
+    ],
+  },
   'gotify': {
     group: '// OUTILS',
     icon: 'ti-bell-ringing',
@@ -4295,6 +4310,180 @@ function loadStirlingPDF() {
       <iframe src="${src}" style="flex:1;border:none;border-radius:6px;background:var(--card)"
         allow="fullscreen" title="Stirling PDF"></iframe>
     </div>`;
+}
+
+// ── WG-Easy — Pairs VPN ───────────────────────────────────────────────────────
+async function loadWgEasyPeers() {
+  const c = document.getElementById('content-panel-wgeasy-peers');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT WG-EASY...</div>`;
+
+  const appDomain = S.apps.find(a => a.id === 'wg-easy')?.domain;
+  const adminLink = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR WG-EASY</a>`
+    : '';
+
+  let clients = null;
+  try {
+    const r = await fetch('/ui/proxy/wg-easy/api/wireguard/client');
+    if (r.ok) clients = await r.json();
+  } catch(e) {}
+
+  if (!clients) {
+    c.innerHTML = `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">${adminLink}</div>
+      <div class="empty-state"><div class="empty-icon"><i class="ti ti-vpn"></i></div>
+        <div class="empty-title">WG-EASY INDISPONIBLE</div>
+        <div class="empty-sub">Vérifiez que WG-Easy est démarré et accessible.</div></div>`;
+    return;
+  }
+
+  const online = clients.filter(cl => cl.endpoint).length;
+  const rows = clients.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-vpn"></i></div>
+        <div class="empty-title">AUCUN PAIR</div>
+        <div class="empty-sub">Créez un pair depuis l'interface WG-Easy.</div></div>`
+    : `<table style="width:100%;border-collapse:collapse;font-size:9px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:4px 6px">NOM</th>
+          <th style="text-align:left;padding:4px 6px">IP</th>
+          <th style="text-align:left;padding:4px 6px">STATUT</th>
+          <th style="text-align:left;padding:4px 6px">TRANSFERT ↑↓</th>
+          <th style="text-align:left;padding:4px 6px">DERNIÈRE CONNEXION</th>
+        </tr></thead>
+        <tbody>${clients.map(cl => {
+          const isConn = !!cl.endpoint;
+          const tx = cl.transferTx ? `${(cl.transferTx/1024/1024).toFixed(1)} MB` : '—';
+          const rx = cl.transferRx ? `${(cl.transferRx/1024/1024).toFixed(1)} MB` : '—';
+          const lastHS = cl.latestHandshakeAt ? new Date(cl.latestHandshakeAt).toLocaleString('fr-FR') : '—';
+          return `<tr style="border-bottom:1px solid var(--border);opacity:${isConn?1:0.65}">
+            <td style="padding:5px 6px;font-weight:600;color:var(--text1)">${escapeHtml(cl.name || cl.id)}</td>
+            <td style="padding:5px 6px;color:var(--text2)">${escapeHtml(cl.address || '—')}</td>
+            <td style="padding:5px 6px">
+              <span class="badge ${isConn ? 'badge-run' : 'badge-stop'}" style="font-size:7px">
+                ${isConn ? 'CONNECTÉ' : 'HORS LIGNE'}</span></td>
+            <td style="padding:5px 6px;color:var(--text3)">↑ ${tx} / ↓ ${rx}</td>
+            <td style="padding:5px 6px;color:var(--text3)">${escapeHtml(lastHS)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      ${adminLink}
+      <span style="font-size:9px;color:var(--text3)">${clients.length} pair(s) — <span style="color:var(--green-b)">${online} connecté(s)</span></span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadWgEasyPeers()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
+}
+
+// ── CrowdSec — Décisions (bans actifs) ───────────────────────────────────────
+async function loadCrowdsecDecisions() {
+  const c = document.getElementById('content-panel-crowdsec-decisions');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT CROWDSEC...</div>`;
+
+  const appObj = S.apps.find(a => a.id === 'crowdsec');
+  const apiKey = appObj?.config?.BOUNCER_KEY || '';
+
+  let decisions = null;
+  try {
+    const r = await fetch('/ui/proxy/crowdsec/v1/decisions?limit=50', {
+      headers: apiKey ? { 'X-Api-Key': apiKey } : {},
+    });
+    if (r.ok) { const t = await r.text(); decisions = t ? JSON.parse(t) : []; }
+  } catch(e) {}
+
+  if (decisions === null) {
+    c.innerHTML = `
+      <div class="empty-state"><div class="empty-icon"><i class="ti ti-shield"></i></div>
+        <div class="empty-title">CROWDSEC INDISPONIBLE</div>
+        <div class="empty-sub">Vérifiez que CrowdSec est démarré et que la clé bouncer est configurée.</div></div>`;
+    return;
+  }
+
+  const rows = !decisions || decisions.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-shield-check"></i></div>
+        <div class="empty-title">AUCUN BAN ACTIF</div>
+        <div class="empty-sub">Aucune décision active pour l'instant.</div></div>`
+    : `<table style="width:100%;border-collapse:collapse;font-size:9px">
+        <thead><tr style="color:var(--text3);border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:4px 6px">IP / SCOPE</th>
+          <th style="text-align:left;padding:4px 6px">TYPE</th>
+          <th style="text-align:left;padding:4px 6px">RAISON</th>
+          <th style="text-align:left;padding:4px 6px">DURÉE</th>
+          <th style="text-align:left;padding:4px 6px">ORIGINE</th>
+        </tr></thead>
+        <tbody>${decisions.map(d => `
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:5px 6px;font-family:monospace;color:var(--text1)">${escapeHtml(d.value || '—')}</td>
+            <td style="padding:5px 6px"><span class="badge badge-err" style="font-size:7px">${escapeHtml(d.type || 'ban')}</span></td>
+            <td style="padding:5px 6px;color:var(--text2)">${escapeHtml(d.scenario || d.reason || '—')}</td>
+            <td style="padding:5px 6px;color:var(--text3)">${escapeHtml(d.duration || '—')}</td>
+            <td style="padding:5px 6px;color:var(--text3)">${escapeHtml(d.origin || '—')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <span style="font-size:9px;color:var(--text3)">${(decisions || []).length} décision(s) active(s)</span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadCrowdsecDecisions()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
+}
+
+async function loadCrowdsecAlerts() {
+  const c = document.getElementById('content-panel-crowdsec-alerts');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT ALERTES...</div>`;
+
+  const appObj = S.apps.find(a => a.id === 'crowdsec');
+  const apiKey = appObj?.config?.BOUNCER_KEY || '';
+
+  let alerts = null;
+  try {
+    const r = await fetch('/ui/proxy/crowdsec/v1/alerts?limit=30', {
+      headers: apiKey ? { 'X-Api-Key': apiKey } : {},
+    });
+    if (r.ok) { const t = await r.text(); alerts = t ? JSON.parse(t) : []; }
+  } catch(e) {}
+
+  if (alerts === null) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-alert-triangle"></i></div>
+      <div class="empty-title">CROWDSEC INDISPONIBLE</div></div>`;
+    return;
+  }
+
+  const rows = !alerts || alerts.length === 0
+    ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-shield-check"></i></div>
+        <div class="empty-title">AUCUNE ALERTE</div>
+        <div class="empty-sub">Aucune alerte récente détectée.</div></div>`
+    : alerts.map(a => {
+        const src = a.source?.ip || a.source?.range || '—';
+        const country = a.source?.cn ? ` (${a.source.cn})` : '';
+        const date = a.created_at ? new Date(a.created_at).toLocaleString('fr-FR') : '';
+        const count = a.decisions?.length || 0;
+        return `
+          <div style="padding:8px;background:var(--card);border-radius:6px;border:1px solid var(--border);margin-bottom:6px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span style="font-family:monospace;font-size:10px;color:var(--text1)">${escapeHtml(src)}${escapeHtml(country)}</span>
+              ${count ? `<span class="badge badge-err" style="font-size:7px">${count} décision(s)</span>` : ''}
+              <span style="font-size:8px;color:var(--text3);margin-left:auto">${escapeHtml(date)}</span>
+            </div>
+            <div style="font-size:9px;color:var(--text2)">${escapeHtml(a.scenario || a.reason || '—')}</div>
+          </div>`;
+      }).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <span style="font-size:9px;color:var(--text3)">${(alerts || []).length} alerte(s)</span>
+      <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadCrowdsecAlerts()">
+        <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
+    </div>
+    ${rows}`;
 }
 
 // ── Gotify — Messages récents ─────────────────────────────────────────────────

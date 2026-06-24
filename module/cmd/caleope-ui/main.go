@@ -457,6 +457,12 @@ func main() {
 
 		// Homarr — dashboard de liens, sans auth proxy
 		"homarr": {containerName: "homarr", containerPort: 7575},
+
+		// WG-Easy — interface web WireGuard
+		"wg-easy": {containerName: "wg-easy", containerPort: 51821},
+
+		// CrowdSec — LAPI locale pour consulter alertes/décisions
+		"crowdsec": {containerName: "crowdsec", containerPort: 8080},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
