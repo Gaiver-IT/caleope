@@ -771,54 +771,57 @@ func main() {
 		}
 
 		// Construire le header d'authentification (autres schemes)
+		// Si authScheme est vide, on proxifie sans auth (proxy direct).
 		var authHeader, authValue string
-		switch cfg.authScheme {
-		case "Basic":
-			user := readEnvKey(secretsPath, cfg.basicUserKey)
-			pass := readEnvKey(secretsPath, cfg.basicPassKey)
-			if user == "" || pass == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials non disponibles")
-				return
-			}
-			creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
-			authHeader, authValue = "Authorization", "Basic "+creds
-		case "GitToken":
-			token := readEnvKey(secretsPath, cfg.tokenKey)
-			if token == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
-				return
-			}
-			authHeader, authValue = "Authorization", "token "+token
-		case "JellyfinToken":
-			token := readEnvKey(secretsPath, cfg.tokenKey)
-			if token == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": JELLYFIN_API_KEY non disponible — générer via setup.sh")
-				return
-			}
-			authHeader, authValue = "Authorization", `MediaBrowser Token="`+token+`"`
-		case "GhostAdmin":
-			apiKey := readEnvKey(secretsPath, cfg.tokenKey)
-			if apiKey == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": GHOST_ADMIN_API_KEY non disponible — créer dans Ghost admin → Intégrations")
-				return
-			}
-			jwt, err := ghostAdminJWT(apiKey)
-			if err != nil {
-				jsonErr(w, http.StatusServiceUnavailable, "ghost: "+err.Error())
-				return
-			}
-			authHeader, authValue = "Authorization", "Ghost "+jwt
-		default:
-			token := readEnvKey(secretsPath, cfg.tokenKey)
-			if token == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
-				return
-			}
+		if cfg.authScheme != "" {
 			switch cfg.authScheme {
-			case "Bearer":
-				authHeader, authValue = "Authorization", "Bearer "+token
+			case "Basic":
+				user := readEnvKey(secretsPath, cfg.basicUserKey)
+				pass := readEnvKey(secretsPath, cfg.basicPassKey)
+				if user == "" || pass == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": credentials non disponibles")
+					return
+				}
+				creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+				authHeader, authValue = "Authorization", "Basic "+creds
+			case "GitToken":
+				token := readEnvKey(secretsPath, cfg.tokenKey)
+				if token == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+					return
+				}
+				authHeader, authValue = "Authorization", "token "+token
+			case "JellyfinToken":
+				token := readEnvKey(secretsPath, cfg.tokenKey)
+				if token == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": JELLYFIN_API_KEY non disponible — générer via setup.sh")
+					return
+				}
+				authHeader, authValue = "Authorization", `MediaBrowser Token="`+token+`"`
+			case "GhostAdmin":
+				apiKey := readEnvKey(secretsPath, cfg.tokenKey)
+				if apiKey == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": GHOST_ADMIN_API_KEY non disponible — créer dans Ghost admin → Intégrations")
+					return
+				}
+				jwt, err := ghostAdminJWT(apiKey)
+				if err != nil {
+					jsonErr(w, http.StatusServiceUnavailable, "ghost: "+err.Error())
+					return
+				}
+				authHeader, authValue = "Authorization", "Ghost "+jwt
 			default:
-				authHeader, authValue = cfg.authScheme, token
+				token := readEnvKey(secretsPath, cfg.tokenKey)
+				if token == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+					return
+				}
+				switch cfg.authScheme {
+				case "Bearer":
+					authHeader, authValue = "Authorization", "Bearer "+token
+				default:
+					authHeader, authValue = cfg.authScheme, token
+				}
 			}
 		}
 
@@ -830,7 +833,9 @@ func main() {
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			outReq.Header.Set("Content-Type", ct)
 		}
-		outReq.Header.Set(authHeader, authValue)
+		if authHeader != "" {
+			outReq.Header.Set(authHeader, authValue)
+		}
 		outReq.Header.Set("Accept", "application/json")
 		// Host override (ex: Nextcloud trusted_domains)
 		if cfg.hostOverride != "" {
