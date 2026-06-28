@@ -2840,6 +2840,39 @@ async function loadDashboard() {
       <div id="dash-gotify-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
 
+    ${S.apps.some(a => a.id === 'memos' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// NOTES RÉCENTES</div>
+      <div id="dash-memos-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${(S.apps.some(a => a.id === 'arr-radarr' && a.status === 'running') || S.apps.some(a => a.id === 'arr-sonarr' && a.status === 'running')) ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MÉDIAS RÉCENTS</div>
+      <div id="dash-arr-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'navidrome' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MUSIQUE</div>
+      <div id="dash-navidrome-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'gitea' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// DÉPÔTS GIT</div>
+      <div id="dash-gitea-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'adguard' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// DNS / AD BLOCK</div>
+      <div id="dash-adguard-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'freshrss' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// FLUX RSS</div>
+      <div id="dash-freshrss-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// CONTENEURS</div>
+    <div id="dash-containers-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// ÉVÉNEMENTS RÉCENTS</div>
     <div id="dash-events-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
 
@@ -2858,8 +2891,402 @@ async function loadDashboard() {
   if (S.apps.some(a => a.id === 'gotify' && a.status === 'running')) {
     loadDashGotifyWidget();
   }
+  if (S.apps.some(a => a.id === 'memos' && a.status === 'running')) {
+    loadDashMemosWidget();
+  }
+  if (S.apps.some(a => (a.id === 'arr-radarr' || a.id === 'arr-sonarr') && a.status === 'running')) {
+    loadDashArrWidget();
+  }
+  if (S.apps.some(a => a.id === 'navidrome' && a.status === 'running')) {
+    loadDashNavidromeWidget();
+  }
+  if (S.apps.some(a => a.id === 'gitea' && a.status === 'running')) {
+    loadDashGiteaWidget();
+  }
+  if (S.apps.some(a => a.id === 'adguard' && a.status === 'running')) {
+    loadDashAdGuardWidget();
+  }
+  if (S.apps.some(a => a.id === 'freshrss' && a.status === 'running')) {
+    loadDashFreshRssWidget();
+  }
+  loadDashContainersWidget();
   loadDashEventsWidget();
   loadDashJournalErrorsWidget();
+}
+
+async function loadDashAdGuardWidget() {
+  const w = document.getElementById('dash-adguard-widget');
+  if (!w) return;
+  let stats = null, status = null;
+  try {
+    const [rs, rp] = await Promise.all([
+      fetch('/ui/proxy/adguard/control/stats'),
+      fetch('/ui/proxy/adguard/control/status'),
+    ]);
+    if (rs.ok) stats = await rs.json();
+    if (rp.ok) status = await rp.json();
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'adguard')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  if (!stats) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <i class="ti ti-shield-off" style="color:var(--text3);font-size:13px"></i>
+      <span style="font-size:9px;color:var(--text3)">AdGuard indisponible</span>
+      <div style="margin-left:auto">${openBtn}</div>
+    </div>`;
+    return;
+  }
+
+  const total = stats.num_dns_queries || 0;
+  const blocked = stats.num_blocked_filtering || 0;
+  const pct = total > 0 ? ((blocked / total) * 100).toFixed(1) : '0';
+  const protActive = status?.protection_enabled;
+  const statusColor = protActive === false ? 'var(--red-b)' : 'var(--green-b)';
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <span style="width:7px;height:7px;border-radius:50%;background:${statusColor};flex-shrink:0"></span>
+        <span style="font-size:9px;font-weight:700">AdGuard Home</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          ${openBtn}
+          <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-adguard-stats')">
+            <i class="ti ti-chart-bar" style="font-size:9px"></i>
+          </button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;text-align:center">
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:13px;font-weight:800;color:var(--text1)">${total > 999 ? (total/1000).toFixed(0)+'k' : total}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">REQUÊTES</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:13px;font-weight:800;color:var(--red-b)">${blocked > 999 ? (blocked/1000).toFixed(0)+'k' : blocked}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">BLOQUÉES</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:13px;font-weight:800;color:var(--warn)">${pct}%</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">TAUX BLOQ.</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashFreshRssWidget() {
+  const w = document.getElementById('dash-freshrss-widget');
+  if (!w) return;
+  let unreadCount = null;
+  try {
+    const r = await fetch('/ui/proxy/freshrss/api/greader.php/reader/api/0/unread-count?output=json');
+    if (r.ok) {
+      const d = await r.json();
+      unreadCount = d.max || (d.unreadcounts || []).reduce((s, x) => s + (x.count || 0), 0);
+    }
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'freshrss')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  const unreadStr = unreadCount === null ? '—' : String(unreadCount);
+  const unreadColor = unreadCount > 50 ? 'var(--warn)' : unreadCount > 0 ? 'var(--blue)' : 'var(--text3)';
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:13px">📰</span>
+        <span style="font-size:9px;font-weight:700">FreshRSS</span>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          <span style="font-size:18px;font-weight:800;color:${unreadColor}">${escapeHtml(unreadStr)}</span>
+          <span style="font-size:7px;color:var(--text3);letter-spacing:.5px">NON LUS</span>
+          <div style="display:flex;gap:4px">
+            ${openBtn}
+            <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-freshrss-articles')">
+              <i class="ti ti-rss" style="font-size:9px"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashContainersWidget() {
+  const w = document.getElementById('dash-containers-widget');
+  if (!w) return;
+  let stats = null;
+  try {
+    const r = await fetch('/sys/docker-stats');
+    if (r.ok) { const d = await r.json(); stats = d.stats || []; }
+  } catch(e) {}
+
+  if (!stats || !stats.length) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <i class="ti ti-brand-docker" style="color:var(--text3);font-size:13px"></i>
+      <span style="font-size:9px;color:var(--text3)">Aucun conteneur actif</span>
+    </div>`;
+    return;
+  }
+
+  const parseMem = s => {
+    if (!s) return 0;
+    const m = s.match(/([\d.]+)\s*(GiB|MiB|KiB|GB|MB|KB)/i);
+    if (!m) return 0;
+    const v = parseFloat(m[1]);
+    const u = m[2].toUpperCase();
+    if (u.startsWith('G')) return v * 1024;
+    if (u.startsWith('M')) return v;
+    if (u.startsWith('K')) return v / 1024;
+    return v;
+  };
+  const parseCpu = s => parseFloat(s?.replace('%','') || '0');
+
+  const sorted = [...stats].sort((a, b) => parseMem(b.mem?.split('/')[0]) - parseMem(a.mem?.split('/')[0])).slice(0, 6);
+
+  const rows = sorted.map(s => {
+    const cpu = parseCpu(s.cpu);
+    const memUsed = s.mem?.split('/')[0]?.trim() || '—';
+    const cpuColor = cpu > 80 ? 'var(--red-b)' : cpu > 50 ? 'var(--warn)' : 'var(--text2)';
+    const name = s.name.replace(/^\//, '');
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:4px 6px;font-size:8px;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px">${escapeHtml(name)}</td>
+      <td style="padding:4px 6px;font-size:8px;color:${cpuColor};font-family:monospace;text-align:right">${s.cpu || '—'}</td>
+      <td style="padding:4px 6px;font-size:8px;color:var(--text2);font-family:monospace;text-align:right">${escapeHtml(memUsed)}</td>
+    </tr>`;
+  }).join('');
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border)">
+        <span style="font-size:8px;color:var(--text3)">${stats.length} conteneur(s) actif(s)</span>
+        <button class="btn-sm" style="font-size:8px" onclick="goSection('stats')" title="Voir les stats détaillées">
+          <i class="ti ti-cpu" style="font-size:9px"></i>
+        </button>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:4px 6px;font-size:7px;color:var(--text3);letter-spacing:.5px;font-weight:700;text-align:left">NOM</th>
+          <th style="padding:4px 6px;font-size:7px;color:var(--text3);letter-spacing:.5px;font-weight:700;text-align:right">CPU</th>
+          <th style="padding:4px 6px;font-size:7px;color:var(--text3);letter-spacing:.5px;font-weight:700;text-align:right">RAM</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+async function loadDashMemosWidget() {
+  const w = document.getElementById('dash-memos-widget');
+  if (!w) return;
+  let memos = null;
+  try {
+    const r = await fetch('/ui/proxy/memos/api/v1/memos?pageSize=5');
+    if (r.ok) { const d = await r.json(); memos = Array.isArray(d) ? d : (d.memos || []); }
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'memos')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  if (!memos) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <i class="ti ti-note-off" style="color:var(--text3);font-size:13px"></i>
+      <span style="font-size:9px;color:var(--text3)">Memos indisponible</span>
+      <div style="margin-left:auto">${openBtn}</div>
+    </div>`;
+    return;
+  }
+
+  const list = memos.slice(0, 3);
+  const rows = list.length === 0
+    ? `<div style="font-size:9px;color:var(--text3);text-align:center;padding:10px 0">Aucune note pour l'instant.</div>`
+    : list.map(m => {
+        const content = (m.content || '').replace(/\n/g, ' ').trim().slice(0, 90);
+        const ts = m.createTime ? new Date(m.createTime).toLocaleDateString('fr-FR') :
+                   m.createdTs  ? new Date(m.createdTs * 1000).toLocaleDateString('fr-FR') : '';
+        return `<div style="padding:6px 8px;background:var(--card);border-radius:5px;border:1px solid var(--border);margin-bottom:4px">
+          <div style="font-size:7px;color:var(--text3);margin-bottom:2px">${escapeHtml(ts)}</div>
+          <div style="font-size:9px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(content || '(vide)')}</div>
+        </div>`;
+      }).join('');
+
+  w.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="font-size:9px;color:var(--text3)">${memos.length > 3 ? '3 / ' + memos.length + ' notes' : memos.length + ' note(s)'}</span>
+      <div style="margin-left:auto;display:flex;gap:4px">
+        ${openBtn}
+        <button class="btn-sm" style="font-size:8px" onclick="openQuickMemo()" title="Nouvelle note rapide">
+          <i class="ti ti-plus" style="font-size:9px"></i> NOTE
+        </button>
+      </div>
+    </div>
+    ${rows}`;
+}
+
+async function loadDashNavidromeWidget() {
+  const w = document.getElementById('dash-navidrome-widget');
+  if (!w) return;
+  let artistCount = 0, songCount = 0, albumCount = 0;
+  try {
+    const [rArt, rSong, rAlb] = await Promise.all([
+      fetch('/ui/proxy/navidrome/api/artist?_start=0&_end=1'),
+      fetch('/ui/proxy/navidrome/api/song?_start=0&_end=1'),
+      fetch('/ui/proxy/navidrome/api/album?_start=0&_end=1'),
+    ]);
+    if (rArt.ok)  artistCount = parseInt(rArt.headers.get('X-Total-Count') || '0');
+    if (rSong.ok) songCount   = parseInt(rSong.headers.get('X-Total-Count') || '0');
+    if (rAlb.ok)  albumCount  = parseInt(rAlb.headers.get('X-Total-Count') || '0');
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'navidrome')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <span style="font-size:13px">🎵</span>
+        <span style="font-size:9px;font-weight:700">Navidrome</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          ${openBtn}
+          <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-navidrome-library')">
+            <i class="ti ti-music" style="font-size:9px"></i>
+          </button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;text-align:center">
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:var(--accent)">${artistCount}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">ARTISTES</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:var(--accent)">${albumCount}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">ALBUMS</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:var(--accent)">${songCount}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">PISTES</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashGiteaWidget() {
+  const w = document.getElementById('dash-gitea-widget');
+  if (!w) return;
+  let repos = null;
+  try {
+    const r = await fetch('/ui/proxy/gitea/api/v1/repos/search?limit=5&sort=updated');
+    if (r.ok) { const d = await r.json(); repos = d.data || d; }
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'gitea')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  if (!Array.isArray(repos)) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <i class="ti ti-git-branch" style="color:var(--text3);font-size:13px"></i>
+      <span style="font-size:9px;color:var(--text3)">Gitea indisponible</span>
+      <div style="margin-left:auto">${openBtn}</div>
+    </div>`;
+    return;
+  }
+
+  const rows = repos.slice(0, 4).map(r => `
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--card);border-radius:5px;border:1px solid var(--border);margin-bottom:4px">
+      <i class="ti ti-git-branch" style="font-size:11px;color:var(--vio);flex-shrink:0"></i>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.full_name || r.name || '—')}</div>
+        <div style="font-size:7px;color:var(--text3)">${r.stars_count || 0} ★ · ${r.open_issues_count || 0} issues · ${escapeHtml(r.language || '')}</div>
+      </div>
+      ${r.html_url ? `<a href="${escapeHtml(r.html_url)}" target="_blank" rel="noopener" style="color:var(--text3);text-decoration:none;flex-shrink:0"><i class="ti ti-external-link" style="font-size:9px"></i></a>` : ''}
+    </div>`).join('');
+
+  w.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="font-size:9px;color:var(--text3)">${repos.length} dépôt(s)</span>
+      <div style="margin-left:auto;display:flex;gap:4px">
+        ${openBtn}
+        <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-gitea-repos')">
+          <i class="ti ti-layout-sidebar-right" style="font-size:9px"></i>
+        </button>
+      </div>
+    </div>
+    ${rows || '<div style="font-size:9px;color:var(--text3);text-align:center;padding:10px 0">Aucun dépôt.</div>'}`;
+}
+
+async function loadDashArrWidget() {
+  const w = document.getElementById('dash-arr-widget');
+  if (!w) return;
+  const radarrRunning = S.apps.some(a => a.id === 'arr-radarr' && a.status === 'running');
+  const sonarrRunning = S.apps.some(a => a.id === 'arr-sonarr' && a.status === 'running');
+
+  let radarrMovies = null, sonarrHistory = null;
+  try {
+    const fetches = [];
+    if (radarrRunning) fetches.push(
+      fetch('/ui/proxy/arr-radarr/api/v3/movie?pageSize=100').then(r => r.ok ? r.json() : null).catch(() => null)
+    );
+    if (sonarrRunning) fetches.push(
+      fetch('/ui/proxy/arr-sonarr/api/v3/history?pageSize=5&sortKey=date&sortDirection=descending').then(r => r.ok ? r.json() : null).catch(() => null)
+    );
+    const results = await Promise.all(fetches);
+    let i = 0;
+    if (radarrRunning) radarrMovies = results[i++];
+    if (sonarrRunning) sonarrHistory = results[i++];
+  } catch(e) {}
+
+  const items = [];
+  if (Array.isArray(radarrMovies)) {
+    const recent = radarrMovies.filter(m => m.added && new Date(m.added) > new Date(Date.now() - 30 * 86400000))
+      .sort((a, b) => new Date(b.added) - new Date(a.added)).slice(0, 2);
+    recent.forEach(m => items.push({ emoji: '🎬', title: m.title, sub: String(m.year || ''), tag: 'Radarr' }));
+  }
+  if (sonarrHistory?.records) {
+    sonarrHistory.records.slice(0, 2).forEach(e => {
+      const series = e.series?.title || '';
+      const ep = e.episode ? `S${String(e.episode.seasonNumber).padStart(2,'0')}E${String(e.episode.episodeNumber).padStart(2,'0')}` : '';
+      items.push({ emoji: '📺', title: series || e.sourceTitle || '—', sub: ep, tag: 'Sonarr' });
+    });
+  }
+
+  if (!items.length) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <span style="font-size:9px;color:var(--text3)">Aucune activité multimédia récente</span>
+    </div>`;
+    return;
+  }
+
+  const appRadarrDomain = S.apps.find(a => a.id === 'arr-radarr')?.domain;
+  const appSonarrDomain = S.apps.find(a => a.id === 'arr-sonarr')?.domain;
+
+  const rows = items.map(it => `
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--card);border-radius:5px;border:1px solid var(--border);margin-bottom:4px">
+      <span style="font-size:12px;flex-shrink:0">${it.emoji}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(it.title)}</div>
+        <div style="font-size:7px;color:var(--text3)">${escapeHtml(it.sub)} <span style="color:var(--vio)">${it.tag}</span></div>
+      </div>
+    </div>`).join('');
+
+  const arrLinks = [
+    radarrRunning && appRadarrDomain ? `<a href="https://${appRadarrDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px">🎬</a>` : '',
+    sonarrRunning && appSonarrDomain ? `<a href="https://${appSonarrDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px">📺</a>` : '',
+  ].filter(Boolean).join('');
+
+  w.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="font-size:9px;color:var(--text3)">Ajouts récents</span>
+      <div style="margin-left:auto;display:flex;gap:4px">${arrLinks}</div>
+    </div>
+    ${rows}`;
 }
 
 async function loadDashJournalErrorsWidget() {
@@ -7932,8 +8359,59 @@ async function loadStorage() {
       </div>
       <div id="docker-prune-result" style="display:none;margin-top:10px;font-size:9px;font-family:monospace;color:var(--text2);background:var(--bg1);padding:8px;border-radius:4px;max-height:120px;overflow-y:auto;white-space:pre-wrap"></div>
     </div>
-    <div id="docker-volumes-widget" style="margin-top:16px"></div>`;
+    <div id="docker-volumes-widget" style="margin-top:16px"></div>
+    <div class="net-section-title" style="margin-top:24px">// DONNÉES PAR APPLICATION</div>
+    <div id="app-sizes-widget"><div class="dash-loading"><span class="spinner"></span> CALCUL EN COURS...</div></div>`;
   loadDockerVolumesWidget();
+  loadAppSizesWidget();
+}
+
+async function loadAppSizesWidget() {
+  const w = document.getElementById('app-sizes-widget');
+  if (!w) return;
+  let sizes = null;
+  try {
+    const r = await fetch('/sys/app-sizes');
+    if (r.ok) { const d = await r.json(); sizes = d.sizes; }
+  } catch(e) {}
+
+  if (!sizes || !sizes.length) {
+    w.innerHTML = `<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune donnée d'application trouvée.</div>`;
+    return;
+  }
+
+  const totalBytes = sizes.reduce((s, x) => s + x.bytes, 0);
+  const rows = sizes.map(s => {
+    const pct = totalBytes > 0 ? Math.round(s.bytes / totalBytes * 100) : 0;
+    const barColor = pct > 40 ? 'var(--warn)' : 'var(--accent)';
+    return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+        <span style="font-size:10px">${icon(s.app_id)}</span>
+        <span style="font-size:9px;font-weight:600;flex:1">${escapeHtml(s.app_id)}</span>
+        <span style="font-size:9px;font-family:monospace;color:var(--text2)">${escapeHtml(s.size_str)}</span>
+        <span style="font-size:8px;color:var(--text3);min-width:28px;text-align:right">${pct}%</span>
+      </div>
+      <div style="height:3px;background:var(--border);border-radius:2px">
+        <div style="height:100%;width:${pct}%;background:${barColor};border-radius:2px;transition:width .3s"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const totalStr = sizes[0] ? sizes.reduce((s, x) => s + x.bytes, 0) : 0;
+  const fmtTotal = totalStr > 1073741824 ? (totalStr / 1073741824).toFixed(1) + ' GiB'
+                 : totalStr > 1048576   ? (totalStr / 1048576).toFixed(0) + ' MiB'
+                 : (totalStr / 1024).toFixed(0) + ' KiB';
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px 14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:9px;color:var(--text3)">${sizes.length} app(s) · Total : ${fmtTotal}</span>
+        <button class="btn-sm" style="font-size:8px" onclick="loadAppSizesWidget()">
+          <i class="ti ti-refresh" style="font-size:9px"></i>
+        </button>
+      </div>
+      ${rows}
+    </div>`;
 }
 
 async function runDockerPrune() {
@@ -8188,6 +8666,17 @@ function _buildQuickNavItems() {
     });
   });
 
+  // Apps installées avec URL externe (ouverture directe)
+  S.apps.filter(a => a.domain && a.status === 'running').forEach(a => {
+    const emoji = APP_ICONS[a.id] || '';
+    items.push({
+      type: 'app-url', id: a.id, label: 'Ouvrir ' + (a.name || a.id),
+      icon: 'ti-external-link',
+      sub: (emoji ? emoji + ' ' : '') + (a.domain || '').toUpperCase(),
+      url: 'https://' + a.domain,
+    });
+  });
+
   return items;
 }
 
@@ -8244,14 +8733,20 @@ function quickNavKey(e) {
   if (e.key === 'Enter') {
     e.preventDefault();
     const active = _qnCursor >= 0 ? items[_qnCursor] : items[0];
-    if (active) { const id = active.dataset.id; closeQuickNav(); goSection(id); }
+    if (active) { const id = active.dataset.id; qnGo(id); }
     return;
   }
 }
 
 function qnGo(id) {
   closeQuickNav();
-  goSection(id);
+  const items = _buildQuickNavItems();
+  const it = items.find(x => x.id === id);
+  if (it?.type === 'app-url' && it.url) {
+    window.open(it.url, '_blank', 'noopener');
+  } else {
+    goSection(id);
+  }
 }
 
 // ── Container inspect modal ───────────────────────────────────────────────────

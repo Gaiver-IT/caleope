@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -948,4 +949,63 @@ func handleDockerVolumes(w http.ResponseWriter, r *http.Request) {
 		volumes = []dockerVolumeEntry{}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"volumes": volumes})
+}
+
+type appSizeEntry struct {
+	AppID   string `json:"app_id"`
+	DataDir string `json:"data_dir"`
+	SizeStr string `json:"size_str"`
+	Bytes   int64  `json:"bytes"`
+}
+
+func handleAppSizes(w http.ResponseWriter, r *http.Request, baseDir string) {
+	w.Header().Set("Content-Type", "application/json")
+	appDataDir := filepath.Join(baseDir, "app-data")
+	entries, err := os.ReadDir(appDataDir)
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"sizes": []appSizeEntry{}})
+		return
+	}
+	var sizes []appSizeEntry
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(appDataDir, e.Name())
+		out, err := exec.Command("du", "-sb", dir).Output()
+		if err != nil {
+			continue
+		}
+		parts := strings.Fields(string(out))
+		if len(parts) < 1 {
+			continue
+		}
+		var byteCount int64
+		fmt.Sscanf(parts[0], "%d", &byteCount)
+		sizes = append(sizes, appSizeEntry{
+			AppID:   e.Name(),
+			DataDir: dir,
+			SizeStr: formatBytes(byteCount),
+			Bytes:   byteCount,
+		})
+	}
+	if sizes == nil {
+		sizes = []appSizeEntry{}
+	}
+	// Sort by size descending
+	sort.Slice(sizes, func(i, j int) bool { return sizes[i].Bytes > sizes[j].Bytes })
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"sizes": sizes})
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
