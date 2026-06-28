@@ -5604,6 +5604,15 @@ const APP_PANELS = {
       { id: 'panel-azuracast', label: 'RADIO', icon: 'ti-broadcast', load: loadAzuraCast },
     ],
   },
+  'gaiverland-radio': {
+    group: '// RADIO',
+    icon: 'ti-music',
+    panels: [
+      { id: 'panel-gaiverland-live',     label: 'EN DIRECT',    icon: 'ti-broadcast',   load: loadGaiverlandLive     },
+      { id: 'panel-gaiverland-schedule', label: 'HORAIRES',     icon: 'ti-clock',       load: loadGaiverlandSchedule },
+      { id: 'panel-gaiverland-styles',   label: 'PROGRAMMATION', icon: 'ti-adjustments', load: loadGaiverlandStyles   },
+    ],
+  },
   'pterodactyl': {
     group: '// JEUX',
     icon: 'ti-device-gamepad',
@@ -6607,6 +6616,308 @@ async function loadAzuraCast() {
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
     </div>`;
+}
+
+// ── Gaiverland Radio — En direct ─────────────────────────────────────────────
+async function loadGaiverlandLive() {
+  const c = document.getElementById('content-panel-gaiverland-live');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/gaiverland-radio/nowplaying');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-music-off"></i></div>
+      <div class="empty-title">RADIO INDISPONIBLE</div>
+      <div class="empty-sub">Le moteur de playlist Gaiverland ne répond pas.</div></div>`;
+    return;
+  }
+  const d = await r.json();
+  const np = d.now_playing || {};
+  const lib = d.library || {};
+
+  const moodColors = { festival: 'var(--vio)', intense: 'var(--red-b)', energique: 'var(--blue)',
+                       melodique: 'var(--green-b)', nocturne: '#8b7cf6' };
+  const moodColor = moodColors[d.mood] || 'var(--text2)';
+
+  const artHtml = (np.art && np.art.startsWith('http'))
+    ? `<img src="${np.art}" style="width:56px;height:56px;border-radius:4px;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">`
+    : `<div style="width:56px;height:56px;border-radius:4px;background:var(--bg3);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-music" style="font-size:20px;color:var(--text3)"></i></div>`;
+
+  const progress = np.duration > 0
+    ? `<div style="height:2px;background:var(--bg3);border-radius:1px;margin-top:8px;overflow:hidden">
+        <div style="height:100%;background:var(--vio);width:${Math.min(100, Math.round(np.elapsed/np.duration*100))}%;transition:width 1s linear"></div>
+       </div>` : '';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card" style="flex:1">
+        <div class="stat-val">${lib.analyzed ?? '—'}</div>
+        <div class="stat-lbl">TRACKS ANALYSÉES</div>
+      </div>
+      <div class="stat-card" style="flex:1">
+        <div class="stat-val">${d.listeners ?? '—'}</div>
+        <div class="stat-lbl">AUDITEURS</div>
+      </div>
+      <div class="stat-card" style="flex:1">
+        <div class="stat-val" style="color:${moodColor};text-transform:uppercase">${d.mood || '—'}</div>
+        <div class="stat-lbl">MOOD</div>
+      </div>
+    </div>
+
+    <div class="settings-card" style="padding:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        ${artHtml}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${escapeHtml(np.title || 'Aucune lecture en cours')}
+          </div>
+          <div style="font-size:9px;color:var(--text3);margin-top:2px">${escapeHtml(np.artist || '')}</div>
+          ${d.current_playlist ? `<div style="font-size:8px;color:var(--vio);margin-top:4px;text-transform:uppercase">${escapeHtml(d.current_playlist)}</div>` : ''}
+          ${progress}
+        </div>
+        ${d.is_online ? '<span class="badge badge-run" style="font-size:7px;flex-shrink:0">EN LIGNE</span>'
+                      : '<span class="badge badge-stop" style="font-size:7px;flex-shrink:0">HORS LIGNE</span>'}
+      </div>
+    </div>
+
+    <div style="margin-top:8px;text-align:right">
+      <button class="btn-sm" onclick="loadGaiverlandLive()" style="font-size:8px">
+        <i class="ti ti-refresh" style="font-size:9px"></i> ACTUALISER
+      </button>
+    </div>`;
+}
+
+// ── Gaiverland Radio — Horaires ───────────────────────────────────────────────
+async function loadGaiverlandSchedule() {
+  const c = document.getElementById('content-panel-gaiverland-schedule');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/gaiverland-radio/config');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-clock-off"></i></div>
+      <div class="empty-title">CONFIGURATION INDISPONIBLE</div></div>`;
+    return;
+  }
+  const cfg = await r.json();
+
+  const dayLabels = ['', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+  const daysHtml = [1,2,3,4,5,6,7].map(d => {
+    const on = (cfg.work_days || [1,2,3,4,5]).includes(d);
+    return `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:9px">
+      <input type="checkbox" id="gwr-day-${d}" ${on ? 'checked' : ''} style="accent-color:var(--vio)">
+      ${dayLabels[d]}
+    </label>`;
+  }).join('');
+
+  const weights = cfg.playlist_weights || {};
+  const weightRow = (key, label, icon) => {
+    const w = weights[key] ?? 1;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--bd)">
+      <i class="ti ${icon}" style="font-size:11px;color:var(--text3);flex-shrink:0"></i>
+      <div style="flex:1;font-size:9px;font-weight:700">${label}</div>
+      <input type="range" id="gwr-w-${key}" min="0" max="5" value="${w}" step="1"
+        style="width:80px;accent-color:var(--vio)" oninput="document.getElementById('gwr-wv-${key}').textContent=this.value">
+      <span id="gwr-wv-${key}" style="font-size:10px;font-weight:800;color:var(--vio);min-width:12px;text-align:right">${w}</span>
+    </div>`;
+  };
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0;margin-bottom:12px">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-clock" style="font-size:11px"></i> HORAIRES MODE TRAVAIL
+      </div>
+      <div style="padding:0 12px 12px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:9px;color:var(--text3);width:50px">DÉBUT</span>
+          <input type="time" id="gwr-start" value="${cfg.work_start || '08:20'}"
+            style="background:var(--bg2);border:1px solid var(--bd);color:var(--text1);
+                   border-radius:4px;padding:4px 6px;font-size:10px;font-family:inherit">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:9px;color:var(--text3);width:50px">FIN</span>
+          <input type="time" id="gwr-end" value="${cfg.work_end || '17:00'}"
+            style="background:var(--bg2);border:1px solid var(--bd);color:var(--text1);
+                   border-radius:4px;padding:4px 6px;font-size:10px;font-family:inherit">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:9px;color:var(--text3);width:50px">DÉCALAGE</span>
+          <input type="range" id="gwr-offset" min="-60" max="60" value="${cfg.work_offset_min || 0}" step="5"
+            style="width:100px;accent-color:var(--vio)" oninput="document.getElementById('gwr-offset-v').textContent=(this.value>0?'+':'')+this.value+'min'">
+          <span id="gwr-offset-v" style="font-size:9px;color:var(--vio);min-width:40px">${cfg.work_offset_min > 0 ? '+' : ''}${cfg.work_offset_min || 0}min</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:9px;color:var(--text3);width:50px">JOURS</span>
+          ${daysHtml}
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-card" style="padding:0;margin-bottom:12px">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-playlist" style="font-size:11px"></i> POIDS DES PLAYLISTS (MODE TRAVAIL)
+      </div>
+      <div style="padding:0 12px 12px">
+        ${weightRow('decouverte',   'Travail Découverte', 'ti-sparkles')}
+        ${weightRow('bien_francais','Bien Français',      'ti-flag')}
+        ${weightRow('gaiverland_ia','Gaiverland IA',      'ti-robot')}
+        <div style="margin-top:8px;font-size:8px;color:var(--text3)">
+          Poids 0 = désactivé · 5 = prioritaire maximum
+        </div>
+      </div>
+    </div>
+
+    <button class="btn btn-vio" style="width:100%;font-size:9px" onclick="saveGaiverlandSchedule()">
+      <i class="ti ti-device-floppy"></i> ENREGISTRER
+    </button>`;
+}
+
+async function saveGaiverlandSchedule() {
+  const days = [1,2,3,4,5,6,7].filter(d => document.getElementById(`gwr-day-${d}`)?.checked);
+  const weights = {};
+  ['decouverte', 'bien_francais', 'gaiverland_ia'].forEach(k => {
+    const el = document.getElementById(`gwr-w-${k}`);
+    if (el) weights[k] = parseInt(el.value);
+  });
+  const payload = {
+    work_start:       document.getElementById('gwr-start')?.value,
+    work_end:         document.getElementById('gwr-end')?.value,
+    work_offset_min:  parseInt(document.getElementById('gwr-offset')?.value || '0'),
+    work_days:        days,
+    playlist_weights: weights,
+  };
+  const r = await fetch('/ui/proxy/gaiverland-radio/config', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+  });
+  if (r.ok) { notify('Horaires enregistrés', 'ok'); }
+  else { notify('Erreur lors de la sauvegarde', 'err'); }
+}
+
+// ── Gaiverland Radio — Styles / Programmation ─────────────────────────────────
+async function loadGaiverlandStyles() {
+  const c = document.getElementById('content-panel-gaiverland-styles');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/gaiverland-radio/config');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-adjustments-off"></i></div>
+      <div class="empty-title">CONFIGURATION INDISPONIBLE</div></div>`;
+    return;
+  }
+  const cfg = await r.json();
+
+  const pausedMoods  = cfg.paused_moods  || [];
+  const pausedGenres = cfg.paused_genres || [];
+
+  const ALL_MOODS = [
+    { name: 'festival',  icon: 'ti-confetti',  label: 'Festival' },
+    { name: 'intense',   icon: 'ti-bolt',       label: 'Intense' },
+    { name: 'energique', icon: 'ti-flame',      label: 'Énergique' },
+    { name: 'melodique', icon: 'ti-wave-sine',  label: 'Mélodique' },
+    { name: 'nocturne',  icon: 'ti-moon',       label: 'Nocturne' },
+  ];
+  const ALL_GENRES = [
+    { name: 'Hardstyle',       label: 'Hardstyle'      },
+    { name: 'Hard Techno',     label: 'Hard Techno'    },
+    { name: 'Hardcore',        label: 'Hardcore'       },
+    { name: 'Drum and Bass',   label: 'Drum & Bass'    },
+    { name: 'Dubstep',         label: 'Dubstep'        },
+    { name: 'French House',    label: 'French House'   },
+    { name: 'Deep House',      label: 'Deep House'     },
+    { name: 'Tech House',      label: 'Tech House'     },
+    { name: 'Progressive House', label: 'Progressive House' },
+    { name: 'Trance',          label: 'Trance'         },
+    { name: 'Synthwave',       label: 'Synthwave'      },
+  ];
+
+  const pausedMoodNames  = new Set(pausedMoods.map(p => p.name));
+  const pausedGenreNames = new Set(pausedGenres.map(p => p.name));
+
+  const pauseUntilSel = (id) => `
+    <select id="days-${id}" style="background:var(--bg2);border:1px solid var(--bd);color:var(--text1);
+      border-radius:3px;padding:2px 4px;font-size:8px;font-family:inherit">
+      <option value="1">1 jour</option>
+      <option value="3">3 jours</option>
+      <option value="7" selected>7 jours</option>
+      <option value="14">14 jours</option>
+      <option value="30">1 mois</option>
+    </select>`;
+
+  const moodRows = ALL_MOODS.map(m => {
+    const paused = pausedMoodNames.has(m.name);
+    const until  = pausedMoods.find(p => p.name === m.name)?.until || '';
+    return `<div class="loc-row" style="gap:8px">
+      <i class="ti ${m.icon}" style="font-size:13px;color:var(--text3);flex-shrink:0;width:18px"></i>
+      <div style="flex:1;font-size:9px;font-weight:700">${m.label}</div>
+      ${paused
+        ? `<span style="font-size:8px;color:var(--text3)">jusqu'au ${until}</span>
+           <button class="btn-sm" style="font-size:7px;color:var(--green-b)"
+             onclick="resumeGaiverlandPause('mood','${m.name}')">
+             <i class="ti ti-player-play" style="font-size:8px"></i> RÉACTIVER
+           </button>`
+        : `${pauseUntilSel('mood-'+m.name)}
+           <button class="btn-sm danger" style="font-size:7px"
+             onclick="pauseGaiverlandStyle('mood','${m.name}','mood-${m.name}')">
+             <i class="ti ti-pause" style="font-size:8px"></i> PAUSE
+           </button>`
+      }
+    </div>`;
+  }).join('');
+
+  const genreRows = ALL_GENRES.map(g => {
+    const paused = pausedGenreNames.has(g.name);
+    const until  = pausedGenres.find(p => p.name === g.name)?.until || '';
+    return `<div class="loc-row" style="gap:8px">
+      <i class="ti ti-tag" style="font-size:11px;color:var(--text3);flex-shrink:0;width:18px"></i>
+      <div style="flex:1;font-size:9px;font-weight:700">${g.label}</div>
+      ${paused
+        ? `<span style="font-size:8px;color:var(--text3)">jusqu'au ${until}</span>
+           <button class="btn-sm" style="font-size:7px;color:var(--green-b)"
+             onclick="resumeGaiverlandPause('genre','${g.name}')">
+             <i class="ti ti-player-play" style="font-size:8px"></i> RÉACTIVER
+           </button>`
+        : `${pauseUntilSel('genre-'+g.name)}
+           <button class="btn-sm danger" style="font-size:7px"
+             onclick="pauseGaiverlandStyle('genre','${g.name}','genre-${g.name}')">
+             <i class="ti ti-pause" style="font-size:8px"></i> PAUSE
+           </button>`
+      }
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0;margin-bottom:12px">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-mood-happy" style="font-size:11px"></i> MOODS
+        <span style="font-size:8px;color:var(--text3);margin-left:4px;font-weight:400">
+          Suspend un mood de la rotation
+        </span>
+      </div>
+      <div style="padding:0 12px 12px">${moodRows}</div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-tag" style="font-size:11px"></i> GENRES
+        <span style="font-size:8px;color:var(--text3);margin-left:4px;font-weight:400">
+          Exclut un genre du moteur de playlist
+        </span>
+      </div>
+      <div style="padding:0 12px 12px">${genreRows}</div>
+    </div>`;
+}
+
+async function pauseGaiverlandStyle(type, name, selId) {
+  const days = parseInt(document.getElementById('days-'+selId)?.value || '7');
+  const r = await fetch(`/ui/proxy/gaiverland-radio/config/pause?type=${type}&name=${encodeURIComponent(name)}&days=${days}`, { method: 'POST' });
+  if (r.ok) { notify(`${name} mis en pause ${days}j`, 'ok'); loadGaiverlandStyles(); }
+  else { notify('Erreur', 'err'); }
+}
+
+async function resumeGaiverlandPause(type, name) {
+  const r = await fetch(`/ui/proxy/gaiverland-radio/config/pause?type=${type}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (r.ok) { notify(`${name} réactivé`, 'ok'); loadGaiverlandStyles(); }
+  else { notify('Erreur', 'err'); }
 }
 
 // ── Pterodactyl — Serveurs de jeux ────────────────────────────────────────────

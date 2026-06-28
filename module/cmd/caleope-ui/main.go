@@ -469,6 +469,9 @@ func main() {
 		"changedetection": {tokenKey: "CHANGEDETECTION_API_TOKEN", authScheme: "X-Api-Key",
 			containerName: "changedetection", containerPort: 5000},
 
+		// Gaiverland Radio — playlist engine FastAPI (community app)
+		"gaiverland-radio": {containerName: "gaiverland-playlist", containerPort: 8080},
+
 		// Gotify — notifications push, client token dans X-Gotify-Key
 		"gotify": {tokenKey: "GOTIFY_CLIENT_TOKEN", authScheme: "X-Gotify-Key",
 			containerName: "gotify", containerPort: 80},
