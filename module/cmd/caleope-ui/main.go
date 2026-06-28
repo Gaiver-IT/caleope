@@ -76,6 +76,15 @@ type glpiSessionCache struct {
 
 var glpiCache = &glpiSessionCache{}
 
+// navidromeTokenCache : JWT Navidrome mis en cache (POST /auth/login → Bearer)
+type navidromeTokenCache struct {
+	mu      sync.Mutex
+	token   string
+	expires time.Time
+}
+
+var navidromeCache = &navidromeTokenCache{}
+
 // ghostAdminJWT génère un JWT signé HMAC-SHA256 pour l'Admin API Ghost.
 // apiKey format : "keyid:hexsecret" (copié depuis Ghost admin → Intégrations)
 func ghostAdminJWT(apiKey string) (string, error) {
@@ -482,8 +491,9 @@ func main() {
 		// Calibre-Web — bibliothèque ebooks
 		"calibre-web": {containerName: "calibre-web", containerPort: 8083},
 
-		// Navidrome — serveur de musique
-		"navidrome": {containerName: "navidrome", containerPort: 4533},
+		// Navidrome — serveur de musique (login JWT cache)
+		"navidrome": {basicUserKey: "ND_ADMIN_USER", basicPassKey: "ND_ADMIN_PASSWORD",
+			authScheme: "NavidromeLogin", containerName: "navidrome", containerPort: 4533},
 
 		// PhotoPrism — gestionnaire de photos
 		"photoprism": {containerName: "photoprism", containerPort: 2342},
@@ -491,8 +501,9 @@ func main() {
 		// Kavita — lecteur manga/comics/ebooks
 		"kavita": {containerName: "kavita", containerPort: 5000},
 
-		// Komga — bibliothèque comics/mangas
-		"komga": {containerName: "komga", containerPort: 25600},
+		// Komga — bibliothèque comics/mangas (Basic auth)
+		"komga": {basicUserKey: "KOMGA_ADMIN_EMAIL", basicPassKey: "KOMGA_ADMIN_PASSWORD",
+			authScheme: "Basic", containerName: "komga", containerPort: 25600},
 
 		// Code Server — VS Code web
 		"code-server": {containerName: "code-server", containerPort: 8080},
@@ -693,6 +704,52 @@ func main() {
 			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
 			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
 			outReq.Header.Set("Authorization", "Bearer "+immichToken)
+			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// NavidromeLogin : POST /auth/login → cache Bearer JWT (expiry ~24h)
+		if cfg.authScheme == "NavidromeLogin" {
+			user := readEnvKey(secretsPath, cfg.basicUserKey)
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
+			if user == "" || pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials Navidrome non disponibles")
+				return
+			}
+			navidromeCache.mu.Lock()
+			navToken := navidromeCache.token
+			if navToken == "" || time.Now().After(navidromeCache.expires) {
+				loginBody := strings.NewReader(fmt.Sprintf(`{"username":%q,"password":%q}`, user, pass))
+				loginReq, _ := http.NewRequest(http.MethodPost, targetBase+"/auth/login", loginBody)
+				loginReq.Header.Set("Content-Type", "application/json")
+				loginReq.Header.Set("Accept", "application/json")
+				loginResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(loginReq)
+				if err2 == nil && loginResp != nil {
+					var loginData struct { Token string `json:"token"` }
+					if json.NewDecoder(loginResp.Body).Decode(&loginData) == nil && loginData.Token != "" {
+						navToken = loginData.Token
+						navidromeCache.token = navToken
+						navidromeCache.expires = time.Now().Add(23 * time.Hour)
+					}
+					loginResp.Body.Close()
+				}
+			}
+			navidromeCache.mu.Unlock()
+			if navToken == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "navidrome: authentification échouée")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			outReq.Header.Set("X-ND-Authorization", "Bearer "+navToken)
 			outReq.Header.Set("Accept", "application/json")
 			resp, err := client.Do(outReq)
 			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }

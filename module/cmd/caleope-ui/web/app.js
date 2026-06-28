@@ -6312,11 +6312,10 @@ async function loadKomgaLibrary() {
     ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR KOMGA</a>`
     : '';
 
-  // Komga API: lister les séries récentes (nécessite auth Basic)
-  // On tente une requête sans auth sur l'endpoint /api/v2/series
+  // Komga API v1: lister les séries récentes
   let series = null;
   try {
-    const r = await fetch('/ui/proxy/komga/api/v2/series?page=0&size=10&sort=lastModified,desc');
+    const r = await fetch('/ui/proxy/komga/api/v1/series?page=0&size=10&sort=lastModified,desc');
     if (r.ok) { const d = await r.json(); series = d?.content; }
   } catch(e) {}
 
@@ -6575,28 +6574,31 @@ async function loadNavidromeLibrary() {
     ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR NAVIDROME</a>`
     : '';
 
-  // API Subsonic: getArtists
-  let stats = null;
+  // Navidrome REST API: albums récents (Bearer JWT via proxy)
+  let albums = null, artistCount = 0, songCount = 0;
   try {
-    const r = await fetch('/ui/proxy/navidrome/rest/getAlbumList2.view?type=newest&size=10&f=json&v=1.16.1&c=caleope&u=admin&p=');
-    if (r.ok) {
-      const d = await r.json();
-      stats = d['subsonic-response'];
+    const [rAlbum, rStats] = await Promise.all([
+      fetch('/ui/proxy/navidrome/api/album?_start=0&_end=12&_order=DESC&_sort=updatedAt'),
+      fetch('/ui/proxy/navidrome/api/artist?_start=0&_end=1'),
+    ]);
+    if (rAlbum.ok) albums = await rAlbum.json();
+    if (rStats.ok) {
+      const countHeader = rStats.headers.get('X-Total-Count');
+      artistCount = countHeader ? parseInt(countHeader) : 0;
     }
+    const rSong = await fetch('/ui/proxy/navidrome/api/song?_start=0&_end=1');
+    if (rSong.ok) songCount = parseInt(rSong.headers.get('X-Total-Count') || '0');
   } catch(e) {}
 
-  // Fallback: iframe embed
-  if (!stats || stats.status !== 'ok') {
+  if (!Array.isArray(albums)) {
     c.innerHTML = `
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${adminLink}</div>
-      <div style="display:flex;flex-direction:column;height:calc(100vh - 180px);min-height:300px">
-        <iframe src="/ui/proxy/navidrome/" style="flex:1;border:none;border-radius:6px;background:var(--card)"
-          allow="fullscreen" title="Navidrome"></iframe>
-      </div>`;
+      <div class="empty-state"><div class="empty-icon"><i class="ti ti-music-off"></i></div>
+        <div class="empty-title">NAVIDROME INDISPONIBLE</div>
+        <div class="empty-sub">Vérifiez les credentials dans app-config/navidrome/secrets.env</div></div>`;
     return;
   }
 
-  const albums = stats.albumList2?.album || [];
   const rows = albums.length === 0
     ? `<div class="empty-state"><div class="empty-icon"><i class="ti ti-music"></i></div>
         <div class="empty-title">BIBLIOTHÈQUE VIDE</div>
@@ -6607,9 +6609,9 @@ async function loadNavidromeLibrary() {
           <span style="font-size:16px">🎵</span>
           <div style="flex:1;min-width:0">
             <div style="font-size:10px;font-weight:600;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(a.name || '—')}</div>
-            <div style="font-size:8px;color:var(--text3)">${escapeHtml(a.artist || '—')} · ${a.songCount || 0} piste(s)</div>
+            <div style="font-size:8px;color:var(--text3)">${escapeHtml(a.albumArtist || '—')} · ${a.songCount || 0} piste(s)</div>
           </div>
-          <span style="font-size:8px;color:var(--text3)">${escapeHtml(String(a.year || ''))}</span>
+          <span style="font-size:8px;color:var(--text3)">${escapeHtml(String(a.minYear || ''))}</span>
         </div>`).join('');
 
   c.innerHTML = `
@@ -6618,7 +6620,12 @@ async function loadNavidromeLibrary() {
       <button class="btn" style="margin-left:auto;font-size:9px" onclick="loadNavidromeLibrary()">
         <i class="ti ti-refresh"></i> RAFRAÎCHIR</button>
     </div>
-    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin-bottom:8px">// ALBUMS RÉCENTS</div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <div class="stat-mini"><span class="stat-val">${artistCount}</span><span class="stat-lbl">ARTISTES</span></div>
+      <div class="stat-mini"><span class="stat-val">${songCount}</span><span class="stat-lbl">PISTES</span></div>
+      <div class="stat-mini"><span class="stat-val">${albums.length}</span><span class="stat-lbl">ALBUMS RÉCENTS</span></div>
+    </div>
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin-bottom:8px">// DERNIERS ALBUMS</div>
     ${rows}`;
 }
 
