@@ -29,7 +29,6 @@ jobs:
           if [[ "${BRANCH}" == "alpha" ]]; then
             echo "version=alpha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
             echo "tag=alpha-latest"           >> "$GITHUB_OUTPUT"
-            echo "prerelease=true"            >> "$GITHUB_OUTPUT"
             echo "title=Caleope alpha (${SHORT_SHA})" >> "$GITHUB_OUTPUT"
           else
             VERSION=$(grep 'Version = ' module/pkg/version/version.go \
@@ -37,7 +36,6 @@ jobs:
             [[ -z "${VERSION}" || "${VERSION}" == "dev" ]] && VERSION="v0.0.0"
             echo "version=${VERSION}"         >> "$GITHUB_OUTPUT"
             echo "tag=${VERSION}"             >> "$GITHUB_OUTPUT"
-            echo "prerelease=false"           >> "$GITHUB_OUTPUT"
             echo "title=Caleope ${VERSION}"   >> "$GITHUB_OUTPUT"
           fi
 
@@ -61,7 +59,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.meta.outputs.tag }}
           TITLE: ${{ steps.meta.outputs.title }}
-          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
         run: |
           ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64"
 
@@ -75,12 +72,6 @@ jobs:
             if [[ "${TAG}" == "alpha-latest" ]]; then
               gh release edit "${TAG}" --title "${TITLE}"
             fi
-          elif [[ "${PRERELEASE}" == "true" ]]; then
-            gh release create "${TAG}" \
-              --title "${TITLE}" \
-              --notes "" \
-              --prerelease \
-              ${ASSETS}
           else
             gh release create "${TAG}" \
               --title "${TITLE}" \

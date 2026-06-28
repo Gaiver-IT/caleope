@@ -1030,7 +1030,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		}
 		found := false
 		for _, r := range releases {
-			if r.Prerelease {
+			if r.TagName == "alpha-latest" {
 				release = r
 				found = true
 				break
@@ -1040,7 +1040,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 			return map[string]string{
 				"status":  "up_to_date",
 				"version": version.Version,
-				"message": "Aucune pré-release alpha disponible sur GitHub",
+				"message": "Aucune release alpha disponible sur GitHub",
 			}, nil
 		}
 	} else {
