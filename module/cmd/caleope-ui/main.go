@@ -1100,6 +1100,23 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	// ── SSO OIDC ──────────────────────────────────────────────────────────────
+	mux.HandleFunc("/auth/oidc/config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			requireSession(func(w http.ResponseWriter, r *http.Request) {
+				handleOidcSave(w, r, *baseDir)
+			})(w, r)
+			return
+		}
+		handleOidcConfig(w, r, *baseDir)
+	})
+	mux.HandleFunc("/auth/oidc/start", func(w http.ResponseWriter, r *http.Request) {
+		handleOidcStart(w, r, *baseDir)
+	})
+	mux.HandleFunc("/auth/oidc/callback", func(w http.ResponseWriter, r *http.Request) {
+		handleOidcCallback(w, r, *baseDir, store)
+	})
+
 	// ── Terminal WebSocket (session requise) ──────────────────────────────────
 	mux.HandleFunc("/ws/terminal", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleTerminal(w, r)

@@ -955,6 +955,27 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
 /* ── REFRESH SPIN ─────────────────────────────────────────────────────────────── */
 .spinning .ti { animation: spin .6s linear; }
 
+/* ── DASHBOARD CUSTOMIZE MODE ─────────────────────────────────────────────────── */
+.dash-block { position: relative; }
+.dash-block-hide-btn {
+  display: none;
+  position: absolute; top: 50%; right: 8px;
+  transform: translateY(-50%);
+  background: var(--red-b); color: #fff; border: none;
+  width: 22px; height: 22px; border-radius: 4px;
+  cursor: pointer; z-index: 5;
+  align-items: center; justify-content: center;
+  transition: opacity .15s;
+}
+.dash-customize .dash-block {
+  outline: 1px dashed var(--border1);
+  border-radius: 6px;
+  padding: 0 2px 2px;
+  margin-bottom: 2px;
+}
+.dash-customize .dash-block-hide-btn { display: flex; }
+#dash-customize-btn.active { background: var(--vio-g); border-color: var(--vio-dim); color: var(--vio-b); }
+
 /* ── DASHBOARD ────────────────────────────────────────────────────────────────── */
 .dash-grid {
   display: grid;

@@ -59,6 +59,18 @@
       </div>
     </form>
 
+    <div id="sso-section" style="display:none;margin-top:10px">
+      <div style="display:flex;align-items:center;gap:10px;margin:12px 0 10px">
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+        <span style="font-size:8px;color:var(--text3);letter-spacing:1px">OU</span>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>
+      <button type="button" class="btn" onclick="loginWithSSO()" style="width:100%;justify-content:center;gap:8px">
+        <i class="ti ti-login-2"></i>
+        <span id="sso-btn-label">Connexion SSO</span>
+      </button>
+    </div>
+
     <div class="status-bar">
       <i class="ti ti-shield-check" aria-hidden="true"></i>
       SESSION COOKIE · HTTPONLY · SAMESITE STRICT · 24H

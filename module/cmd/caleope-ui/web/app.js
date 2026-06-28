@@ -2368,6 +2368,28 @@ async function loadSettings() {
       </div>
     </div>
     <div class="settings-card">
+      <div class="settings-title">SSO / OIDC</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
+        Configurez un provider OpenID Connect (Authentik, Keycloak, etc.) pour ajouter un bouton de connexion SSO sur l'écran de login.
+        <br>Pour Authentik, l'issuer est au format <code style="font-size:8px;background:var(--bg3);padding:1px 4px;border-radius:3px">https://authentik.domain.tld/application/o/slug/</code>
+      </div>
+      <div id="oidc-settings-form" style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+          <span class="spinner" id="oidc-loading" style="display:none"></span>
+          <span id="oidc-status-badge"></span>
+        </div>
+        <input type="text" id="oidc-name" placeholder="Nom du bouton (ex: Connexion Authentik)" class="param-input">
+        <input type="text" id="oidc-issuer" placeholder="OIDC Issuer URL" class="param-input">
+        <input type="text" id="oidc-client-id" placeholder="Client ID" class="param-input">
+        <input type="password" id="oidc-client-secret" placeholder="Client Secret" class="param-input">
+        <input type="text" id="oidc-redirect-uri" placeholder="Redirect URI (optionnel — dérivé automatiquement)" class="param-input">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+          <button class="btn" onclick="saveOidcSettings()"><i class="ti ti-device-floppy"></i> SAUVEGARDER</button>
+          <button class="btn-sm danger" onclick="clearOidcSettings()"><i class="ti ti-trash"></i> DÉSACTIVER SSO</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card">
       <div class="settings-title">SESSION</div>
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
@@ -2377,6 +2399,7 @@ async function loadSettings() {
   `;
   loadSettingsCerts();
   loadMaintenancePanel();
+  loadOidcSettings();
 }
 
 async function loadMaintenancePanel() {
@@ -2783,6 +2806,67 @@ async function runUpdate() {
 }
 
 // ── SECTION: DASHBOARD ────────────────────────────────────────────────────────
+// ── Dashboard block customization ─────────────────────────────────────────────
+function getDashHiddenBlocks() {
+  try { return new Set(JSON.parse(localStorage.getItem('caleope-hidden-blocks') || '[]')); } catch(e) { return new Set(); }
+}
+function saveDashHiddenBlocks(s) {
+  try { localStorage.setItem('caleope-hidden-blocks', JSON.stringify([...s])); } catch(e) {}
+}
+function _wrapDashBlocks(container) {
+  container.querySelectorAll('[id^="dash-"][id$="-widget"]').forEach(widget => {
+    const bid = widget.id.slice(5, -7);
+    if (widget.closest('.dash-block')) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'dash-block';
+    wrapper.dataset.bid = bid;
+    const prev = widget.previousElementSibling;
+    const parent = widget.parentNode;
+    const hideBtn = document.createElement('button');
+    hideBtn.className = 'dash-block-hide-btn';
+    hideBtn.title = 'Masquer ce bloc';
+    hideBtn.innerHTML = '<i class="ti ti-eye-off" style="font-size:10px;pointer-events:none"></i>';
+    hideBtn.addEventListener('click', () => toggleDashBlock(bid));
+    if (prev && /^\/\//.test(prev.textContent.trim())) {
+      parent.insertBefore(wrapper, prev);
+      wrapper.appendChild(prev);
+    } else {
+      parent.insertBefore(wrapper, widget);
+    }
+    wrapper.appendChild(widget);
+    wrapper.appendChild(hideBtn);
+  });
+}
+function applyDashBlocksVisibility() {
+  const hidden = getDashHiddenBlocks();
+  document.querySelectorAll('.dash-block[data-bid]').forEach(block => {
+    block.style.display = hidden.has(block.dataset.bid) ? 'none' : '';
+  });
+  const count = hidden.size;
+  const badge = document.getElementById('dash-hidden-count');
+  if (badge) badge.textContent = count > 0 ? ` (${count} masqué${count > 1 ? 's' : ''})` : '';
+}
+function toggleDashBlock(bid) {
+  const hidden = getDashHiddenBlocks();
+  if (hidden.has(bid)) hidden.delete(bid);
+  else hidden.add(bid);
+  saveDashHiddenBlocks(hidden);
+  applyDashBlocksVisibility();
+}
+function toggleDashCustomize() {
+  const c = document.getElementById('content-dashboard');
+  if (!c) return;
+  const isCustom = c.classList.toggle('dash-customize');
+  const btn = document.getElementById('dash-customize-btn');
+  if (btn) btn.classList.toggle('active', isCustom);
+  if (isCustom) notify('Mode personnalisation — cliquez <i class="ti ti-eye-off"></i> pour masquer un bloc', 'info');
+}
+function resetDashBlocks() {
+  saveDashHiddenBlocks(new Set());
+  applyDashBlocksVisibility();
+  notify('Tous les blocs affichés', 'ok');
+}
+
 async function loadDashboard() {
   const c = document.getElementById('content-dashboard');
   if (!c) return;
@@ -2842,9 +2926,18 @@ async function loadDashboard() {
         Actualisé à <span id="dash-refreshed-time">${new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
         · <span id="dash-next-refresh" style="color:var(--accent)">prochain dans 30s</span>
       </div>
-      <button class="btn-sm" onclick="refreshSection()" title="Actualiser maintenant">
-        <i class="ti ti-refresh" style="font-size:10px"></i>
-      </button>
+      <div style="display:flex;gap:4px;align-items:center">
+        <span id="dash-hidden-count" style="font-size:8px;color:var(--text3)"></span>
+        <button class="btn-sm" id="dash-customize-btn" onclick="toggleDashCustomize()" title="Personnaliser — masquer/afficher les blocs">
+          <i class="ti ti-layout-columns" style="font-size:10px"></i>
+        </button>
+        <button class="btn-sm" onclick="resetDashBlocks()" title="Réafficher tous les blocs masqués" style="display:none" id="dash-reset-btn">
+          <i class="ti ti-eye" style="font-size:10px"></i>
+        </button>
+        <button class="btn-sm" onclick="refreshSection()" title="Actualiser maintenant">
+          <i class="ti ti-refresh" style="font-size:10px"></i>
+        </button>
+      </div>
     </div>
     <div class="metrics" style="margin-bottom:20px">
       <div class="mc mc-vio" style="cursor:pointer" onclick="goSection('apps')" title="Voir les applications">
@@ -3191,6 +3284,13 @@ async function loadDashboard() {
     <div style="font-size:9px;color:var(--red-b);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// ERREURS SYSTÈME RÉCENTES</div>
     <div id="dash-journal-errors-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
   `;
+
+  // Personnalisation des blocs — wrap + appliquer les blocs masqués
+  _wrapDashBlocks(c);
+  applyDashBlocksVisibility();
+  const hidden = getDashHiddenBlocks();
+  const resetBtn = document.getElementById('dash-reset-btn');
+  if (resetBtn) resetBtn.style.display = hidden.size > 0 ? '' : 'none';
 
   // Charger les widgets async
   if (S.apps.some(a => a.id === 'uptime-kuma' && a.status === 'running')) {
@@ -4649,13 +4749,16 @@ async function loadDashAzuracastWidget() {
   const stationRows = (Array.isArray(stations) ? stations : []).slice(0, 3).map(s => {
     const isLive = s.is_online !== false;
     const listeners = s.listeners?.current ?? s.listener_count ?? 0;
-    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
-      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isLive ? 'var(--green-b)' : 'var(--text3)'};flex-shrink:0"></span>
+    const song = s.now_playing?.song;
+    const nowPlayingText = song?.text || (song?.title ? [(song.artist || ''), song.title].filter(Boolean).join(' — ') : '');
+    return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isLive ? 'var(--green-b)' : 'var(--text3)'};flex-shrink:0;margin-top:2px"></span>
       <div style="flex:1;min-width:0">
         <div style="font-size:9px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.name || s.short_name || '—')}</div>
-        <div style="font-size:8px;color:var(--text3)">${listeners} auditeur(s)</div>
+        ${nowPlayingText ? `<div style="font-size:8px;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px"><i class="ti ti-music" style="font-size:7px"></i> ${escapeHtml(nowPlayingText)}</div>` : ''}
+        <div style="font-size:8px;color:var(--text3);margin-top:1px">${listeners} auditeur${listeners !== 1 ? 's' : ''}</div>
       </div>
-      ${s.public_player_url ? `<a href="${s.public_player_url}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none"><i class="ti ti-player-play" style="font-size:9px"></i></a>` : ''}
+      ${s.public_player_url ? `<a href="${s.public_player_url}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none" title="Ouvrir le player"><i class="ti ti-player-play" style="font-size:9px"></i></a>` : ''}
     </div>`;
   }).join('');
 
@@ -9093,10 +9196,102 @@ function filterAudit() {
   }).join('') || '<div class="empty-msg">Aucune entrée correspondante</div>';
 }
 
+// ── SSO / OIDC ────────────────────────────────────────────────────────────────
+async function checkOidcConfig() {
+  try {
+    const r = await fetch('/auth/oidc/config');
+    if (!r.ok) return;
+    const d = await r.json();
+    const sect = document.getElementById('sso-section');
+    const lbl = document.getElementById('sso-btn-label');
+    if (sect) sect.style.display = d.enabled ? '' : 'none';
+    if (lbl && d.name) lbl.textContent = d.name;
+  } catch(e) {}
+}
+
+function loginWithSSO() {
+  window.location.href = '/auth/oidc/start';
+}
+
+async function loadOidcSettings() {
+  const badge = document.getElementById('oidc-status-badge');
+  const loading = document.getElementById('oidc-loading');
+  if (loading) loading.style.display = '';
+  try {
+    const r = await fetch('/auth/oidc/config');
+    const d = r.ok ? await r.json() : {};
+    if (badge) {
+      badge.innerHTML = d.enabled
+        ? `<span class="badge badge-ok" style="font-size:8px"><span style="width:5px;height:5px;background:var(--ok);display:inline-block;border-radius:50%;margin-right:3px"></span>SSO ACTIF — ${escapeHtml(d.name || 'OIDC')}</span>`
+        : `<span style="font-size:8px;color:var(--text3)">SSO non configuré</span>`;
+    }
+    // Pré-remplir les champs si on a une config existante (lire le fichier via API si besoin)
+    // Les champs secrets ne sont pas renvoyés par /auth/oidc/config pour la sécurité
+  } catch(e) {}
+  if (loading) loading.style.display = 'none';
+}
+
+async function saveOidcSettings() {
+  const issuer = document.getElementById('oidc-issuer')?.value?.trim() || '';
+  const clientId = document.getElementById('oidc-client-id')?.value?.trim() || '';
+  const clientSecret = document.getElementById('oidc-client-secret')?.value?.trim() || '';
+  const name = document.getElementById('oidc-name')?.value?.trim() || 'SSO';
+  const redirectUri = document.getElementById('oidc-redirect-uri')?.value?.trim() || '';
+
+  if (!issuer || !clientId) { notify('Issuer et Client ID requis', 'err'); return; }
+
+  notify('Sauvegarde...', 'info');
+  try {
+    const r = await fetch('/auth/oidc/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issuer, client_id: clientId, client_secret: clientSecret, name, redirect_uri: redirectUri })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.status === 'ok') {
+      notify('Configuration SSO sauvegardée', 'ok');
+      loadOidcSettings();
+      checkOidcConfig();
+    } else {
+      notify(d.error || 'Erreur sauvegarde SSO', 'err');
+    }
+  } catch(e) {
+    notify('Erreur réseau', 'err');
+  }
+}
+
+async function clearOidcSettings() {
+  if (!confirm('Désactiver le SSO ? Le bouton de connexion SSO sera retiré de l\'écran de login.')) return;
+  ['oidc-name','oidc-issuer','oidc-client-id','oidc-client-secret','oidc-redirect-uri'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  await saveOidcSettings().catch(() => {});
+  // Sauvegarder avec champs vides = désactive
+  try {
+    await fetch('/auth/oidc/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issuer: '', client_id: '', client_secret: '', name: '', redirect_uri: '' })
+    });
+    notify('SSO désactivé', 'ok');
+    loadOidcSettings();
+    checkOidcConfig();
+  } catch(e) {}
+}
+
 // ── Login screen ──────────────────────────────────────────────────────────────
 function showLogin() {
   document.getElementById('app').classList.remove('visible');
   document.getElementById('login-screen').style.display = 'flex';
+  // Vérifier les erreurs OIDC dans l'URL (callback redirect)
+  const params = new URLSearchParams(window.location.search);
+  const oidcErr = params.get('oidc_error');
+  if (oidcErr) {
+    const errEl = document.getElementById('login-error');
+    if (errEl) errEl.textContent = 'Erreur SSO : ' + oidcErr.replace(/_/g,' ');
+    history.replaceState(null, '', '/');
+  }
 }
 
 let _dashRefreshInterval = null;
@@ -9166,6 +9361,7 @@ function refreshSection() {
 async function init() {
   loadSavedTheme();
   loadSavedSidebar();
+  checkOidcConfig();
   const ok = await checkAuth();
   if (ok) { showApp(); }
   else    { showLogin(); }
