@@ -888,6 +888,10 @@ function appCard(app) {
             <i class="ti ti-info-circle"></i>
             <span class="btn-label">INSPECT</span>
           </button>` : ''}
+          <button class="action-btn" onclick="showPostInstallNotes('${app.id}','${escapeHtml(app.name||app.id)}')" title="Notes d'installation">
+            <i class="ti ti-notes"></i>
+            <span class="btn-label">NOTES</span>
+          </button>
           <button class="action-btn danger" onclick="removeApp('${app.id}')" title="Supprimer">
             <i class="ti ti-trash"></i>
             <span class="btn-label">SUPPRIMER</span>
@@ -2305,7 +2309,19 @@ async function loadSettings() {
       </div>
     </div>
     <div class="settings-card">
-      <div class="settings-title">THÈME</div>
+      <div class="settings-title">APPARENCE</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div>
+          <div style="font-size:10px;font-weight:600;color:var(--text2)">MODE SOMBRE / CLAIR</div>
+          <div style="font-size:9px;color:var(--text3);margin-top:2px">Basculer entre le thème sombre et le thème clair</div>
+        </div>
+        <button id="mode-toggle-btn" class="btn" onclick="toggleMode()" style="flex-shrink:0">
+          ${(localStorage.getItem('caleope-mode')||'dark') === 'light' ? '<i class="ti ti-moon"></i> MODE SOMBRE' : '<i class="ti ti-sun"></i> MODE CLAIR'}
+        </button>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">THÈME DE COULEUR</div>
       <div style="font-size:9px;color:var(--text3);margin-bottom:10px">Couleur d'accentuation de l'interface</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         ${[
@@ -2448,6 +2464,42 @@ function loadSavedTheme() {
     const t = JSON.parse(localStorage.getItem('caleope-theme') || 'null');
     if (t) applyTheme(t);
   } catch(e) {}
+  loadSavedMode();
+}
+
+function toggleMode() {
+  const cur = localStorage.getItem('caleope-mode') || 'dark';
+  setMode(cur === 'light' ? 'dark' : 'light');
+}
+
+function setMode(mode) {
+  document.documentElement.setAttribute('data-theme', mode);
+  try { localStorage.setItem('caleope-mode', mode); } catch(e) {}
+  const btn = document.getElementById('mode-toggle-btn');
+  if (btn) {
+    btn.innerHTML = mode === 'light'
+      ? '<i class="ti ti-moon"></i> MODE SOMBRE'
+      : '<i class="ti ti-sun"></i> MODE CLAIR';
+  }
+  notify(mode === 'light' ? 'Mode clair activé' : 'Mode sombre activé', 'ok');
+}
+
+function loadSavedMode() {
+  const mode = localStorage.getItem('caleope-mode') || 'dark';
+  document.documentElement.setAttribute('data-theme', mode);
+}
+
+function toggleSidebar() {
+  const sb = document.getElementById('main-sidebar');
+  if (!sb) return;
+  const collapsed = sb.classList.toggle('collapsed');
+  try { localStorage.setItem('caleope-sidebar-collapsed', collapsed ? '1' : '0'); } catch(e) {}
+}
+
+function loadSavedSidebar() {
+  const sb = document.getElementById('main-sidebar');
+  if (!sb) return;
+  if (localStorage.getItem('caleope-sidebar-collapsed') === '1') sb.classList.add('collapsed');
 }
 
 async function changePassword() {
@@ -2724,20 +2776,21 @@ async function loadDashboard() {
     })()}
 
     ${S.apps.length ? `
-      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// APPLICATIONS</div>
-      <div class="apps-grid">
-        ${S.apps.slice(0,6).map(a => {
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// ÉTAT DES APPLICATIONS</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:5px">
+        ${S.apps.map(a => {
           const domain = a.domain ? `https://${a.domain}` : null;
-          return `<div class="app-card ${a.status === 'running' ? 'running' : ''}" style="cursor:pointer" onclick="goSection('apps')">
-            <div class="card-corner"></div>
-            <div class="app-top">
-              ${domain ? `<a class="app-icon" href="${domain}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${icon(a.id)}</a>` : `<div class="app-icon">${icon(a.id)}</div>`}
-              <div class="app-meta">
-                <div class="app-name">${escapeHtml(a.name || a.id)}</div>
-                <div class="app-ver">${a.version || '—'}</div>
-              </div>
-              ${statusBadge(a.status)}
+          const isRun = a.status === 'running';
+          const dotColor = isRun ? 'var(--green-b)' : (a.status === 'error' ? 'var(--red-b)' : 'var(--text3)');
+          return `<div style="background:var(--card);border:1px solid var(--border);border-radius:5px;padding:6px 8px;
+                              cursor:pointer;display:flex;flex-direction:column;gap:4px;transition:border-color .15s"
+                       onclick="${domain && isRun ? `window.open('${domain}','_blank','noopener')` : `goSection('apps')`}"
+                       title="${escapeHtml(a.name||a.id)} — ${(a.status||'inconnu').toUpperCase()}">
+            <div style="display:flex;align-items:center;gap:5px">
+              <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};flex-shrink:0;${isRun ? 'box-shadow:0 0 4px '+dotColor : ''}"></span>
+              <span style="font-size:9px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${escapeHtml(a.name||a.id)}</span>
             </div>
+            <div style="font-size:7px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">${a.status||'inconnu'}</div>
           </div>`;
         }).join('')}
       </div>
@@ -2832,6 +2885,46 @@ async function loadDashboard() {
 
     <div id="dash-resources-widget"></div>
 
+    ${S.apps.some(a => a.id === 'jellyfin' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MÉDIATHÈQUE</div>
+      <div id="dash-jellyfin-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'azuracast' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// RADIO / STREAMING</div>
+      <div id="dash-azuracast-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'immich' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// PHOTOS</div>
+      <div id="dash-immich-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'paperless-ngx' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// DOCUMENTS</div>
+      <div id="dash-paperless-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'ntfy' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// NOTIFICATIONS PUSH</div>
+      <div id="dash-ntfy-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'pihole' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// DNS / PIHOLE</div>
+      <div id="dash-pihole-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'authentik' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// SSO / IDENTITÉ</div>
+      <div id="dash-authentik-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'nextcloud' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// CLOUD</div>
+      <div id="dash-nextcloud-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
     ${S.apps.some(a => a.id === 'crowdsec' && a.status === 'running') ? `
       <div id="dash-crowdsec-widget"></div>
     ` : ''}
@@ -2906,6 +2999,51 @@ async function loadDashboard() {
       <div id="dash-komga-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
 
+    ${S.apps.some(a => a.id === 'portainer' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// PORTAINER</div>
+      <div id="dash-portainer-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'scrutiny' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// SANTÉ DISQUES</div>
+      <div id="dash-scrutiny-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'jellyseerr' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// DEMANDES MÉDIAS</div>
+      <div id="dash-jellyseerr-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'n8n' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// AUTOMATISATION</div>
+      <div id="dash-n8n-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'ghost' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// BLOG GHOST</div>
+      <div id="dash-ghost-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'wordpress' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// BLOG WORDPRESS</div>
+      <div id="dash-wordpress-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'mealie' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// RECETTES</div>
+      <div id="dash-mealie-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'syncthing' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// SYNCHRONISATION</div>
+      <div id="dash-syncthing-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'glpi' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// TICKETS GLPI</div>
+      <div id="dash-glpi-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// CONTENEURS</div>
     <div id="dash-containers-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
 
@@ -2921,6 +3059,30 @@ async function loadDashboard() {
     loadDashUptimeWidget();
   }
   loadDashResourcesWidget();
+  if (S.apps.some(a => a.id === 'jellyfin' && a.status === 'running')) {
+    loadDashJellyfinWidget();
+  }
+  if (S.apps.some(a => a.id === 'azuracast' && a.status === 'running')) {
+    loadDashAzuracastWidget();
+  }
+  if (S.apps.some(a => a.id === 'immich' && a.status === 'running')) {
+    loadDashImmichWidget();
+  }
+  if (S.apps.some(a => a.id === 'paperless-ngx' && a.status === 'running')) {
+    loadDashPaperlessWidget();
+  }
+  if (S.apps.some(a => a.id === 'ntfy' && a.status === 'running')) {
+    loadDashNtfyWidget();
+  }
+  if (S.apps.some(a => a.id === 'pihole' && a.status === 'running')) {
+    loadDashPiholeWidget();
+  }
+  if (S.apps.some(a => a.id === 'authentik' && a.status === 'running')) {
+    loadDashAuthentikWidget();
+  }
+  if (S.apps.some(a => a.id === 'nextcloud' && a.status === 'running')) {
+    loadDashNextcloudWidget();
+  }
   if (S.apps.some(a => a.id === 'crowdsec' && a.status === 'running')) {
     loadDashCrowdSecWidget();
   }
@@ -2965,6 +3127,33 @@ async function loadDashboard() {
   }
   if (S.apps.some(a => a.id === 'komga' && a.status === 'running')) {
     loadDashKomgaWidget();
+  }
+  if (S.apps.some(a => a.id === 'portainer' && a.status === 'running')) {
+    loadDashPortainerWidget();
+  }
+  if (S.apps.some(a => a.id === 'scrutiny' && a.status === 'running')) {
+    loadDashScrutinyWidget();
+  }
+  if (S.apps.some(a => a.id === 'jellyseerr' && a.status === 'running')) {
+    loadDashJellyseerrWidget();
+  }
+  if (S.apps.some(a => a.id === 'n8n' && a.status === 'running')) {
+    loadDashN8nWidget();
+  }
+  if (S.apps.some(a => a.id === 'ghost' && a.status === 'running')) {
+    loadDashGhostWidget();
+  }
+  if (S.apps.some(a => a.id === 'wordpress' && a.status === 'running')) {
+    loadDashWordpressWidget();
+  }
+  if (S.apps.some(a => a.id === 'mealie' && a.status === 'running')) {
+    loadDashMealieWidget();
+  }
+  if (S.apps.some(a => a.id === 'syncthing' && a.status === 'running')) {
+    loadDashSyncthingWidget();
+  }
+  if (S.apps.some(a => a.id === 'glpi' && a.status === 'running')) {
+    loadDashGlpiWidget();
   }
   loadDashContainersWidget();
   loadDashEventsWidget();
@@ -3406,6 +3595,358 @@ async function loadDashFreshRssWidget() {
     </div>`;
 }
 
+async function loadDashPortainerWidget() {
+  const w = document.getElementById('dash-portainer-widget');
+  if (!w) return;
+  let endpoints = [], totalRunning = 0, totalStopped = 0;
+  try {
+    const r = await fetch('/ui/proxy/portainer/api/endpoints');
+    if (r.ok) {
+      endpoints = await r.json();
+      for (const ep of endpoints) {
+        totalRunning += ep.Snapshots?.[0]?.RunningContainerCount || 0;
+        totalStopped += ep.Snapshots?.[0]?.StoppedContainerCount || 0;
+      }
+    } else if (r.status === 401 || r.status === 403) {
+      w.innerHTML = `<div style="color:var(--text3);font-size:9px;padding:4px 0">Token API non configuré — voir secrets.env</div>`;
+      return;
+    }
+  } catch(e) {}
+  const appDomain = S.apps.find(a => a.id === 'portainer')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-brand-docker" style="font-size:10px;margin-right:4px"></i>PORTAINER</span>
+        ${openBtn}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--blue)">${endpoints.length}</div>
+          <div style="font-size:8px;color:var(--text3)">ENDPOINTS</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--ok)">${totalRunning}</div>
+          <div style="font-size:8px;color:var(--text3)">EN COURS</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:${totalStopped > 0 ? 'var(--err)' : 'var(--text3)'}">${totalStopped}</div>
+          <div style="font-size:8px;color:var(--text3)">ARRÊTÉS</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashScrutinyWidget() {
+  const w = document.getElementById('dash-scrutiny-widget');
+  if (!w) return;
+  let devices = [];
+  try {
+    const r = await fetch('/ui/proxy/scrutiny/api/summary');
+    if (r.ok) {
+      const d = await r.json();
+      devices = Object.values(d?.data?.Devices || {});
+    }
+  } catch(e) {}
+  const failed = devices.filter(dev => dev.device?.smart_status === 'failed').length;
+  const passed = devices.filter(dev => dev.device?.smart_status === 'passed').length;
+  const unknown = devices.length - failed - passed;
+  const appDomain = S.apps.find(a => a.id === 'scrutiny')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-device-desktop-analytics" style="font-size:10px;margin-right:4px"></i>SCRUTINY — ${devices.length} DISQUE${devices.length !== 1 ? 'S' : ''}</span>
+        ${openBtn}
+      </div>
+      ${devices.length === 0 ? `<div style="color:var(--text3);font-size:9px">Aucun disque scanné</div>` : `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--ok)">${passed}</div>
+          <div style="font-size:8px;color:var(--text3)">OK</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--err)">${failed}</div>
+          <div style="font-size:8px;color:var(--text3)">ÉCHEC</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--text3)">${unknown}</div>
+          <div style="font-size:8px;color:var(--text3)">INCONNU</div>
+        </div>
+      </div>`}
+    </div>`;
+}
+
+async function loadDashJellyseerrWidget() {
+  const w = document.getElementById('dash-jellyseerr-widget');
+  if (!w) return;
+  let pending = 0, approved = 0, available = 0, version = '';
+  try {
+    const [rStatus, rCount] = await Promise.all([
+      fetch('/ui/proxy/jellyseerr/api/v1/status'),
+      fetch('/ui/proxy/jellyseerr/api/v1/request/count')
+    ]);
+    if (rStatus.ok) { const d = await rStatus.json(); version = d.version || ''; }
+    if (rCount.ok) { const d = await rCount.json(); pending = d.pending || 0; approved = d.approved || 0; available = d.available || 0; }
+    else if (rCount.status === 401 || rCount.status === 403) {
+      w.innerHTML = `<div style="color:var(--text3);font-size:9px;padding:4px 0">API key non configurée dans Jellyseerr</div>`;
+      return;
+    }
+  } catch(e) {}
+  const appDomain = S.apps.find(a => a.id === 'jellyseerr')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-movie" style="font-size:10px;margin-right:4px"></i>JELLYSEERR${version ? ' v'+version : ''}</span>
+        ${openBtn}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:${pending > 0 ? 'var(--warn)' : 'var(--text3)'}">${pending}</div>
+          <div style="font-size:8px;color:var(--text3)">EN ATTENTE</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--blue)">${approved}</div>
+          <div style="font-size:8px;color:var(--text3)">APPROUVÉES</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--ok)">${available}</div>
+          <div style="font-size:8px;color:var(--text3)">DISPONIBLES</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashN8nWidget() {
+  const w = document.getElementById('dash-n8n-widget');
+  if (!w) return;
+  let workflows = [], active = 0;
+  try {
+    const r = await fetch('/ui/proxy/n8n/api/v1/workflows?active=true&limit=250');
+    if (r.ok) {
+      const d = await r.json();
+      workflows = d.data || [];
+      active = workflows.filter(wf => wf.active).length;
+    }
+  } catch(e) {}
+  const health = await fetch('/ui/proxy/n8n/healthz').then(r => r.ok).catch(() => false);
+  const appDomain = S.apps.find(a => a.id === 'n8n')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-arrows-shuffle" style="font-size:10px;margin-right:4px"></i>N8N — AUTOMATION</span>
+        ${openBtn}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--blue)">${workflows.length || '—'}</div>
+          <div style="font-size:8px;color:var(--text3)">WORKFLOWS</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--ok)">${active || '—'}</div>
+          <div style="font-size:8px;color:var(--text3)">ACTIFS</div>
+        </div>
+      </div>
+      <div style="margin-top:6px;font-size:8px;color:${health ? 'var(--ok)' : 'var(--err)'}">
+        <i class="ti ti-circle-filled" style="font-size:6px"></i> ${health ? 'Opérationnel' : 'Hors ligne'}
+      </div>
+    </div>`;
+}
+
+async function loadDashGhostWidget() {
+  const w = document.getElementById('dash-ghost-widget');
+  if (!w) return;
+  let postCount = 0, memberCount = 0, title = '';
+  try {
+    const [rPosts, rSite] = await Promise.all([
+      fetch('/ui/proxy/ghost/ghost/api/admin/posts/?limit=1&fields=id'),
+      fetch('/ui/proxy/ghost/ghost/api/admin/site/')
+    ]);
+    if (rPosts.ok) { const d = await rPosts.json(); postCount = d.meta?.pagination?.total || 0; }
+    if (rSite.ok) { const d = await rSite.json(); title = d.site?.title || ''; }
+  } catch(e) {}
+  const appDomain = S.apps.find(a => a.id === 'ghost')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-ghost" style="font-size:10px;margin-right:4px"></i>GHOST${title ? ' — '+title.substring(0,20) : ''}</span>
+        ${openBtn}
+      </div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:700;color:var(--blue)">${postCount}</div>
+          <div style="font-size:8px;color:var(--text3)">ARTICLES</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashWordpressWidget() {
+  const w = document.getElementById('dash-wordpress-widget');
+  if (!w) return;
+  let postCount = 0, pageCount = 0, commentCount = 0;
+  try {
+    const [rPosts, rPages, rComments] = await Promise.all([
+      fetch('/ui/proxy/wordpress/wp-json/wp/v2/posts?per_page=1&status=publish'),
+      fetch('/ui/proxy/wordpress/wp-json/wp/v2/pages?per_page=1'),
+      fetch('/ui/proxy/wordpress/wp-json/wp/v2/comments?per_page=1&status=approve')
+    ]);
+    if (rPosts.ok) postCount = parseInt(rPosts.headers.get('X-WP-Total') || '0', 10);
+    if (rPages.ok) pageCount = parseInt(rPages.headers.get('X-WP-Total') || '0', 10);
+    if (rComments.ok) commentCount = parseInt(rComments.headers.get('X-WP-Total') || '0', 10);
+  } catch(e) {}
+  const appDomain = S.apps.find(a => a.id === 'wordpress')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-brand-wordpress" style="font-size:10px;margin-right:4px"></i>WORDPRESS</span>
+        ${openBtn}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--blue)">${postCount}</div>
+          <div style="font-size:8px;color:var(--text3)">ARTICLES</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--text2)">${pageCount}</div>
+          <div style="font-size:8px;color:var(--text3)">PAGES</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--text2)">${commentCount}</div>
+          <div style="font-size:8px;color:var(--text3)">COMMENTAIRES</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashMealieWidget() {
+  const w = document.getElementById('dash-mealie-widget');
+  if (!w) return;
+  let version = '', recipeCount = 0, userCount = 0;
+  try {
+    const rAbout = await fetch('/ui/proxy/mealie/api/app/about');
+    if (rAbout.ok) { const d = await rAbout.json(); version = d.version || ''; }
+    const rStats = await fetch('/ui/proxy/mealie/api/recipes/summary/untagged?page=1&perPage=1');
+    if (rStats.ok) {
+      const rAll = await fetch('/ui/proxy/mealie/api/recipes?page=1&perPage=1');
+      if (rAll.ok) { const d = await rAll.json(); recipeCount = d.total || 0; }
+    }
+  } catch(e) {}
+  const appDomain = S.apps.find(a => a.id === 'mealie')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-salad" style="font-size:10px;margin-right:4px"></i>MEALIE${version ? ' v'+version : ''}</span>
+        ${openBtn}
+      </div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:700;color:var(--blue)">${recipeCount || '—'}</div>
+          <div style="font-size:8px;color:var(--text3)">RECETTES</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashSyncthingWidget() {
+  const w = document.getElementById('dash-syncthing-widget');
+  if (!w) return;
+  let folders = [], connected = 0;
+  try {
+    const [rFolders, rConnections] = await Promise.all([
+      fetch('/ui/proxy/syncthing/rest/config/folders'),
+      fetch('/ui/proxy/syncthing/rest/system/connections')
+    ]);
+    if (rFolders.ok) folders = await rFolders.json();
+    if (rConnections.ok) {
+      const d = await rConnections.json();
+      connected = Object.values(d.connections || {}).filter(c => c.connected).length;
+    }
+  } catch(e) {}
+  const appDomain = S.apps.find(a => a.id === 'syncthing')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-refresh" style="font-size:10px;margin-right:4px"></i>SYNCTHING</span>
+        ${openBtn}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--blue)">${folders.length || '—'}</div>
+          <div style="font-size:8px;color:var(--text3)">DOSSIERS</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:${connected > 0 ? 'var(--ok)' : 'var(--text3)'}">${connected}</div>
+          <div style="font-size:8px;color:var(--text3)">APPAREILS CONNECTÉS</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashGlpiWidget() {
+  const w = document.getElementById('dash-glpi-widget');
+  if (!w) return;
+  let newTickets = 0, inProgress = 0, pendingCount = 0;
+  try {
+    const rTickets = await fetch('/ui/proxy/glpi/apirest.php/Ticket?searchText[status]=1,2,3&range=0-1');
+    if (rTickets.ok) {
+      const d = await rTickets.json();
+      if (Array.isArray(d)) {
+        newTickets = d.filter(t => t.status === 1).length;
+        inProgress = d.filter(t => t.status === 2).length;
+        pendingCount = d.filter(t => t.status === 3).length;
+      }
+    }
+  } catch(e) {}
+  const appDomain = S.apps.find(a => a.id === 'glpi')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  w.innerHTML = `
+    <div class="card" style="padding:10px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-ticket" style="font-size:10px;margin-right:4px"></i>GLPI — TICKETS</span>
+        ${openBtn}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--warn)">${newTickets}</div>
+          <div style="font-size:8px;color:var(--text3)">NOUVEAUX</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--blue)">${inProgress}</div>
+          <div style="font-size:8px;color:var(--text3)">EN COURS</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:18px;font-weight:700;color:var(--text3)">${pendingCount}</div>
+          <div style="font-size:8px;color:var(--text3)">EN ATTENTE</div>
+        </div>
+      </div>
+    </div>`;
+}
+
 async function loadDashContainersWidget() {
   const w = document.getElementById('dash-containers-widget');
   if (!w) return;
@@ -3680,6 +4221,314 @@ async function loadDashArrWidget() {
       <div style="margin-left:auto;display:flex;gap:4px">${arrLinks}</div>
     </div>
     ${rows}`;
+}
+
+async function loadDashAuthentikWidget() {
+  const w = document.getElementById('dash-authentik-widget');
+  if (!w) return;
+
+  let users = null, apps = null, providers = null;
+  try {
+    const [ur, ar, pr] = await Promise.all([
+      fetch('/ui/proxy/authentik/api/v3/core/users/?page_size=1&type=internal'),
+      fetch('/ui/proxy/authentik/api/v3/core/applications/?page_size=1'),
+      fetch('/ui/proxy/authentik/api/v3/providers/all/?page_size=1'),
+    ]);
+    if (ur.ok) { const d = await ur.json(); users = d.pagination?.count ?? d.count ?? null; }
+    if (ar.ok) { const d = await ar.json(); apps = d.pagination?.count ?? d.count ?? null; }
+    if (pr.ok) { const d = await pr.json(); providers = d.pagination?.count ?? d.count ?? null; }
+  } catch(e) {}
+
+  if (users === null && apps === null) { w.innerHTML = ''; return; }
+
+  const appDomain = S.apps.find(a => a.id === 'authentik')?.domain;
+  const statItems = [
+    { label: 'UTILISATEURS', val: users ?? '—', color: 'var(--vio-b)' },
+    { label: 'APPLICATIONS', val: apps ?? '—', color: 'var(--blue)' },
+    { label: 'PROVIDERS',    val: providers ?? '—', color: 'var(--accent)' },
+  ];
+
+  w.innerHTML = `
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
+        ${statItems.map(it => `
+          <div>
+            <div style="font-size:8px;color:var(--text3)">${it.label}</div>
+            <div style="font-size:18px;font-weight:700;color:${it.color}">${it.val}</div>
+          </div>`).join('')}
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <button class="btn-sm" onclick="goSection('panel-authentik-users')" style="font-size:8px">
+          <i class="ti ti-users" style="font-size:9px"></i> ANNUAIRE
+        </button>
+        ${appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none">
+          <i class="ti ti-external-link" style="font-size:9px"></i> OUVRIR
+        </a>` : ''}
+      </div>
+    </div>`;
+}
+
+async function loadDashNextcloudWidget() {
+  const w = document.getElementById('dash-nextcloud-widget');
+  if (!w) return;
+
+  let userCount = null, quota = null, version = null;
+  try {
+    const [ur, cr] = await Promise.all([
+      fetch('/ui/proxy/nextcloud/ocs/v1.php/cloud/users?limit=1&format=json', {
+        headers: { 'OCS-APIRequest': 'true' },
+      }),
+      fetch('/ui/proxy/nextcloud/ocs/v1.php/cloud/capabilities?format=json', {
+        headers: { 'OCS-APIRequest': 'true' },
+      }),
+    ]);
+    if (ur.ok) {
+      const d = await ur.json();
+      userCount = d?.ocs?.data?.users?.length ?? null;
+      // NC returns meta.totalitems or we count the array
+    }
+    if (cr.ok) {
+      const d = await cr.json();
+      version = d?.ocs?.data?.version?.string ?? null;
+    }
+  } catch(e) {}
+
+  // Try admin usercount via different endpoint
+  if (userCount === null) {
+    try {
+      const r = await fetch('/ui/proxy/nextcloud/ocs/v2.php/cloud/users?format=json', {
+        headers: { 'OCS-APIRequest': 'true' },
+      });
+      if (r.ok) {
+        const d = await r.json();
+        const users = d?.ocs?.data?.users;
+        if (Array.isArray(users)) userCount = users.length;
+      }
+    } catch(e) {}
+  }
+
+  const appDomain = S.apps.find(a => a.id === 'nextcloud')?.domain;
+  const statItems = [
+    { label: 'UTILISATEURS', val: userCount ?? '—', color: 'var(--blue)' },
+    { label: 'VERSION',      val: version ?? '—',   color: 'var(--text2)' },
+  ];
+
+  w.innerHTML = `
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:8px">
+        ${statItems.map(it => `
+          <div>
+            <div style="font-size:8px;color:var(--text3)">${it.label}</div>
+            <div style="font-size:16px;font-weight:700;color:${it.color}">${escapeHtml(String(it.val))}</div>
+          </div>`).join('')}
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <button class="btn-sm" onclick="goSection('nextcloud')" style="font-size:8px">
+          <i class="ti ti-layout-sidebar-right" style="font-size:9px"></i> PANEL
+        </button>
+        ${appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none">
+          <i class="ti ti-external-link" style="font-size:9px"></i> OUVRIR
+        </a>` : ''}
+      </div>
+    </div>`;
+}
+
+async function loadDashJellyfinWidget() {
+  const w = document.getElementById('dash-jellyfin-widget');
+  if (!w) return;
+
+  let movies = null, series = null, episodes = null, users = null;
+  try {
+    const [mr, sr, ur] = await Promise.all([
+      fetch('/ui/proxy/jellyfin/Items/Counts'),
+      fetch('/ui/proxy/jellyfin/Users'),
+    ]);
+    if (mr.ok) {
+      const d = await mr.json();
+      movies = d.MovieCount ?? null;
+      series = d.SeriesCount ?? null;
+      episodes = d.EpisodeCount ?? null;
+    }
+    if (sr.ok) {
+      const d = await sr.json();
+      users = Array.isArray(d) ? d.length : null;
+    }
+  } catch(e) {}
+
+  if (movies === null && series === null) { w.innerHTML = ''; return; }
+  const appDomain = S.apps.find(a => a.id === 'jellyfin')?.domain;
+  const stats = [
+    { label: 'FILMS',    val: movies ?? '—',   color: 'var(--blue)' },
+    { label: 'SÉRIES',   val: series ?? '—',   color: 'var(--vio-b)' },
+    { label: 'ÉPISODES', val: episodes ?? '—', color: 'var(--accent)' },
+    { label: 'USERS',    val: users ?? '—',    color: 'var(--text2)' },
+  ];
+  w.innerHTML = `
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">
+        ${stats.map(it => `<div>
+          <div style="font-size:8px;color:var(--text3)">${it.label}</div>
+          <div style="font-size:16px;font-weight:700;color:${it.color}">${it.val}</div>
+        </div>`).join('')}
+      </div>
+      <div style="display:flex;gap:4px">
+        <button class="btn-sm" onclick="goSection('jellyfin')" style="font-size:8px">
+          <i class="ti ti-layout-sidebar-right" style="font-size:9px"></i> PANEL
+        </button>
+        ${appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none"><i class="ti ti-external-link" style="font-size:9px"></i> OUVRIR</a>` : ''}
+      </div>
+    </div>`;
+}
+
+async function loadDashImmichWidget() {
+  const w = document.getElementById('dash-immich-widget');
+  if (!w) return;
+
+  let stats = null;
+  try {
+    const r = await fetch('/ui/proxy/immich/api/server/statistics');
+    if (r.ok) stats = await r.json();
+  } catch(e) {}
+  if (!stats) { w.innerHTML = ''; return; }
+
+  const photos = stats.photos ?? '—';
+  const videos = stats.videos ?? '—';
+  const usage  = stats.usage ? (stats.usage / 1073741824).toFixed(1) + ' Go' : '—';
+  const appDomain = S.apps.find(a => a.id === 'immich')?.domain;
+
+  w.innerHTML = `
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
+        <div><div style="font-size:8px;color:var(--text3)">PHOTOS</div><div style="font-size:18px;font-weight:700;color:var(--blue)">${photos.toLocaleString()}</div></div>
+        <div><div style="font-size:8px;color:var(--text3)">VIDÉOS</div><div style="font-size:18px;font-weight:700;color:var(--vio-b)">${videos.toLocaleString()}</div></div>
+        <div><div style="font-size:8px;color:var(--text3)">STOCKAGE</div><div style="font-size:14px;font-weight:700;color:var(--text2)">${usage}</div></div>
+      </div>
+      <div style="display:flex;gap:4px">
+        ${appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none"><i class="ti ti-external-link" style="font-size:9px"></i> OUVRIR</a>` : ''}
+      </div>
+    </div>`;
+}
+
+async function loadDashPiholeWidget() {
+  const w = document.getElementById('dash-pihole-widget');
+  if (!w) return;
+
+  let data = null;
+  try {
+    const r = await fetch('/ui/proxy/pihole/api.php?summaryRaw&auth=');
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+  if (!data) { w.innerHTML = ''; return; }
+
+  const queries = data.dns_queries_today ?? '—';
+  const blocked = data.ads_blocked_today ?? '—';
+  const pct = data.ads_percentage_today ? data.ads_percentage_today.toFixed(1)+'%' : '—';
+  const domains = data.domains_being_blocked ?? '—';
+  const appDomain = S.apps.find(a => a.id === 'pihole')?.domain;
+
+  w.innerHTML = `
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">
+        <div><div style="font-size:8px;color:var(--text3)">REQUÊTES</div><div style="font-size:14px;font-weight:700;color:var(--blue)">${queries.toLocaleString()}</div></div>
+        <div><div style="font-size:8px;color:var(--text3)">BLOQUÉES</div><div style="font-size:14px;font-weight:700;color:var(--red-b)">${blocked.toLocaleString()}</div></div>
+        <div><div style="font-size:8px;color:var(--text3)">% BLOCKÉ</div><div style="font-size:14px;font-weight:700;color:var(--warn)">${pct}</div></div>
+        <div><div style="font-size:8px;color:var(--text3)">LISTES</div><div style="font-size:14px;font-weight:700;color:var(--text2)">${domains.toLocaleString()}</div></div>
+      </div>
+      ${appDomain ? `<a href="https://${appDomain}/admin" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none"><i class="ti ti-external-link" style="font-size:9px"></i> ADMIN</a>` : ''}
+    </div>`;
+}
+
+async function loadDashPaperlessWidget() {
+  const w = document.getElementById('dash-paperless-widget');
+  if (!w) return;
+
+  let docs = null, tags = null, correspondents = null;
+  try {
+    const [dr, tr, cr] = await Promise.all([
+      fetch('/ui/proxy/paperless-ngx/api/documents/?page=1&page_size=1'),
+      fetch('/ui/proxy/paperless-ngx/api/tags/?page=1&page_size=1'),
+      fetch('/ui/proxy/paperless-ngx/api/correspondents/?page=1&page_size=1'),
+    ]);
+    if (dr.ok) { const d = await dr.json(); docs = d.count ?? null; }
+    if (tr.ok) { const d = await tr.json(); tags = d.count ?? null; }
+    if (cr.ok) { const d = await cr.json(); correspondents = d.count ?? null; }
+  } catch(e) {}
+
+  if (docs === null) { w.innerHTML = ''; return; }
+  const appDomain = S.apps.find(a => a.id === 'paperless-ngx')?.domain;
+
+  w.innerHTML = `
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
+        <div><div style="font-size:8px;color:var(--text3)">DOCUMENTS</div><div style="font-size:18px;font-weight:700;color:var(--blue)">${docs}</div></div>
+        <div><div style="font-size:8px;color:var(--text3)">TAGS</div><div style="font-size:18px;font-weight:700;color:var(--vio-b)">${tags ?? '—'}</div></div>
+        <div><div style="font-size:8px;color:var(--text3)">CORRESPONDANTS</div><div style="font-size:14px;font-weight:700;color:var(--text2)">${correspondents ?? '—'}</div></div>
+      </div>
+      <div style="display:flex;gap:4px">
+        ${appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none"><i class="ti ti-external-link" style="font-size:9px"></i> OUVRIR</a>` : ''}
+      </div>
+    </div>`;
+}
+
+async function loadDashNtfyWidget() {
+  const w = document.getElementById('dash-ntfy-widget');
+  if (!w) return;
+
+  let topics = null, msgs = null;
+  try {
+    const r = await fetch('/ui/proxy/ntfy/v1/stats');
+    if (r.ok) {
+      const d = await r.json();
+      topics = d.total_topics ?? d.topicsTotal ?? null;
+      msgs   = d.total_messages ?? d.messagesPublished ?? null;
+    }
+  } catch(e) {}
+  if (topics === null && msgs === null) { w.innerHTML = ''; return; }
+  const appDomain = S.apps.find(a => a.id === 'ntfy')?.domain;
+
+  w.innerHTML = `
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div><div style="font-size:8px;color:var(--text3)">TOPICS</div><div style="font-size:18px;font-weight:700;color:var(--vio-b)">${topics ?? '—'}</div></div>
+        <div><div style="font-size:8px;color:var(--text3)">MESSAGES</div><div style="font-size:18px;font-weight:700;color:var(--blue)">${msgs?.toLocaleString() ?? '—'}</div></div>
+      </div>
+      ${appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none"><i class="ti ti-external-link" style="font-size:9px"></i> OUVRIR</a>` : ''}
+    </div>`;
+}
+
+async function loadDashAzuracastWidget() {
+  const w = document.getElementById('dash-azuracast-widget');
+  if (!w) return;
+
+  let stations = null;
+  try {
+    const r = await fetch('/ui/proxy/azuracast/api/stations');
+    if (r.ok) stations = await r.json();
+  } catch(e) {}
+  if (!stations) { w.innerHTML = ''; return; }
+
+  const appDomain = S.apps.find(a => a.id === 'azuracast')?.domain;
+  const stationRows = (Array.isArray(stations) ? stations : []).slice(0, 3).map(s => {
+    const isLive = s.is_online !== false;
+    const listeners = s.listeners?.current ?? s.listener_count ?? 0;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
+      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isLive ? 'var(--green-b)' : 'var(--text3)'};flex-shrink:0"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:9px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.name || s.short_name || '—')}</div>
+        <div style="font-size:8px;color:var(--text3)">${listeners} auditeur(s)</div>
+      </div>
+      ${s.public_player_url ? `<a href="${s.public_player_url}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none"><i class="ti ti-player-play" style="font-size:9px"></i></a>` : ''}
+    </div>`;
+  }).join('');
+
+  w.innerHTML = `
+    <div class="settings-card" style="padding:10px 12px">
+      <div style="font-size:8px;color:var(--text3);margin-bottom:6px">${stations.length} STATION(S)</div>
+      ${stationRows || '<div style="font-size:9px;color:var(--text3)">Aucune station configurée</div>'}
+      <div style="margin-top:8px;display:flex;gap:4px">
+        ${appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="font-size:8px;text-decoration:none"><i class="ti ti-external-link" style="font-size:9px"></i> ADMIN</a>` : ''}
+      </div>
+    </div>`;
 }
 
 async function loadDashJournalErrorsWidget() {
@@ -8178,6 +9027,7 @@ function refreshSection() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   loadSavedTheme();
+  loadSavedSidebar();
   const ok = await checkAuth();
   if (ok) { showApp(); }
   else    { showLogin(); }

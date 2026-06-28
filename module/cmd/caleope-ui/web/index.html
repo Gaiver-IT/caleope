@@ -70,7 +70,7 @@
 <div id="app">
 
   <!-- SIDEBAR -->
-  <nav class="sidebar" role="navigation" aria-label="Navigation principale">
+  <nav class="sidebar" role="navigation" aria-label="Navigation principale" id="main-sidebar">
     <div class="sb-logo" style="cursor:pointer" onclick="goSection('dashboard')" title="Tableau de bord">
       <div class="logo-mark logo-img-wrap" style="width:28px;height:28px">
         <img src="/ui/logo" class="logo-img" alt="Caleope" id="logo-img-$" onerror="this.style.opacity=0">
@@ -200,6 +200,9 @@
         <i class="ti ti-chevron-right" style="font-size:11px;color:var(--text3);margin-left:auto" aria-hidden="true"></i>
       </div>
     </div>
+    <button class="sb-collapse-btn" onclick="toggleSidebar()" title="Réduire/Agrandir la barre latérale">
+      <i class="ti ti-chevron-left"></i>
+    </button>
   </nav>
 
   <!-- MAIN -->
