@@ -157,12 +157,6 @@ func (i *Installer) Install(opts InstallOptions) error {
 	if len(manifest.Ports) > 0 {
 		fmt.Printf("         ✓ Port %d → container:%d\n", hostPort, manifest.Ports[0].Container)
 	}
-	// Mettre à jour les ports dans le manifest pour le compose
-	for j := range manifest.Ports {
-		if manifest.Ports[j].Dynamic {
-			manifest.Ports[j].Host = hostPort
-		}
-	}
 
 	// ── Étape 5 : Création dossiers ──
 	fmt.Println("  [5/12] Création des répertoires...")
@@ -327,14 +321,16 @@ func (i *Installer) checkSecurity(manifest *types.AppManifest, trust types.Trust
 }
 
 // allocatePorts alloue les ports dynamiques nécessaires à l'application.
+// Stocke directement le port hôte dans manifest.Ports[j].Host pour chaque port dynamique.
 func (i *Installer) allocatePorts(manifest *types.AppManifest) (int, error) {
 	var firstPort int
-	for _, port := range manifest.Ports {
-		if port.Dynamic {
-			allocated, err := i.rt.AllocatePort(manifest.ID+"-"+port.Name, 8000, 9999)
+	for j := range manifest.Ports {
+		if manifest.Ports[j].Dynamic {
+			allocated, err := i.rt.AllocatePort(manifest.ID+"-"+manifest.Ports[j].Name, 8000, 9999)
 			if err != nil {
 				return 0, err
 			}
+			manifest.Ports[j].Host = allocated
 			if firstPort == 0 {
 				firstPort = allocated
 			}
