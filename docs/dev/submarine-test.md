@@ -106,7 +106,7 @@ caleope store
 # → liste des apps du bundle (depuis store.tar.gz)
 
 # Vérifier que les images sont bien présentes
-docker images | grep -E "traefik|portainer"
+docker images | grep "traefik"
 # → les images core doivent être listées
 
 # Tester l'interface web
@@ -153,8 +153,8 @@ sudo systemctl restart caleoped caleope-ui
 
 ```bash
 # Services systemd actifs
-systemctl is-active caleoped caleope-ui docker traefik portainer
-# → active (x5)
+systemctl is-active caleoped caleope-ui docker traefik
+# → active (x4)
 
 # Port UI accessible
 ss -tlnp | grep 8766
@@ -219,7 +219,6 @@ caleope-bundle-2026-06-22/
 ├── store.tar.gz          ← catalogue apps (obligatoire)
 ├── images/
 │   ├── traefik_v3.0.tar
-│   ├── portainer_ce.tar
 │   └── *.tar             ← une image par app installée
 ├── caleope-completion.bash  ← autocomplétion (optionnel)
 └── pack-info.json        ← métadonnées (recommandé)
@@ -255,7 +254,7 @@ Test effectué sur le serveur `plateforme-caleope` (172.16.51.15, Debian, 60G di
 [x] pack-info.json présent et lisible
 [x] Binaires présents et exécutables
 [x] store.tar.gz non vide (> 1 Mo)
-[x] images/*.tar présents pour les apps core (traefik, portainer)
+[x] images/*.tar présents pour les apps core (traefik)
 [ ] Installation sur VM cible sans accès internet
 [ ] Message "apt-get update ignoré" affiché
 [ ] Message "images chargées depuis le bundle" affiché

@@ -60,7 +60,6 @@ caleope-bundle-2026-06-22/
 ├── store.tar.gz              # catalogue complet des apps (~100 Ko)
 ├── images/
 │   ├── traefik_v2.11.tar
-│   ├── portainer_portainer-ce_latest.tar
 │   ├── jellyfin_jellyfin_latest.tar
 │   └── ...                   # une image par app installée
 ├── caleope-completion.bash   # autocomplétion bash (si présent)

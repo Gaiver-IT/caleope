@@ -472,24 +472,29 @@ func cmdConfigureArrStack() string {
 
 func cmdRemove(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope remove <app> [--keep-data]")
+		die("Usage: caleope remove <app> [--keep-data] [-y]")
 	}
 
 	apiArgs := map[string]string{"app": args[0]}
+	skipConfirm := false
 
 	for _, arg := range args[1:] {
-		if arg == "--keep-data" {
+		switch arg {
+		case "--keep-data":
 			apiArgs["keep_data"] = "true"
+		case "-y", "--yes":
+			skipConfirm = true
 		}
 	}
 
-	// Demander confirmation avant de supprimer
-	fmt.Printf("⚠️  Supprimer '%s' ? [o/N] ", args[0])
-	var resp string
-	fmt.Scanln(&resp)
-	if strings.ToLower(resp) != "o" {
-		fmt.Println("Annulé.")
-		return
+	if !skipConfirm {
+		fmt.Printf("⚠️  Supprimer '%s' ? [o/N] ", args[0])
+		var resp string
+		fmt.Scanln(&resp)
+		if strings.ToLower(resp) != "o" {
+			fmt.Println("Annulé.")
+			return
+		}
 	}
 
 	apiResp := callDaemon("remove", apiArgs)

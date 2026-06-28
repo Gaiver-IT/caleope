@@ -44,20 +44,60 @@
     <div class="divider">AUTHENTIFICATION</div>
 
     <form id="login-form">
-      <div class="fields">
-        <div class="field full">
-          <div class="field-label">MOT DE PASSE UI</div>
-          <input class="field-input" id="login-pw" type="password"
-            placeholder="Mot de passe de l'interface" autocomplete="current-password" required>
+      <!-- Étape 1 : mot de passe -->
+      <div id="login-step-pw">
+        <div class="fields">
+          <div class="field full">
+            <div class="field-label">MOT DE PASSE UI</div>
+            <input class="field-input" id="login-pw" type="password"
+              placeholder="Mot de passe de l'interface" autocomplete="current-password" required>
+          </div>
+        </div>
+        <div class="login-error" id="login-error"></div>
+        <div class="login-actions">
+          <button type="submit" class="btn btn-vio" id="login-btn">
+            <i class="ti ti-arrow-right"></i>CONNECTER
+          </button>
         </div>
       </div>
-      <div class="login-error" id="login-error"></div>
-      <div class="login-actions">
-        <button type="submit" class="btn btn-vio" id="login-btn">
-          <i class="ti ti-arrow-right"></i>CONNECTER
-        </button>
+      <!-- Étape 2 : code TOTP (affiché si 2FA activé) -->
+      <div id="login-step-totp" style="display:none">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px">
+          <i class="ti ti-lock" style="font-size:14px;color:var(--accent)"></i>
+          <div>
+            <div style="font-size:9px;font-weight:700;color:var(--text1);letter-spacing:.5px">DOUBLE AUTHENTIFICATION</div>
+            <div style="font-size:8px;color:var(--text3)">Entrez le code de votre application TOTP</div>
+          </div>
+        </div>
+        <div class="fields">
+          <div class="field full">
+            <div class="field-label">CODE TOTP (6 chiffres)</div>
+            <input class="field-input" id="login-totp" type="text" inputmode="numeric"
+              pattern="[0-9]{6}" maxlength="6"
+              placeholder="123456" autocomplete="one-time-code">
+          </div>
+        </div>
+        <div class="login-error" id="login-totp-error"></div>
+        <div class="login-actions" style="gap:6px">
+          <button type="button" class="btn" onclick="resetLoginStep()">RETOUR</button>
+          <button type="button" class="btn btn-vio" id="login-totp-btn" onclick="submitTOTP()">
+            <i class="ti ti-shield-check"></i>VÉRIFIER
+          </button>
+        </div>
       </div>
     </form>
+
+    <div id="sso-section" style="display:none;margin-top:10px">
+      <div style="display:flex;align-items:center;gap:10px;margin:12px 0 10px">
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+        <span style="font-size:8px;color:var(--text3);letter-spacing:1px">OU</span>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>
+      <button type="button" class="btn" onclick="loginWithSSO()" style="width:100%;justify-content:center;gap:8px">
+        <i class="ti ti-login-2"></i>
+        <span id="sso-btn-label">Connexion SSO</span>
+      </button>
+    </div>
 
     <div class="status-bar">
       <i class="ti ti-shield-check" aria-hidden="true"></i>
@@ -70,7 +110,7 @@
 <div id="app">
 
   <!-- SIDEBAR -->
-  <nav class="sidebar" role="navigation" aria-label="Navigation principale">
+  <nav class="sidebar" role="navigation" aria-label="Navigation principale" id="main-sidebar">
     <div class="sb-logo" style="cursor:pointer" onclick="goSection('dashboard')" title="Tableau de bord">
       <div class="logo-mark logo-img-wrap" style="width:28px;height:28px">
         <img src="/ui/logo" class="logo-img" alt="Caleope" id="logo-img-$" onerror="this.style.opacity=0">
@@ -81,60 +121,113 @@
       </div>
     </div>
 
+    <!-- Sidebar search -->
+    <div class="sb-search">
+      <i class="ti ti-search" style="font-size:10px;color:var(--text3)"></i>
+      <input id="sb-search-input" type="text" placeholder="Rechercher..." autocomplete="off"
+        oninput="filterSidebar(this.value)" onkeydown="if(event.key==='Escape'){this.value='';filterSidebar('')}">
+    </div>
+
     <div class="sb-nav">
       <button class="nav-btn" data-section="dashboard" onclick="goSection('dashboard')">
         <i class="ti ti-layout-dashboard" aria-hidden="true"></i>TABLEAU DE BORD
       </button>
-      <div class="sb-group">// APPS</div>
-      <button class="nav-btn" data-section="apps" onclick="goSection('apps')">
-        <i class="ti ti-layout-grid" aria-hidden="true"></i>APPLICATIONS
-      </button>
-      <button class="nav-btn" data-section="logs" onclick="goSection('logs')">
-        <i class="ti ti-terminal-2" aria-hidden="true"></i>LOGS
-      </button>
-      <button class="nav-btn" data-section="backups" onclick="goSection('backups')">
-        <i class="ti ti-archive" aria-hidden="true"></i>SAUVEGARDES
-      </button>
 
-      <!-- Sections injectées dynamiquement selon les apps installées -->
-      <div id="sb-integrations"></div>
+      <!-- Récents -->
+      <div class="sb-section" id="sb-section-recent" style="display:none">
+        <button class="sb-group-toggle" data-gid="g-recent" onclick="toggleSbGroup('g-recent')">
+          <span>// RÉCENTS</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-recent">
+          <div id="sb-recent-list"></div>
+        </div>
+      </div>
 
-      <div class="sb-group">// SERVEUR</div>
-      <button class="nav-btn" data-section="terminal" onclick="goSection('terminal')">
-        <i class="ti ti-terminal-2" aria-hidden="true"></i>TERMINAL
-      </button>
-      <button class="nav-btn" data-section="services" onclick="goSection('services')">
-        <i class="ti ti-list-check" aria-hidden="true"></i>SERVICES
-      </button>
-      <button class="nav-btn" data-section="network" onclick="goSection('network')">
-        <i class="ti ti-wifi" aria-hidden="true"></i>RÉSEAU
-      </button>
-      <button class="nav-btn" data-section="storage" onclick="goSection('storage')">
-        <i class="ti ti-database" aria-hidden="true"></i>STOCKAGE
-      </button>
-      <button class="nav-btn" data-section="journal" onclick="goSection('journal')">
-        <i class="ti ti-file-text" aria-hidden="true"></i>JOURNAL
-      </button>
+      <!-- Liens favoris (apps épinglées) -->
+      <div class="sb-section" id="sb-section-pins" style="display:none">
+        <button class="sb-group-toggle" data-gid="g-pins" onclick="toggleSbGroup('g-pins')">
+          <span>// FAVORIS</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-pins">
+          <div id="sb-pins-list"></div>
+        </div>
+      </div>
 
-      <div class="sb-group">// SYSTÈME</div>
-      <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
-        <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
-      </button>
-      <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
-        <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
-      </button>
-      <button class="nav-btn" data-section="events" onclick="goSection('events')">
-        <i class="ti ti-history" aria-hidden="true"></i>ÉVÉNEMENTS
-      </button>
-      <button class="nav-btn" data-section="audit" onclick="goSection('audit')">
-        <i class="ti ti-clipboard-list" aria-hidden="true"></i>AUDIT
-      </button>
-      <button class="nav-btn" data-section="stats" onclick="goSection('stats')">
-        <i class="ti ti-chart-bar" aria-hidden="true"></i>SYSTÈME
-      </button>
-      <button class="nav-btn" data-section="settings" onclick="goSection('settings')">
-        <i class="ti ti-settings" aria-hidden="true"></i>PARAMÈTRES
-      </button>
+      <div class="sb-section">
+        <button class="sb-group-toggle" data-gid="g-apps" onclick="toggleSbGroup('g-apps')">
+          <span>// APPS</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-apps">
+          <button class="nav-btn" data-section="apps" onclick="goSection('apps')">
+            <i class="ti ti-layout-grid" aria-hidden="true"></i>APPLICATIONS
+          </button>
+          <button class="nav-btn" data-section="logs" onclick="goSection('logs')">
+            <i class="ti ti-terminal-2" aria-hidden="true"></i>LOGS
+          </button>
+          <button class="nav-btn" data-section="backups" onclick="goSection('backups')">
+            <i class="ti ti-archive" aria-hidden="true"></i>SAUVEGARDES
+          </button>
+        </div>
+      </div>
+
+      <!-- Intégrations dynamiques injectées selon apps installées -->
+      <div class="sb-section" id="sb-section-integrations" style="display:none">
+        <button class="sb-group-toggle" data-gid="g-int" onclick="toggleSbGroup('g-int')">
+          <span>// INTÉGRATIONS</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-int"><div id="sb-integrations"></div></div>
+      </div>
+
+      <div class="sb-section">
+        <button class="sb-group-toggle" data-gid="g-server" onclick="toggleSbGroup('g-server')">
+          <span>// SERVEUR</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-server">
+          <button class="nav-btn" data-section="terminal" onclick="goSection('terminal')">
+            <i class="ti ti-terminal-2" aria-hidden="true"></i>TERMINAL
+          </button>
+          <button class="nav-btn" data-section="services" onclick="goSection('services')">
+            <i class="ti ti-list-check" aria-hidden="true"></i>SERVICES
+          </button>
+          <button class="nav-btn" data-section="network" onclick="goSection('network')">
+            <i class="ti ti-wifi" aria-hidden="true"></i>RÉSEAU
+          </button>
+          <button class="nav-btn" data-section="storage" onclick="goSection('storage')">
+            <i class="ti ti-database" aria-hidden="true"></i>STOCKAGE
+          </button>
+          <button class="nav-btn" data-section="journal" onclick="goSection('journal')">
+            <i class="ti ti-file-text" aria-hidden="true"></i>JOURNAL
+          </button>
+        </div>
+      </div>
+
+      <div class="sb-section">
+        <button class="sb-group-toggle" data-gid="g-sys" onclick="toggleSbGroup('g-sys')">
+          <span>// SYSTÈME</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-sys">
+          <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
+            <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
+          </button>
+          <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
+            <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
+          </button>
+          <button class="nav-btn" data-section="events" onclick="goSection('events');clearEventsBadge()">
+            <i class="ti ti-history" aria-hidden="true"></i>ÉVÉNEMENTS
+            <span id="events-badge" style="display:none;margin-left:auto;background:var(--red-b);color:#fff;
+              font-size:7px;font-weight:900;padding:1px 4px;border-radius:8px;min-width:14px;text-align:center"></span>
+          </button>
+          <button class="nav-btn" data-section="audit" onclick="goSection('audit')">
+            <i class="ti ti-clipboard-list" aria-hidden="true"></i>AUDIT
+          </button>
+          <button class="nav-btn" data-section="stats" onclick="goSection('stats')">
+            <i class="ti ti-chart-bar" aria-hidden="true"></i>SYSTÈME
+          </button>
+          <button class="nav-btn" data-section="settings" onclick="goSection('settings')">
+            <i class="ti ti-settings" aria-hidden="true"></i>PARAMÈTRES
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="sb-foot">
@@ -147,6 +240,9 @@
         <i class="ti ti-chevron-right" style="font-size:11px;color:var(--text3);margin-left:auto" aria-hidden="true"></i>
       </div>
     </div>
+    <button class="sb-collapse-btn" onclick="toggleSidebar()" title="Réduire/Agrandir la barre latérale">
+      <i class="ti ti-chevron-left"></i>
+    </button>
   </nav>
 
   <!-- MAIN -->
@@ -156,9 +252,23 @@
         <span id="tb-section" class="tb-section">/01</span>
         <span class="tb-sep">—</span>
         <span id="tb-title" class="tb-title">APPLICATIONS</span>
+        <span id="tb-app-ctrl" style="display:none;margin-left:12px;display:none"></span>
       </div>
       <div class="tb-right">
+        <span id="tb-sysbar" style="display:none;align-items:center;gap:6px;font-size:8px;color:var(--text3);letter-spacing:.5px"></span>
         <span class="sys-clock" id="clock">--:--:--</span>
+        <button class="btn" onclick="openNotifHistory()" title="Historique des notifications" style="position:relative">
+          <i class="ti ti-bell"></i>
+          <span id="notif-history-badge" style="display:none;position:absolute;top:2px;right:2px;
+            background:var(--red-b);color:#fff;font-size:7px;font-weight:900;padding:0 3px;
+            border-radius:8px;min-width:12px;text-align:center;line-height:14px"></span>
+        </button>
+        <button class="btn" onclick="openQuickMemo()" title="Note rapide (mémo)">
+          <i class="ti ti-pencil"></i>
+        </button>
+        <button class="btn" onclick="openHelp()" title="Aide et raccourcis clavier (?)">
+          <i class="ti ti-help"></i>
+        </button>
         <button class="btn" id="refresh-btn" onclick="refreshSection()" title="Actualiser la section courante">
           <i class="ti ti-refresh"></i>
         </button>
@@ -184,9 +294,28 @@
             <span id="log-live-badge" class="badge badge-ok" style="display:none;font-size:8px;animation:pulse 1.5s infinite">
               <i class="ti ti-radio" style="font-size:9px"></i>&nbsp;LIVE
             </span>
+            <select id="log-level-filter" class="log-select" onchange="filterLogLevel(this.value)" title="Filtrer par niveau">
+              <option value="">TOUS</option>
+              <option value="error">ERREUR</option>
+              <option value="warn">WARN</option>
+              <option value="info">INFO</option>
+            </select>
+            <button class="btn-sm" onclick="clearLogs()" title="Effacer l'affichage">
+              <i class="ti ti-eraser"></i>EFFACER
+            </button>
             <button class="btn-sm" style="margin-left:auto" onclick="loadLogs()">
               <i class="ti ti-refresh"></i>REFRESH
             </button>
+            <button class="btn-sm" onclick="exportLogs()" title="Télécharger les logs">
+              <i class="ti ti-download"></i>EXPORT
+            </button>
+            <button class="btn-sm" id="log-wrap-btn" onclick="toggleLogWrap()" title="Activer/désactiver le retour à la ligne">
+              <i class="ti ti-text-wrap"></i>WRAP
+            </button>
+            <input id="log-search" type="search" placeholder="Filtrer..." autocomplete="off"
+              oninput="filterLogText(this.value)"
+              style="font-size:9px;padding:3px 7px;background:var(--card);border:1px solid var(--border);
+                     border-radius:4px;color:var(--text1);width:110px;outline:none">
           </div>
           <div class="log-body" id="log-body"></div>
         </div>
@@ -239,8 +368,20 @@
             <select class="log-select" id="journal-unit-select" onchange="loadJournal()">
               <option value="all">— Toutes les unités —</option>
             </select>
+            <div style="display:flex;gap:3px;margin-left:8px" id="journal-pri-filters">
+              <button class="tab-btn active" style="font-size:8px;padding:2px 6px" data-pri="" onclick="setJournalPriFilter(this,'')">TOUT</button>
+              <button class="tab-btn" style="font-size:8px;padding:2px 6px;color:var(--err)" data-pri="err" onclick="setJournalPriFilter(this,'err')">ERR</button>
+              <button class="tab-btn" style="font-size:8px;padding:2px 6px;color:var(--warn)" data-pri="warning" onclick="setJournalPriFilter(this,'warning')">WARN</button>
+              <button class="tab-btn" style="font-size:8px;padding:2px 6px;color:var(--text3)" data-pri="debug" onclick="setJournalPriFilter(this,'debug')">DEBUG</button>
+            </div>
+            <input type="text" id="journal-search" placeholder="Rechercher…" class="param-input"
+              style="margin-left:8px;padding:3px 8px;height:24px;font-size:9px;max-width:160px"
+              oninput="filterJournalLines()" />
             <button class="btn-sm" style="margin-left:auto" onclick="loadJournal()">
               <i class="ti ti-refresh"></i>REFRESH
+            </button>
+            <button class="btn-sm" onclick="exportJournal()" title="Exporter les entrées filtrées">
+              <i class="ti ti-download"></i>
             </button>
           </div>
           <div class="log-body" id="journal-body"></div>
@@ -438,6 +579,153 @@
     <div class="modal-actions">
       <button class="btn" onclick="document.getElementById('disk-mount-modal').classList.remove('open')">ANNULER</button>
       <button class="btn btn-vio" onclick="confirmDiskMount()"><i class="ti ti-plug-connected"></i>MONTER</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── POST-INSTALL NOTES ────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="post-install-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <span id="post-install-title" class="modal-title">Notes d'installation</span>
+      <button class="modal-close" onclick="document.getElementById('post-install-modal').classList.remove('open')" aria-label="Fermer">
+        <i class="ti ti-x"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <pre id="post-install-body" style="font-family:monospace;font-size:10px;color:var(--text2);white-space:pre-wrap;
+        background:var(--bg1);border:1px solid var(--border1);border-radius:4px;padding:10px 12px;
+        max-height:340px;overflow-y:auto;line-height:1.6"></pre>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-vio" onclick="document.getElementById('post-install-modal').classList.remove('open')">
+        <i class="ti ti-check"></i>OK
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── QUICK NAV (Ctrl+K) ──────────────────────────────────────────────────── -->
+<div id="quicknav-overlay" role="dialog" aria-modal="true" aria-label="Navigation rapide"
+  style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;align-items:flex-start;justify-content:center;padding-top:15vh"
+  onclick="if(event.target===this)closeQuickNav()">
+  <div style="width:520px;max-width:95vw;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.6)">
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border)">
+      <i class="ti ti-search" style="color:var(--text3);font-size:14px;flex-shrink:0"></i>
+      <input id="quicknav-input" type="text" placeholder="Aller à…" autocomplete="off" spellcheck="false"
+        style="flex:1;background:none;border:none;outline:none;color:var(--text1);font-size:13px;font-family:inherit"
+        oninput="updateQuickNav(this.value)" onkeydown="quickNavKey(event)">
+      <kbd style="font-size:9px;color:var(--text3);background:var(--bg3);border:1px solid var(--border);padding:2px 6px;border-radius:3px;font-family:inherit">ESC</kbd>
+    </div>
+    <div id="quicknav-list" style="max-height:360px;overflow-y:auto;padding:6px 0"></div>
+  </div>
+</div>
+
+<!-- ── HELP MODAL (?) ───────────────────────────────────────────────────────── -->
+<div id="help-overlay" role="dialog" aria-modal="true" aria-label="Raccourcis clavier"
+  style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;align-items:center;justify-content:center"
+  onclick="if(event.target===this)closeHelp()">
+  <div style="width:480px;max-width:95vw;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.6)">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
+      <span style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:var(--text1)">// RACCOURCIS CLAVIER</span>
+      <button onclick="closeHelp()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;line-height:1"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:14px 16px;display:flex;flex-direction:column;gap:6px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 20px">
+        <div style="font-size:9px;color:var(--text3);padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:2px;grid-column:1/-1;font-weight:700;letter-spacing:1px">NAVIGATION</div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Navigation rapide</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">Ctrl+K</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Aide</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">?</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Actualiser section</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">R</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Fermer / Tableau de bord</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">Esc</kbd></div>
+        <div style="font-size:9px;color:var(--text3);padding:4px 0;border-bottom:1px solid var(--border);margin:4px 0 2px;grid-column:1/-1;font-weight:700;letter-spacing:1px">SECTIONS</div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Tableau de bord</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+D</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Applications</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+A</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Logs</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+L</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Sauvegardes</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+B</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Système</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+S</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Terminal</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+T</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Réseau</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+N</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Journal</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+J</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Événements</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+E</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Secrets</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+K</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Services</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+V</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Stockage</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+X</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Paramètres</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+P</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Audit</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+U</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Emplacements</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+F</kbd></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px"><span style="color:var(--text2)">Tâches</span><kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text1);font-family:inherit;font-size:8px">G+M</kbd></div>
+      </div>
+    </div>
+    <div style="padding:8px 16px;border-top:1px solid var(--border);font-size:8px;color:var(--text3);text-align:center">Appuyez sur <kbd style="background:var(--bg3);border:1px solid var(--border);padding:1px 5px;border-radius:3px;color:var(--text3);font-size:7px">Esc</kbd> ou cliquez en dehors pour fermer</div>
+  </div>
+</div>
+
+<!-- ── CONTAINER INSPECT MODAL ──────────────────────────────────────────────── -->
+<div id="inspect-overlay" role="dialog" aria-modal="true"
+  style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;align-items:center;justify-content:center"
+  onclick="if(event.target===this)closeInspect()">
+  <div style="width:680px;max-width:95vw;max-height:85vh;background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.6);display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0">
+      <span id="inspect-title" style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:var(--text1)">// INSPECT</span>
+      <div style="display:flex;gap:6px">
+        <select id="inspect-tab" onchange="switchInspectTab(this.value)" style="background:var(--bg3);border:1px solid var(--border);color:var(--text2);font-size:9px;padding:3px 6px;border-radius:4px;font-family:inherit">
+          <option value="summary">RÉSUMÉ</option>
+          <option value="env">VARIABLES</option>
+          <option value="mounts">MONTAGES</option>
+          <option value="ports">PORTS</option>
+          <option value="raw">JSON BRUT</option>
+        </select>
+        <button onclick="closeInspect()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;line-height:1"><i class="ti ti-x"></i></button>
+      </div>
+    </div>
+    <div id="inspect-body" style="overflow-y:auto;padding:14px 16px;flex:1;font-size:9px"></div>
+  </div>
+</div>
+
+<!-- ── NOTIFICATION HISTORY ───────────────────────────────────────────────────── -->
+<div id="notif-history-overlay" role="dialog" aria-modal="true"
+  style="display:none;position:fixed;top:48px;right:12px;z-index:9990;
+         align-items:flex-start;justify-content:flex-end"
+  onclick="if(event.target===this)closeNotifHistory()">
+  <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:8px;
+              width:min(340px,90vw);max-height:400px;box-shadow:0 8px 32px #0008;
+              display:flex;flex-direction:column">
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
+      <i class="ti ti-bell" style="color:var(--accent);font-size:13px"></i>
+      <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;flex:1">NOTIFICATIONS</span>
+      <button class="btn-sm" onclick="_notifHistory.length=0;document.getElementById('notif-history-body').innerHTML=''" title="Effacer">
+        <i class="ti ti-trash" style="font-size:9px"></i>
+      </button>
+      <button class="btn-sm" onclick="closeNotifHistory()"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="notif-history-body" style="padding:8px 14px;overflow-y:auto;flex:1;font-size:9px"></div>
+  </div>
+</div>
+
+<!-- ── QUICK MEMO ────────────────────────────────────────────────────────────── -->
+<div id="quickmemo-overlay" role="dialog" aria-modal="true" aria-label="Note rapide"
+  style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9998;
+         align-items:center;justify-content:center"
+  onclick="if(event.target===this)closeQuickMemo()">
+  <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:8px;
+              width:min(460px,94vw);padding:0;box-shadow:0 8px 32px #0008">
+    <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border)">
+      <i class="ti ti-pencil" style="color:var(--accent);font-size:14px"></i>
+      <span style="font-size:10px;font-weight:700;letter-spacing:1.5px;flex:1">NOTE RAPIDE</span>
+      <select id="quickmemo-app" class="log-select" style="font-size:9px;padding:3px 6px;max-width:140px">
+        <option value="">— Aucune app —</option>
+      </select>
+      <button class="btn-sm danger" onclick="closeQuickMemo()"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="padding:12px 16px">
+      <input id="quickmemo-title" class="param-input" placeholder="Titre (optionnel)"
+        style="margin-bottom:8px;width:100%;box-sizing:border-box">
+      <textarea id="quickmemo-body" rows="6" class="param-input"
+        placeholder="Contenu de la note…" style="width:100%;box-sizing:border-box;resize:vertical;font-family:monospace"></textarea>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:6px;padding:0 16px 12px">
+      <button class="btn-sm" onclick="closeQuickMemo()">ANNULER</button>
+      <button class="btn btn-vio" onclick="saveQuickMemo()"><i class="ti ti-check"></i>SAUVEGARDER</button>
     </div>
   </div>
 </div>

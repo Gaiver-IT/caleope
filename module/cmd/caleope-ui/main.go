@@ -14,7 +14,9 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -55,6 +57,64 @@ type vwSessionCache struct {
 }
 
 var vwCache = &vwSessionCache{}
+
+// immichTokenCache : token Immich mis en cache (POST /api/auth/login → Bearer)
+type immichTokenCache struct {
+	mu      sync.Mutex
+	token   string
+	expires time.Time
+}
+
+var immichCache = &immichTokenCache{}
+
+// glpiSessionCache : session GLPI (GET /apirest.php/initSession → Session-Token)
+type glpiSessionCache struct {
+	mu      sync.Mutex
+	token   string
+	expires time.Time
+}
+
+var glpiCache = &glpiSessionCache{}
+
+// navidromeTokenCache : JWT Navidrome mis en cache (POST /auth/login → Bearer)
+type navidromeTokenCache struct {
+	mu      sync.Mutex
+	token   string
+	expires time.Time
+}
+
+var navidromeCache = &navidromeTokenCache{}
+
+// wgEasySessionCache : cookie de session WG-Easy (POST /api/session → cookie)
+type wgEasySessionCache struct {
+	mu      sync.Mutex
+	cookie  string
+	expires time.Time
+}
+
+var wgEasyCache = &wgEasySessionCache{}
+
+// ghostAdminJWT génère un JWT signé HMAC-SHA256 pour l'Admin API Ghost.
+// apiKey format : "keyid:hexsecret" (copié depuis Ghost admin → Intégrations)
+func ghostAdminJWT(apiKey string) (string, error) {
+	parts := strings.SplitN(apiKey, ":", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("GHOST_ADMIN_API_KEY doit être au format 'id:hexsecret'")
+	}
+	kid, hexSecret := parts[0], parts[1]
+	secret, err := hex.DecodeString(hexSecret)
+	if err != nil {
+		return "", fmt.Errorf("secret hex invalide: %w", err)
+	}
+	now := time.Now().Unix()
+	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT","kid":"` + kid + `"}`))
+	pld := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"iat":%d,"exp":%d,"aud":"/admin/"}`, now, now+300)))
+	msg := hdr + "." + pld
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(msg))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return msg + "." + sig, nil
+}
 
 func newSessions() *sessions { return &sessions{data: make(map[string]time.Time)} }
 
@@ -134,10 +194,12 @@ func main() {
 	}
 
 	// Mot de passe UI — dans core/daemon/ui-password, sinon = token daemon
+	uiPasswordPath := filepath.Join(*baseDir, "core", "daemon", "ui-password")
 	uiPassword := daemonToken
-	if pw, err := readFile(filepath.Join(*baseDir, "core", "daemon", "ui-password")); err == nil && pw != "" {
+	if pw, err := readFile(uiPasswordPath); err == nil && pw != "" {
 		uiPassword = pw
 	}
+	var uiPasswordMu sync.RWMutex
 
 	store := newSessions()
 
@@ -326,6 +388,134 @@ func main() {
 		"arr-radarr":  {tokenKey: "ARR_API_RADARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "radarr",  containerPort: 7878},
 		"arr-lidarr":  {tokenKey: "ARR_API_LIDARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "lidarr",  containerPort: 8686},
 		"arr-prowlarr":{tokenKey: "ARR_API_PROWLARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "prowlarr",containerPort: 9696},
+
+		// Grafana — Basic auth (admin user/pass)
+		"grafana": {basicUserKey: "GRAFANA_ADMIN_USER", basicPassKey: "GRAFANA_ADMIN_PASSWORD",
+			authScheme: "Basic", secretsApp: "prometheus-grafana",
+			containerName: "caleope-grafana", containerPort: 3000},
+
+		// Jellyfin — API key (JELLYFIN_API_KEY dans secrets.env)
+		"jellyfin": {tokenKey: "JELLYFIN_API_KEY", authScheme: "JellyfinToken",
+			containerName: "jellyfin", containerPort: 8096},
+
+		// Immich — login flow avec cache (POST /api/auth/login → Bearer token)
+		"immich": {basicUserKey: "IMMICH_ADMIN_EMAIL", basicPassKey: "IMMICH_ADMIN_PASS",
+			authScheme: "ImmichLogin",
+			containerName: "immich-server", containerPort: 2283},
+
+		// WikiJS — Bearer token (généré dans WikiJS admin → Developer Tools)
+		"wikijs": {tokenKey: "WIKIJS_API_TOKEN", authScheme: "Bearer",
+			containerName: "wikijs", containerPort: 3000},
+
+		// Ghost — Admin API JWT (GHOST_ADMIN_API_KEY format: "keyid:hexsecret")
+		"ghost": {tokenKey: "GHOST_ADMIN_API_KEY", authScheme: "GhostAdmin",
+			containerName: "ghost", containerPort: 2368},
+
+		// WordPress — Basic auth (WP_ADMIN_USER / WP_ADMIN_PASS)
+		"wordpress": {basicUserKey: "WP_ADMIN_USER", basicPassKey: "WP_ADMIN_PASS",
+			authScheme: "Basic", containerName: "wordpress", containerPort: 80},
+
+		// GLPI — session token (Basic auth → initSession → Session-Token header)
+		// Nécessite que l'API REST GLPI soit activée et GLPI_ADMIN_USER dans secrets.env
+		"glpi": {basicUserKey: "GLPI_ADMIN_USER", basicPassKey: "GLPI_ADMIN_PASSWORD",
+			authScheme: "GLPISession", containerName: "glpi", containerPort: 80},
+
+		// Pi-hole — auth en query param (PIHOLE_API_TOKEN = SHA256(SHA256(password)))
+		"pihole": {tokenKey: "PIHOLE_API_TOKEN", authScheme: "PiholeQuery",
+			containerName: "pihole", containerPort: 80},
+
+		// AdGuard Home — Basic auth (ADGUARD_USERNAME / ADGUARD_PASSWORD)
+		"adguard": {basicUserKey: "ADGUARD_USERNAME", basicPassKey: "ADGUARD_PASSWORD",
+			authScheme: "Basic", containerName: "adguardhome", containerPort: 3000},
+
+		// Uptime Kuma — pas d'auth sur l'API status-page publique
+		"uptime-kuma": {containerName: "uptime-kuma", containerPort: 3001},
+
+		// Memos — Bearer token (généré après login)
+		"memos": {tokenKey: "MEMOS_API_TOKEN", authScheme: "Bearer",
+			containerName: "memos", containerPort: 5230},
+
+		// Linkding — Bearer token (LINKDING_API_TOKEN)
+		"linkding": {tokenKey: "LINKDING_API_TOKEN", authScheme: "DRFToken",
+			containerName: "linkding", containerPort: 9090},
+
+		// Paperless-NGX — Bearer token (PAPERLESS_API_TOKEN)
+		"paperless-ngx": {tokenKey: "PAPERLESS_API_TOKEN", authScheme: "Bearer",
+			containerName: "paperless-ngx", containerPort: 8000},
+
+		// FreshRSS — Google Reader API (BasicAuth)
+		"freshrss": {basicUserKey: "FRESHRSS_ADMIN_USER", basicPassKey: "FRESHRSS_ADMIN_PASS",
+			authScheme: "Basic", containerName: "freshrss", containerPort: 80},
+
+		// Syncthing — sans auth sur GUI (auth gérée dans l'interface)
+		"syncthing": {containerName: "syncthing", containerPort: 8384},
+
+		// Stirling PDF — sans auth par défaut
+		"stirling-pdf": {containerName: "stirling-pdf", containerPort: 8080},
+
+		// ntfy — notifications push, sans auth sur l'API publique
+		"ntfy": {containerName: "ntfy", containerPort: 80},
+
+		// n8n — automation workflows, sans auth (géré par n8n)
+		"n8n": {containerName: "n8n", containerPort: 5678},
+
+		// File Browser — sans auth proxy (auth propre à filebrowser)
+		"filebrowser": {containerName: "filebrowser", containerPort: 80},
+
+		// Mealie — API JWT, pas de proxy auth (login UI)
+		"mealie": {containerName: "mealie", containerPort: 9000},
+
+		// Changedetection.io — sans auth par défaut
+		"changedetection": {tokenKey: "CHANGEDETECTION_API_TOKEN", authScheme: "X-Api-Key",
+			containerName: "changedetection", containerPort: 5000},
+
+		// Gotify — notifications push, client token dans X-Gotify-Key
+		"gotify": {tokenKey: "GOTIFY_CLIENT_TOKEN", authScheme: "X-Gotify-Key",
+			containerName: "gotify", containerPort: 80},
+
+		// Homarr — dashboard de liens, sans auth proxy
+		"homarr": {containerName: "homarr", containerPort: 7575},
+
+		// WG-Easy — interface web WireGuard (session cookie via POST /api/session)
+		"wg-easy": {basicPassKey: "WG_ADMIN_PASSWORD", authScheme: "WGEasySession",
+			containerName: "wg-easy", containerPort: 51821},
+
+		// CrowdSec — bouncer API key pour consulter décisions/alertes
+		"crowdsec": {tokenKey: "CROWDSEC_BOUNCER_API_KEY", authScheme: "X-Api-Key",
+			containerName: "crowdsec", containerPort: 8080},
+
+		// Grocy — gestion inventaire maison, API key dans GROCY-API-KEY header
+		"grocy": {tokenKey: "GROCY_API_KEY", authScheme: "GROCY-API-KEY",
+			containerName: "grocy", containerPort: 80},
+
+		// Jellyseerr — demandes médias pour Jellyfin
+		"jellyseerr": {containerName: "jellyseerr", containerPort: 5055},
+
+		// Home Assistant — domotique
+		"home-assistant": {containerName: "home-assistant", containerPort: 8123},
+
+		// Calibre-Web — bibliothèque ebooks
+		"calibre-web": {containerName: "calibre-web", containerPort: 8083},
+
+		// Navidrome — serveur de musique (login JWT cache)
+		"navidrome": {basicUserKey: "ND_ADMIN_USER", basicPassKey: "ND_ADMIN_PASSWORD",
+			authScheme: "NavidromeLogin", containerName: "navidrome", containerPort: 4533},
+
+		// PhotoPrism — gestionnaire de photos
+		"photoprism": {containerName: "photoprism", containerPort: 2342},
+
+		// Kavita — lecteur manga/comics/ebooks
+		"kavita": {containerName: "kavita", containerPort: 5000},
+
+		// Komga — bibliothèque comics/mangas (Basic auth)
+		"komga": {basicUserKey: "KOMGA_ADMIN_EMAIL", basicPassKey: "KOMGA_ADMIN_PASSWORD",
+			authScheme: "Basic", containerName: "komga", containerPort: 25600},
+
+		// Code Server — VS Code web
+		"code-server": {containerName: "code-server", containerPort: 8080},
+
+		// Scrutiny — monitoring disques SMART
+		"scrutiny": {containerName: "scrutiny", containerPort: 8080},
 	}
 
 	// resolveDockerIP récupère l'IP d'un conteneur Docker via `docker inspect`.
@@ -485,36 +675,269 @@ func main() {
 			return
 		}
 
-		// Construire le header d'authentification (autres schemes)
-		var authHeader, authValue string
-		switch cfg.authScheme {
-		case "Basic":
+		// ImmichLogin : POST /api/auth/login → cache Bearer token (expiry ~24h)
+		if cfg.authScheme == "ImmichLogin" {
+			email := readEnvKey(secretsPath, cfg.basicUserKey)
+			pass  := readEnvKey(secretsPath, cfg.basicPassKey)
+			if email == "" || pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials Immich non disponibles")
+				return
+			}
+			immichCache.mu.Lock()
+			immichToken := immichCache.token
+			if immichToken == "" || time.Now().After(immichCache.expires) {
+				loginBody := strings.NewReader(fmt.Sprintf(`{"email":%q,"password":%q}`, email, pass))
+				loginReq, _ := http.NewRequest(http.MethodPost, targetBase+"/api/auth/login", loginBody)
+				loginReq.Header.Set("Content-Type", "application/json")
+				loginReq.Header.Set("Accept", "application/json")
+				loginResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(loginReq)
+				if err2 == nil && loginResp != nil {
+					var loginData struct { AccessToken string `json:"accessToken"` }
+					if json.NewDecoder(loginResp.Body).Decode(&loginData) == nil && loginData.AccessToken != "" {
+						immichToken = loginData.AccessToken
+						immichCache.token = immichToken
+						immichCache.expires = time.Now().Add(23 * time.Hour)
+					}
+					loginResp.Body.Close()
+				}
+			}
+			immichCache.mu.Unlock()
+			if immichToken == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "immich: authentification échouée")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			outReq.Header.Set("Authorization", "Bearer "+immichToken)
+			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// NavidromeLogin : POST /auth/login → cache Bearer JWT (expiry ~24h)
+		if cfg.authScheme == "NavidromeLogin" {
 			user := readEnvKey(secretsPath, cfg.basicUserKey)
 			pass := readEnvKey(secretsPath, cfg.basicPassKey)
 			if user == "" || pass == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials non disponibles")
+				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials Navidrome non disponibles")
 				return
 			}
-			creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
-			authHeader, authValue = "Authorization", "Basic "+creds
-		case "GitToken":
+			navidromeCache.mu.Lock()
+			navToken := navidromeCache.token
+			if navToken == "" || time.Now().After(navidromeCache.expires) {
+				loginBody := strings.NewReader(fmt.Sprintf(`{"username":%q,"password":%q}`, user, pass))
+				loginReq, _ := http.NewRequest(http.MethodPost, targetBase+"/auth/login", loginBody)
+				loginReq.Header.Set("Content-Type", "application/json")
+				loginReq.Header.Set("Accept", "application/json")
+				loginResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(loginReq)
+				if err2 == nil && loginResp != nil {
+					var loginData struct { Token string `json:"token"` }
+					if json.NewDecoder(loginResp.Body).Decode(&loginData) == nil && loginData.Token != "" {
+						navToken = loginData.Token
+						navidromeCache.token = navToken
+						navidromeCache.expires = time.Now().Add(23 * time.Hour)
+					}
+					loginResp.Body.Close()
+				}
+			}
+			navidromeCache.mu.Unlock()
+			if navToken == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "navidrome: authentification échouée")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			outReq.Header.Set("X-ND-Authorization", "Bearer "+navToken)
+			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// GLPISession : GET /apirest.php/initSession (Basic auth) → cache Session-Token
+		if cfg.authScheme == "GLPISession" {
+			user := readEnvKey(secretsPath, cfg.basicUserKey)
+			if user == "" { user = "glpi" } // fallback nom admin par défaut
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
+			if pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, appID+": GLPI_ADMIN_PASSWORD non disponible")
+				return
+			}
+			glpiCache.mu.Lock()
+			glpiToken := glpiCache.token
+			if glpiToken == "" || time.Now().After(glpiCache.expires) {
+				creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+				initReq, _ := http.NewRequest(http.MethodGet, targetBase+"/apirest.php/initSession", nil)
+				initReq.Header.Set("Authorization", "Basic "+creds)
+				initReq.Header.Set("Content-Type", "application/json")
+				initResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(initReq)
+				if err2 == nil && initResp != nil {
+					var initData struct { SessionToken string `json:"session_token"` }
+					if json.NewDecoder(initResp.Body).Decode(&initData) == nil && initData.SessionToken != "" {
+						glpiToken = initData.SessionToken
+						glpiCache.token = glpiToken
+						glpiCache.expires = time.Now().Add(30 * time.Minute)
+					}
+					initResp.Body.Close()
+				}
+			}
+			glpiCache.mu.Unlock()
+			if glpiToken == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "glpi: session non initialisée (API REST activée ?)")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			outReq.Header.Set("Session-Token", glpiToken)
+			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// WGEasySession : POST /api/session avec password → cookie de session (expiry ~24h)
+		if cfg.authScheme == "WGEasySession" {
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
+			if pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "wg-easy: WG_ADMIN_PASSWORD non disponible")
+				return
+			}
+			wgEasyCache.mu.Lock()
+			wgCookie := wgEasyCache.cookie
+			if wgCookie == "" || time.Now().After(wgEasyCache.expires) {
+				loginBody := strings.NewReader(fmt.Sprintf(`{"password":%q}`, pass))
+				loginReq, _ := http.NewRequest(http.MethodPost, targetBase+"/api/session", loginBody)
+				loginReq.Header.Set("Content-Type", "application/json")
+				loginResp, err := client.Do(loginReq)
+				if err == nil {
+					for _, c := range loginResp.Cookies() {
+						if c.Name == "connect.sid" {
+							wgCookie = c.Name + "=" + c.Value
+							wgEasyCache.cookie = wgCookie
+							wgEasyCache.expires = time.Now().Add(22 * time.Hour)
+							break
+						}
+					}
+					loginResp.Body.Close()
+				}
+			}
+			wgEasyCache.mu.Unlock()
+			if wgCookie == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "wg-easy: impossible d'obtenir un cookie de session")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			outReq.Header.Set("Cookie", wgCookie)
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// PiholeQuery : auth en query param ?auth=TOKEN (Pi-hole v5 API)
+		if cfg.authScheme == "PiholeQuery" {
 			token := readEnvKey(secretsPath, cfg.tokenKey)
 			if token == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+				jsonErr(w, http.StatusServiceUnavailable, appID+": PIHOLE_API_TOKEN non disponible")
 				return
 			}
-			authHeader, authValue = "Authorization", "token "+token
-		default:
-			token := readEnvKey(secretsPath, cfg.tokenKey)
-			if token == "" {
-				jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
-				return
+			if strings.Contains(targetURL, "?") {
+				targetURL += "&auth=" + url.QueryEscape(token)
+			} else {
+				targetURL += "?auth=" + url.QueryEscape(token)
 			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// Construire le header d'authentification (autres schemes)
+		// Si authScheme est vide, on proxifie sans auth (proxy direct).
+		var authHeader, authValue string
+		if cfg.authScheme != "" {
 			switch cfg.authScheme {
-			case "Bearer":
-				authHeader, authValue = "Authorization", "Bearer "+token
+			case "Basic":
+				user := readEnvKey(secretsPath, cfg.basicUserKey)
+				pass := readEnvKey(secretsPath, cfg.basicPassKey)
+				if user == "" || pass == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": credentials non disponibles")
+					return
+				}
+				creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+				authHeader, authValue = "Authorization", "Basic "+creds
+			case "GitToken":
+				token := readEnvKey(secretsPath, cfg.tokenKey)
+				if token == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+					return
+				}
+				authHeader, authValue = "Authorization", "token "+token
+			case "JellyfinToken":
+				token := readEnvKey(secretsPath, cfg.tokenKey)
+				if token == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": JELLYFIN_API_KEY non disponible — générer via setup.sh")
+					return
+				}
+				authHeader, authValue = "Authorization", `MediaBrowser Token="`+token+`"`
+			case "GhostAdmin":
+				apiKey := readEnvKey(secretsPath, cfg.tokenKey)
+				if apiKey == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": GHOST_ADMIN_API_KEY non disponible — créer dans Ghost admin → Intégrations")
+					return
+				}
+				jwt, err := ghostAdminJWT(apiKey)
+				if err != nil {
+					jsonErr(w, http.StatusServiceUnavailable, "ghost: "+err.Error())
+					return
+				}
+				authHeader, authValue = "Authorization", "Ghost "+jwt
 			default:
-				authHeader, authValue = cfg.authScheme, token
+				token := readEnvKey(secretsPath, cfg.tokenKey)
+				if token == "" {
+					jsonErr(w, http.StatusServiceUnavailable, appID+": token non disponible")
+					return
+				}
+				switch cfg.authScheme {
+				case "Bearer":
+					authHeader, authValue = "Authorization", "Bearer "+token
+				case "DRFToken":
+					authHeader, authValue = "Authorization", "Token "+token
+				default:
+					authHeader, authValue = cfg.authScheme, token
+				}
 			}
 		}
 
@@ -526,7 +949,9 @@ func main() {
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			outReq.Header.Set("Content-Type", ct)
 		}
-		outReq.Header.Set(authHeader, authValue)
+		if authHeader != "" {
+			outReq.Header.Set(authHeader, authValue)
+		}
 		outReq.Header.Set("Accept", "application/json")
 		// Host override (ex: Nextcloud trusted_domains)
 		if cfg.hostOverride != "" {
@@ -598,8 +1023,27 @@ func main() {
 			Password string `json:"password"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Password != uiPassword {
+		uiPasswordMu.RLock()
+		currentPw := uiPassword
+		uiPasswordMu.RUnlock()
+		if body.Password != currentPw {
 			jsonErr(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
+		// Si TOTP activé : émettre un cookie pending et demander le code
+		totpLoad(*baseDir)
+		if enabled, _ := totpIsEnabled(); enabled {
+			pendingTok := pendingStore.create()
+			http.SetCookie(w, &http.Cookie{
+				Name:     "caleope-pending",
+				Value:    pendingTok,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+				MaxAge:   300, // 5 minutes
+			})
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"totp_required": true})
 			return
 		}
 		tok := store.create()
@@ -624,6 +1068,39 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	// Changer mot de passe UI (session requise)
+	mux.HandleFunc("/auth/password", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Current string `json:"current"`
+			New     string `json:"new"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		uiPasswordMu.RLock()
+		currentPw := uiPassword
+		uiPasswordMu.RUnlock()
+		if body.Current != currentPw {
+			jsonErr(w, http.StatusUnauthorized, "mot de passe actuel incorrect")
+			return
+		}
+		if len(body.New) < 8 {
+			jsonErr(w, http.StatusBadRequest, "le nouveau mot de passe doit faire au moins 8 caractères")
+			return
+		}
+		if err := os.WriteFile(uiPasswordPath, []byte(body.New), 0600); err != nil {
+			jsonErr(w, http.StatusInternalServerError, "erreur écriture: "+err.Error())
+			return
+		}
+		uiPasswordMu.Lock()
+		uiPassword = body.New
+		uiPasswordMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+
 	// Vérifier session (utilisé par le frontend au chargement)
 	mux.HandleFunc("/auth/check", func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("caleope-session")
@@ -633,6 +1110,40 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// ── SSO OIDC ──────────────────────────────────────────────────────────────
+	mux.HandleFunc("/auth/oidc/config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			requireSession(func(w http.ResponseWriter, r *http.Request) {
+				handleOidcSave(w, r, *baseDir)
+			})(w, r)
+			return
+		}
+		handleOidcConfig(w, r, *baseDir)
+	})
+	mux.HandleFunc("/auth/oidc/start", func(w http.ResponseWriter, r *http.Request) {
+		handleOidcStart(w, r, *baseDir)
+	})
+	mux.HandleFunc("/auth/oidc/callback", func(w http.ResponseWriter, r *http.Request) {
+		handleOidcCallback(w, r, *baseDir, store)
+	})
+
+	// ── 2FA TOTP ──────────────────────────────────────────────────────────────
+	mux.HandleFunc("/auth/totp/status", func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPStatus(w, r, *baseDir)
+	})
+	mux.HandleFunc("/auth/totp/setup", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPSetup(w, r, *baseDir)
+	}))
+	mux.HandleFunc("/auth/totp/enable", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPEnable(w, r, *baseDir)
+	}))
+	mux.HandleFunc("/auth/totp/disable", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPDisable(w, r, *baseDir)
+	}))
+	mux.HandleFunc("/auth/totp", func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPVerify(w, r, *baseDir, store)
 	})
 
 	// ── Terminal WebSocket (session requise) ──────────────────────────────────
@@ -655,6 +1166,91 @@ func main() {
 	}))
 	mux.HandleFunc("/sys/journal", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleSysJournal(w, r)
+	}))
+	mux.HandleFunc("/sys/ports", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysPorts(w, r)
+	}))
+	mux.HandleFunc("/sys/netstat", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysNetstat(w, r)
+	}))
+	mux.HandleFunc("/sys/processes", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysProcesses(w, r)
+	}))
+	mux.HandleFunc("/sys/docker-inspect/", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerInspect(w, r)
+	}))
+	mux.HandleFunc("/sys/firewall", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysFirewall(w, r)
+	}))
+	mux.HandleFunc("/sys/docker-prune", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerPrune(w, r)
+	}))
+	mux.HandleFunc("/sys/docker-stats", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerStats(w, r)
+	}))
+	mux.HandleFunc("/sys/traefik-routes", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTraefikRoutes(w, r)
+	}))
+	mux.HandleFunc("/sys/certs", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleSysCerts(w, r)
+	}))
+	mux.HandleFunc("/sys/nettool", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleNetTool(w, r)
+	}))
+	mux.HandleFunc("/sys/traefik-services", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTraefikServices(w, r)
+	}))
+	mux.HandleFunc("/sys/docker-volumes", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerVolumes(w, r)
+	}))
+	mux.HandleFunc("/sys/app-sizes", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleAppSizes(w, r, *baseDir)
+	}))
+	mux.HandleFunc("/sys/maintenance", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleMaintenance(w, r, *baseDir)
+	}))
+
+	// Historique des stats système (ring buffer 60 min)
+	mux.HandleFunc("/sys/stats/history", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleStatsHistory(w, r)
+	}))
+
+	// Health check Docker (état santé par conteneur)
+	mux.HandleFunc("/sys/healthcheck", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleHealthCheck(w, r)
+	}))
+
+	// Update checker (images locales vs registry)
+	mux.HandleFunc("/sys/update-check", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleUpdateCheck(w, r)
+	}))
+
+	// Backup status (Restic)
+	mux.HandleFunc("/sys/backup-status", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleBackupStatus(w, r, *baseDir)
+	}))
+
+	// Docker pull (tire une image depuis le registry)
+	mux.HandleFunc("/sys/docker-pull", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerPull(w, r)
+	}))
+
+	// Notes post-install d'une app
+	mux.HandleFunc("/sys/app-notes/", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		appID := strings.TrimPrefix(r.URL.Path, "/sys/app-notes/")
+		appID = strings.Trim(appID, "/")
+		if appID == "" || strings.Contains(appID, "..") {
+			http.Error(w, "invalid app id", http.StatusBadRequest)
+			return
+		}
+		notesPath := filepath.Join(*baseDir, "app-config", appID, "post-install.txt")
+		data, err := os.ReadFile(notesPath)
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"notes": "", "found": false})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"notes": string(data), "found": true})
 	}))
 
 	// API proxy (session requise) — logs en streaming aussi
@@ -699,6 +1295,9 @@ func main() {
 	fmt.Printf("╚══════════════════════════════════════╝\n")
 	fmt.Printf("  Interface : http://0.0.0.0%s\n", addr)
 	fmt.Printf("  Daemon    : %s\n\n", *daemon)
+
+	// Démarrer la collecte d'historique des stats (ring buffer 60 min)
+	startStatsHistory(*daemon, daemonToken)
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
