@@ -21,7 +21,6 @@ Les identifiants sont générés automatiquement et sauvegardés dans `app-confi
 
 | Paramètre | Description | Défaut |
 |-----------|-------------|--------|
-| `LINKDING_PORT_WEB` | Port web | `9090` |
 | `LINKDING_ADMIN_USER` | Nom d'utilisateur admin | `admin` |
 | `LINKDING_ADMIN_PASS` | Mot de passe admin | généré automatiquement |
 

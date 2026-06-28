@@ -2,7 +2,7 @@
 title: Nextcloud + OnlyOffice
 description: Suite collaborative — fichiers, agenda, contacts, édition de documents
 published: true
-date: 2026-05-25
+date: 2026-06-28
 ---
 
 # Nextcloud + OnlyOffice
@@ -17,7 +17,7 @@ caleope install nextcloud --domain cloud.monserveur.fr
 
 Les identifiants admin sont affichés à la fin de l'installation et sauvegardés dans `app-config/nextcloud/secrets.env`.
 
-> ⏳ Nextcloud initialise sa base de données au premier démarrage (3-5 minutes). OnlyOffice démarre ensuite (2-3 minutes supplémentaires).
+> ⏳ Nextcloud initialise sa base de données au premier démarrage (3-5 minutes). OnlyOffice se connecte ensuite automatiquement.
 
 ## Services inclus
 
@@ -27,14 +27,29 @@ Les identifiants admin sont affichés à la fin de l'installation et sauvegardé
 | **MariaDB** | Base de données |
 | **Redis** | Cache et sessions |
 | **OnlyOffice** | Édition de documents Word/Excel/PowerPoint |
-| **Bootstrap** | Configure automatiquement le connecteur OnlyOffice |
+| **Bootstrap** | Configure automatiquement le connecteur OnlyOffice + OIDC |
 
 ## Accès
 
 ```
 https://cloud.monserveur.fr       ← Nextcloud
-https://onlyoffice.monserveur.fr  ← OnlyOffice (domaine dérivé automatiquement)
+https://onlyoffice.cloud.monserveur.fr  ← OnlyOffice (sous-domaine dérivé)
 ```
+
+## Configuration automatique au démarrage
+
+Le container bootstrap configure automatiquement :
+
+- Connexion OnlyOffice ↔ Nextcloud (JWT, URLs internes)
+- Trusted proxies pour Traefik
+- OIDC Authentik via l'app `user_oidc` (si Authentik est installé)
+
+## SSO Authentik (OIDC)
+
+Si Authentik est installé, l'app `user_oidc` est activée et configurée automatiquement.
+
+- Callback URI : `https://cloud.monserveur.fr/apps/user_oidc/code`
+- Connexion : bouton **"Se connecter avec Authentik"** sur la page de login Nextcloud
 
 ## Applications Nextcloud recommandées
 

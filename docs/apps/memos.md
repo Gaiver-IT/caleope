@@ -21,7 +21,6 @@ Les identifiants sont générés automatiquement et sauvegardés dans `app-confi
 
 | Paramètre | Description | Défaut |
 |-----------|-------------|--------|
-| `MEMOS_PORT_WEB` | Port web | `5230` |
 | `MEMOS_ADMIN_USER` | Nom d'utilisateur admin | `admin` |
 | `MEMOS_ADMIN_PASS` | Mot de passe admin | généré automatiquement |
 

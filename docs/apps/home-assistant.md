@@ -15,12 +15,6 @@ Plateforme domotique open-source pour centraliser et automatiser les objets conn
 caleope install home-assistant --domain ha.monserveur.fr
 ```
 
-## Configuration
-
-| Paramètre | Description | Défaut |
-|-----------|-------------|--------|
-| `HA_PORT_WEB` | Port web | `8123` |
-
 Un fichier `configuration.yaml` est pré-généré avec les trusted proxies Traefik configurés.
 
 ## Accès
@@ -45,6 +39,12 @@ caleope backup home-assistant     # Sauvegarder
 app-data/home-assistant/
 └── config/    ← configuration YAML, automations, scripts, intégrations
 ```
+
+## SSO Authentik (OIDC)
+
+Si Authentik est installé, une application OIDC est créée automatiquement dans Authentik pour Home Assistant. Les credentials sont dans `app-config/home-assistant/secrets.env`.
+
+Home Assistant ne supporte pas OIDC nativement dans la version de base. Pour activer le SSO, utiliser l'intégration **"OpenID Connect"** depuis le magasin d'intégrations HA (HACS requis) ou configurer manuellement via `configuration.yaml`.
 
 ## Notes
 

@@ -15,12 +15,6 @@ Surveille des pages web et envoie des alertes quand leur contenu change. Support
 caleope install changedetection --domain changedetection.monserveur.fr
 ```
 
-## Configuration
-
-| Paramètre | Description | Défaut |
-|-----------|-------------|--------|
-| `CHANGEDETECTION_PORT_WEB` | Port web | `5055` |
-
 ## Accès
 
 ```

@@ -21,7 +21,6 @@ La base de données est initialisée automatiquement à l'installation.
 
 | Paramètre | Description | Défaut |
 |-----------|-------------|--------|
-| `MONICA_PORT_WEB` | Port web | `8082` |
 | `MYSQL_PASSWORD` | Mot de passe base de données | généré automatiquement |
 | `MYSQL_ROOT_PASSWORD` | Mot de passe root MySQL | généré automatiquement |
 
@@ -51,3 +50,4 @@ app-data/monica/
 ## Notes
 
 - Monica inclut une base de données MariaDB dédiée démarrée automatiquement.
+- Les migrations de la base de données prennent ~90 secondes au premier démarrage — attendre avant d'accéder à l'interface.

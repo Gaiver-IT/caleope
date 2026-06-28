@@ -15,12 +15,6 @@ Outil de monitoring de disponibilité auto-hébergé. Surveille tes services (HT
 caleope install uptime-kuma --domain status.monserveur.fr
 ```
 
-## Configuration
-
-| Paramètre | Description | Défaut |
-|-----------|-------------|--------|
-| `UPTIME_KUMA_PORT_WEB` | Port web | `3025` |
-
 ## Accès
 
 ```

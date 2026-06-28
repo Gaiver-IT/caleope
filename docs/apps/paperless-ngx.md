@@ -21,7 +21,6 @@ Les identifiants sont générés automatiquement et sauvegardés dans `app-confi
 
 | Paramètre | Description | Défaut |
 |-----------|-------------|--------|
-| `PAPERLESS_PORT_WEB` | Port web | `8080` |
 | `PAPERLESS_ADMIN_USER` | Nom d'utilisateur admin | `admin` |
 | `PAPERLESS_ADMIN_PASS` | Mot de passe admin | généré automatiquement |
 

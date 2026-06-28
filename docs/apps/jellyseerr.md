@@ -17,12 +17,6 @@ caleope install jellyseerr --domain media.monserveur.fr
 
 > Jellyseerr est inclus dans l'[arr-stack](/apps/arr-stack). L'installer séparément uniquement si tu utilises Jellyfin sans l'arr-stack.
 
-## Configuration
-
-| Paramètre | Description | Défaut |
-|-----------|-------------|--------|
-| `JELLYSEERR_PORT_WEB` | Port web | `5099` |
-
 ## Accès
 
 ```
@@ -30,6 +24,15 @@ https://media.monserveur.fr/
 ```
 
 Un wizard de premier accès guide la connexion à Jellyfin, Radarr et Sonarr.
+
+## SSO Authentik (OIDC natif)
+
+Si Authentik est installé, Jellyseerr est automatiquement enregistré comme application OIDC (v2+).
+
+- Callback URI : `https://media.monserveur.fr/auth/oidc/callback`
+- Connexion : bouton **"Se connecter avec Authentik"** sur la page de login
+
+Les credentials OIDC sont dans `app-config/jellyseerr/secrets.env`.
 
 ## Commandes utiles
 

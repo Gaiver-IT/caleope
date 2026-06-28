@@ -1,6 +1,6 @@
 ---
 title: FreshRSS
-description: Agrégateur RSS self-hosted
+description: Agrégateur RSS self-hosted avec OIDC Authentik
 published: true
 date: 2026-06-28
 ---
@@ -23,7 +23,6 @@ Les identifiants sont générés automatiquement et sauvegardés dans `app-confi
 |-----------|-------------|--------|
 | `FRESHRSS_ADMIN_USER` | Nom d'utilisateur admin | `admin` |
 | `FRESHRSS_ADMIN_PASS` | Mot de passe admin | généré automatiquement |
-| `FRESHRSS_PORT_WEB` | Port web | `8065` |
 
 ```bash
 caleope install freshrss --domain rss.monserveur.fr \
@@ -43,6 +42,15 @@ https://rss.monserveur.fr/
 cat /opt/gaiver-it/caleope/app-config/freshrss/secrets.env
 ```
 
+## SSO Authentik (OIDC natif)
+
+Si Authentik est installé, FreshRSS est automatiquement enregistré comme application OIDC lors de l'installation. L'intégration utilise `mod_auth_openidc` (Apache) nativement.
+
+- Callback URI : `https://rss.monserveur.fr/i/oidc/callback`
+- Connexion : bouton **"Login with OIDC"** sur la page de connexion FreshRSS
+
+> Si Authentik n'est pas installé au moment de l'installation de FreshRSS, OIDC est désactivé par défaut. Relancer `caleope install freshrss` après avoir installé Authentik pour l'activer.
+
 ## API mobile (Google Reader)
 
 L'API Google Reader est activée automatiquement. URL de l'API :
@@ -51,7 +59,7 @@ L'API Google Reader est activée automatiquement. URL de l'API :
 https://rss.monserveur.fr/api/greader.php
 ```
 
-Utiliser le nom d'utilisateur et mot de passe FreshRSS dans le client mobile.
+Utiliser le nom d'utilisateur et mot de passe FreshRSS dans le client mobile (pas les credentials OIDC).
 
 ## Commandes utiles
 
@@ -68,7 +76,3 @@ app-data/freshrss/
 ├── data/        ← configuration et flux RSS
 └── extensions/  ← extensions FreshRSS
 ```
-
-## Notes
-
-- L'API Google Reader est configurée automatiquement à l'installation pour permettre la connexion depuis les clients mobiles.

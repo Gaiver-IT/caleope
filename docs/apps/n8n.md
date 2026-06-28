@@ -15,12 +15,6 @@ Plateforme d'automatisation de workflows open-source, alternative à Zapier. Con
 caleope install n8n --domain n8n.monserveur.fr
 ```
 
-## Configuration
-
-| Paramètre | Description | Défaut |
-|-----------|-------------|--------|
-| `N8N_PORT_WEB` | Port web | `5678` |
-
 ## Accès
 
 ```

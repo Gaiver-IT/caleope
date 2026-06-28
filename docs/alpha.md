@@ -2,12 +2,12 @@
 title: Canal Alpha
 description: Installer et utiliser le canal alpha de Caleope (Brownberry)
 published: true
-date: 2026-06-19
+date: 2026-06-28
 ---
 
 # Canal Alpha (Brownberry)
 
-Le canal **alpha** donne accès aux dernières fonctionnalités avant leur passage en stable. Version actuelle : **v0.4.x (Brownberry)**.
+Le canal **alpha** donne accès aux dernières fonctionnalités avant leur passage en stable. Version actuelle : **v0.5.x (Brownberry)**.
 
 > Le canal alpha peut contenir des bugs. Recommandé pour les tests ou les environnements non-critiques.
 
@@ -45,7 +45,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Gaiver-IT/caleope/alpha/inst
 
 ```bash
 # Synchroniser le catalogue d'apps (branche alpha)
-sudo git -C /opt/gaiver-it/caleope/core/cache/official pull origin alpha
+sudo git -C /opt/gaiver-it/caleope/core/cache/official fetch origin alpha
+sudo git -C /opt/gaiver-it/caleope/core/cache/official reset --hard origin/alpha
 
 # Puis mettre à jour le catalogue côté daemon
 caleope update
@@ -55,7 +56,16 @@ caleope update
 
 ---
 
-## Fonctionnalités Brownberry (v0.4.x)
+## Fonctionnalités Brownberry (v0.5.x)
+
+### Ports dynamiques
+
+Les ports des applications sont alloués dynamiquement par Caleope à l'installation (aucune configuration manuelle requise). Le port alloué est visible dans `caleope list`.
+
+```bash
+caleope list
+# → jellyfin   ✅ actif   8001   official
+```
 
 ### Passthrough GPU
 
@@ -112,6 +122,17 @@ Traefik applique automatiquement des headers de sécurité sur toutes les répon
 - `Strict-Transport-Security` (HTTPS uniquement)
 - Suppression de `Server:` et `X-Powered-By:`
 
+### Suppression d'application (`caleope remove`)
+
+```bash
+# Avec confirmation
+caleope remove jellyfin
+
+# Sans confirmation (scripts/CI)
+caleope remove jellyfin -y
+caleope remove jellyfin --yes
+```
+
 ---
 
 ## Mettre à jour Caleope vers une nouvelle version alpha
@@ -137,10 +158,11 @@ CALEOPE_DOMAIN=home.local CALEOPE_PROXY_MODE=standalone CALEOPE_CHANNEL=alpha \
 
 # 2. Vérifier
 caleope ping
-caleope version      # → v0.4.x
+caleope version      # → v0.5.x
 
 # 3. Sync store
-sudo git -C /opt/gaiver-it/caleope/core/cache/official pull origin alpha
+sudo git -C /opt/gaiver-it/caleope/core/cache/official fetch origin alpha
+sudo git -C /opt/gaiver-it/caleope/core/cache/official reset --hard origin/alpha
 caleope update
 
 # 4. Installer des apps
@@ -163,4 +185,8 @@ for i in $(seq 1 62); do
     -H "Authorization: Bearer $TOKEN" http://localhost:8765/api/v1/apps)
   echo "req $i → $code"
 done
+
+# 8. Test suppression sans confirmation
+caleope install freshrss
+caleope remove freshrss --yes
 ```

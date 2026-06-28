@@ -15,12 +15,6 @@ ERP self-hosted pour la maison : gestion de stock alimentaire, liste de courses,
 caleope install grocy --domain grocy.monserveur.fr
 ```
 
-## Configuration
-
-| Paramètre | Description | Défaut |
-|-----------|-------------|--------|
-| `GROCY_PORT_WEB` | Port web | `9283` |
-
 ## Accès
 
 ```
