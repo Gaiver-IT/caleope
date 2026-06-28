@@ -185,7 +185,7 @@ ask_config() {
         echo -e "  Domaine    : ${YELLOW}${CALEOPE_DOMAIN}${NC}"
         echo -e "  Proxy mode : ${YELLOW}${CALEOPE_PROXY_MODE}${NC}"
         echo -e "  Canal      : ${YELLOW}${CALEOPE_CHANNEL}${NC}"
-        [[ -n "${CALEOPE_EMAIL:-}" ]] && echo -e "  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"
+        if [[ -n "${CALEOPE_EMAIL:-}" ]]; then echo -e "  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"; fi
         return
     fi
 
@@ -309,7 +309,7 @@ ask_config() {
     echo -e "${CYAN}  │${NC}  Domaine    : ${YELLOW}${CALEOPE_DOMAIN}${NC}"
     echo -e "${CYAN}  │${NC}  Proxy mode : ${YELLOW}${CALEOPE_PROXY_MODE}${NC}"
     echo -e "${CYAN}  │${NC}  Canal      : ${YELLOW}${CALEOPE_CHANNEL}${NC}"
-    [[ -n "${CALEOPE_EMAIL}" ]] &&     echo -e "${CYAN}  │${NC}  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"
+    if [[ -n "${CALEOPE_EMAIL}" ]]; then echo -e "${CYAN}  │${NC}  Email      : ${YELLOW}${CALEOPE_EMAIL}${NC}"; fi
     echo -e "${CYAN}  └─────────────────────────────────────────┘${NC}"
     echo ""
     read -rp "  Confirmer ? [O/n] : " confirm </dev/tty
