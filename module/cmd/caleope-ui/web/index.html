@@ -44,18 +44,46 @@
     <div class="divider">AUTHENTIFICATION</div>
 
     <form id="login-form">
-      <div class="fields">
-        <div class="field full">
-          <div class="field-label">MOT DE PASSE UI</div>
-          <input class="field-input" id="login-pw" type="password"
-            placeholder="Mot de passe de l'interface" autocomplete="current-password" required>
+      <!-- Étape 1 : mot de passe -->
+      <div id="login-step-pw">
+        <div class="fields">
+          <div class="field full">
+            <div class="field-label">MOT DE PASSE UI</div>
+            <input class="field-input" id="login-pw" type="password"
+              placeholder="Mot de passe de l'interface" autocomplete="current-password" required>
+          </div>
+        </div>
+        <div class="login-error" id="login-error"></div>
+        <div class="login-actions">
+          <button type="submit" class="btn btn-vio" id="login-btn">
+            <i class="ti ti-arrow-right"></i>CONNECTER
+          </button>
         </div>
       </div>
-      <div class="login-error" id="login-error"></div>
-      <div class="login-actions">
-        <button type="submit" class="btn btn-vio" id="login-btn">
-          <i class="ti ti-arrow-right"></i>CONNECTER
-        </button>
+      <!-- Étape 2 : code TOTP (affiché si 2FA activé) -->
+      <div id="login-step-totp" style="display:none">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px">
+          <i class="ti ti-lock" style="font-size:14px;color:var(--accent)"></i>
+          <div>
+            <div style="font-size:9px;font-weight:700;color:var(--text1);letter-spacing:.5px">DOUBLE AUTHENTIFICATION</div>
+            <div style="font-size:8px;color:var(--text3)">Entrez le code de votre application TOTP</div>
+          </div>
+        </div>
+        <div class="fields">
+          <div class="field full">
+            <div class="field-label">CODE TOTP (6 chiffres)</div>
+            <input class="field-input" id="login-totp" type="text" inputmode="numeric"
+              pattern="[0-9]{6}" maxlength="6"
+              placeholder="123456" autocomplete="one-time-code">
+          </div>
+        </div>
+        <div class="login-error" id="login-totp-error"></div>
+        <div class="login-actions" style="gap:6px">
+          <button type="button" class="btn" onclick="resetLoginStep()">RETOUR</button>
+          <button type="button" class="btn btn-vio" id="login-totp-btn" onclick="submitTOTP()">
+            <i class="ti ti-shield-check"></i>VÉRIFIER
+          </button>
+        </div>
       </div>
     </form>
 

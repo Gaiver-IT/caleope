@@ -51,7 +51,8 @@ async function checkAuth() {
 
 async function login(password) {
   const r = await api.post('/auth/login', { password });
-  return r && r.status === 'ok';
+  if (!r) return { ok: false };
+  return { ok: r.status === 'ok', totp_required: !!r.totp_required };
 }
 
 async function logout() {
@@ -595,7 +596,7 @@ const APP_ICONS = {
   vaultwarden: '🔒', authentik: '🔑', crowdsec: '🛡️', 'wg-easy': '🌐',
   tailscale: '🔐', pihole: '🚫', adguard: '🛡️',
   // Dev & ops
-  gitea: '🐙', pterodactyl: '🦕', portainer: '🐳', watchtower: '🔭',
+  gitea: '🐙', pterodactyl: '🦕', watchtower: '🔭',
   'prometheus-grafana': '📊', 'uptime-kuma': '📈',
   // Web & contenu
   ghost: '👻', wordpress: '📝', 'wiki-js': '📚',
@@ -2314,6 +2315,10 @@ async function loadSettings() {
         </div>
       </div>
     </div>
+    <div class="settings-card" id="totp-settings-card">
+      <div class="settings-title">DOUBLE AUTHENTIFICATION (2FA TOTP)</div>
+      <div id="totp-settings-content"><div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement…</div></div>
+    </div>
     <div class="settings-card">
       <div class="settings-title">APPARENCE</div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -2406,6 +2411,7 @@ async function loadSettings() {
   loadSettingsCerts();
   loadMaintenancePanel();
   loadOidcSettings();
+  loadTOTPSettings();
 }
 
 async function loadMaintenancePanel() {
@@ -3376,11 +3382,6 @@ async function loadDashboard() {
       <div id="dash-komga-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
 
-    ${S.apps.some(a => a.id === 'portainer' && a.status === 'running') ? `
-      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// PORTAINER</div>
-      <div id="dash-portainer-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
-    ` : ''}
-
     ${S.apps.some(a => a.id === 'scrutiny' && a.status === 'running') ? `
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// SANTÉ DISQUES</div>
       <div id="dash-scrutiny-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
@@ -3420,6 +3421,12 @@ async function loadDashboard() {
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// TICKETS GLPI</div>
       <div id="dash-glpi-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
+
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MISES À JOUR</div>
+    <div id="dash-updates-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// SAUVEGARDES</div>
+    <div id="dash-backup-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
 
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// CONTENEURS</div>
     <div id="dash-containers-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
@@ -3512,9 +3519,8 @@ async function loadDashboard() {
   if (S.apps.some(a => a.id === 'komga' && a.status === 'running')) {
     loadDashKomgaWidget();
   }
-  if (S.apps.some(a => a.id === 'portainer' && a.status === 'running')) {
-    loadDashPortainerWidget();
-  }
+  loadDashUpdatesWidget();
+  loadDashBackupWidget();
   if (S.apps.some(a => a.id === 'scrutiny' && a.status === 'running')) {
     loadDashScrutinyWidget();
   }
@@ -3979,48 +3985,162 @@ async function loadDashFreshRssWidget() {
     </div>`;
 }
 
-async function loadDashPortainerWidget() {
-  const w = document.getElementById('dash-portainer-widget');
+// ── Update checker widget ─────────────────────────────────────────────────────
+
+async function loadDashUpdatesWidget() {
+  const w = document.getElementById('dash-updates-widget');
   if (!w) return;
-  let endpoints = [], totalRunning = 0, totalStopped = 0;
+  let containers = [];
   try {
-    const r = await fetch('/ui/proxy/portainer/api/endpoints');
-    if (r.ok) {
-      endpoints = await r.json();
-      for (const ep of endpoints) {
-        totalRunning += ep.Snapshots?.[0]?.RunningContainerCount || 0;
-        totalStopped += ep.Snapshots?.[0]?.StoppedContainerCount || 0;
-      }
-    } else if (r.status === 401 || r.status === 403) {
-      w.innerHTML = `<div style="color:var(--text3);font-size:9px;padding:4px 0">Token API non configuré — voir secrets.env</div>`;
-      return;
+    const r = await fetch('/sys/update-check');
+    if (r.ok) { const d = await r.json(); containers = d.containers || []; }
+  } catch(e) {}
+
+  const unhealthy = [];
+  try {
+    const rh = await fetch('/sys/healthcheck');
+    if (rh.ok) {
+      const dh = await rh.json();
+      (dh.containers || []).forEach(c => {
+        if (c.health === 'unhealthy') unhealthy.push(c.name);
+      });
     }
   } catch(e) {}
-  const appDomain = S.apps.find(a => a.id === 'portainer')?.domain;
-  const openBtn = appDomain
-    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
-    : '';
+
+  const total = containers.length;
+  const withLatest = containers.filter(c => c.local_tag === 'latest').length;
+  const pinned     = total - withLatest;
+
+  const unhealthyBanner = unhealthy.length ? `
+    <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:rgba(239,68,68,.08);border:1px solid var(--red-b);border-radius:4px;margin-bottom:6px">
+      <i class="ti ti-alert-triangle" style="font-size:11px;color:var(--red-b);flex-shrink:0"></i>
+      <span style="font-size:8px;color:var(--red-b);font-weight:700">${unhealthy.length} CONTENEUR(S) UNHEALTHY : ${unhealthy.slice(0,3).join(', ')}${unhealthy.length>3?'…':''}</span>
+    </div>` : '';
+
+  const rows = containers.slice(0, 8).map(c => {
+    const tagColor = c.local_tag === 'latest' ? 'var(--text3)' : 'var(--blue)';
+    return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)">
+      <i class="ti ti-brand-docker" style="font-size:9px;color:var(--text3);flex-shrink:0"></i>
+      <span style="font-size:8px;color:var(--text1);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(c.container)}</span>
+      <span style="font-size:7px;font-family:monospace;color:${tagColor};flex-shrink:0">${escapeHtml(c.local_image.split('/').pop())}:<b>${escapeHtml(c.local_tag)}</b></span>
+      <button class="btn-sm" style="font-size:7px;padding:1px 5px" title="Tirer la dernière version"
+        onclick="pullImage('${escapeHtml(c.local_image+':'+c.local_tag)}','${escapeHtml(c.container)}')">
+        <i class="ti ti-download" style="font-size:8px"></i>
+      </button>
+    </div>`;
+  }).join('');
+
   w.innerHTML = `
-    <div class="card" style="padding:10px 12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <span style="font-size:9px;font-weight:700;color:var(--text2)"><i class="ti ti-brand-docker" style="font-size:10px;margin-right:4px"></i>PORTAINER</span>
-        ${openBtn}
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border)">
+        <span style="font-size:8px;font-weight:700;color:var(--text2)"><i class="ti ti-versions" style="font-size:9px;margin-right:4px"></i>${total} IMAGE(S) · ${pinned} ÉPINGLÉE(S)</span>
+        <button class="btn-sm" style="font-size:7px" onclick="goSection('stats')" title="Stats Docker">
+          <i class="ti ti-external-link" style="font-size:8px"></i>
+        </button>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
-        <div style="text-align:center">
-          <div style="font-size:18px;font-weight:700;color:var(--blue)">${endpoints.length}</div>
-          <div style="font-size:8px;color:var(--text3)">ENDPOINTS</div>
-        </div>
-        <div style="text-align:center">
-          <div style="font-size:18px;font-weight:700;color:var(--ok)">${totalRunning}</div>
-          <div style="font-size:8px;color:var(--text3)">EN COURS</div>
-        </div>
-        <div style="text-align:center">
-          <div style="font-size:18px;font-weight:700;color:${totalStopped > 0 ? 'var(--err)' : 'var(--text3)'}">${totalStopped}</div>
-          <div style="font-size:8px;color:var(--text3)">ARRÊTÉS</div>
-        </div>
+      <div style="padding:6px 10px">
+        ${unhealthyBanner}
+        ${rows || '<div style="font-size:8px;color:var(--text3);padding:4px 0">Aucun conteneur détecté.</div>'}
+        ${containers.length > 8 ? `<div style="font-size:7px;color:var(--text3);text-align:center;margin-top:4px">+${containers.length-8} autres</div>` : ''}
       </div>
     </div>`;
+}
+
+async function pullImage(image, container) {
+  if (!confirm(`Tirer la dernière version de "${image}" ?\nLe service peut redémarrer si vous recréez le conteneur après.`)) return;
+  notify(`Pull de ${image} en cours…`, 'info');
+  try {
+    const r = await fetch('/sys/docker-pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image, container }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (d.success) {
+      notify(`Image ${image} mise à jour`, 'ok');
+    } else {
+      notify(`Erreur pull : ${d.error || 'inconnue'}`, 'err');
+    }
+  } catch(e) {
+    notify('Erreur réseau lors du pull', 'err');
+  }
+}
+
+// ── Backup status widget ──────────────────────────────────────────────────────
+
+async function loadDashBackupWidget() {
+  const w = document.getElementById('dash-backup-widget');
+  if (!w) return;
+  let data = null;
+  try {
+    const r = await fetch('/sys/backup-status');
+    if (r.ok) data = await r.json();
+  } catch(e) {}
+
+  // Aussi chercher les tâches planifiées depuis le daemon
+  let tasks = [];
+  try {
+    const rt = await api.get('/api/v1/tasks');
+    tasks = (rt?.data || rt || []).filter(t => t.type === 'backup');
+  } catch(e) {}
+
+  const taskInfo = tasks.length ? `
+    <div style="font-size:8px;color:var(--text3);margin-top:4px">
+      <i class="ti ti-calendar-event" style="font-size:9px;margin-right:3px"></i>
+      ${tasks.length} tâche(s) planifiée(s)
+    </div>` : '';
+
+  if (!data || !data.configured) {
+    const reason = data?.reason;
+    const msg = reason === 'no_restic' ? 'restic non installé' :
+                reason === 'no_repo'   ? 'Aucun dépôt configuré' :
+                'Sauvegardes non configurées';
+    w.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+        <i class="ti ti-archive-off" style="font-size:13px;color:var(--text3);flex-shrink:0"></i>
+        <div style="flex:1">
+          <div style="font-size:9px;color:var(--text3)">${msg}</div>
+          ${taskInfo}
+        </div>
+        <button class="btn-sm" onclick="goSection('backups')"><i class="ti ti-external-link" style="font-size:9px"></i></button>
+      </div>`;
+    return;
+  }
+
+  const lastTime = data.last_time ? new Date(data.last_time) : null;
+  const timeAgo = lastTime ? _timeAgo(lastTime) : '—';
+  const paths = (data.last_paths || []).slice(0, 2).map(p => p.split('/').pop()).join(', ') || '—';
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border)">
+        <span style="font-size:8px;font-weight:700;color:var(--text2)"><i class="ti ti-archive" style="font-size:9px;margin-right:4px"></i>SAUVEGARDES RESTIC</span>
+        <button class="btn-sm" style="font-size:7px" onclick="goSection('backups')"><i class="ti ti-external-link" style="font-size:8px"></i></button>
+      </div>
+      <div style="padding:6px 10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;text-align:center">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:var(--ok)">${data.snapshots || 0}</div>
+          <div style="font-size:7px;color:var(--text3)">SNAPSHOTS</div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--text1)">${timeAgo}</div>
+          <div style="font-size:7px;color:var(--text3)">DERNIÈRE SAUVEG.</div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-weight:700;color:var(--blue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(paths)}</div>
+          <div style="font-size:7px;color:var(--text3)">CHEMINS</div>
+        </div>
+      </div>
+      ${taskInfo ? `<div style="padding:0 10px 6px">${taskInfo}</div>` : ''}
+    </div>`;
+}
+
+function _timeAgo(date) {
+  const diff = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (diff < 60) return 'à l\'instant';
+  if (diff < 3600) return `il y a ${Math.floor(diff/60)} min`;
+  if (diff < 86400) return `il y a ${Math.floor(diff/3600)} h`;
+  return `il y a ${Math.floor(diff/86400)} j`;
 }
 
 async function loadDashScrutinyWidget() {
@@ -5564,14 +5684,6 @@ const APP_PANELS = {
     panels: [
       { id: 'panel-uptime-monitors',  label: 'MONITEURS',    icon: 'ti-activity',  load: loadUptimeMonitors },
       { id: 'panel-uptime-incidents', label: 'INCIDENTS',    icon: 'ti-alert-circle', load: loadUptimeIncidents },
-    ],
-  },
-  'portainer': {
-    group: '// INFRA',
-    icon: 'ti-ship',
-    panels: [
-      { id: 'panel-portainer-stacks',     label: 'STACKS',      icon: 'ti-layers',   load: loadPortainerStacks },
-      { id: 'panel-portainer-containers', label: 'CONTENEURS',  icon: 'ti-box',      load: loadPortainerContainers },
     ],
   },
   'memos': {
@@ -7228,96 +7340,6 @@ async function loadUptimeIncidents() {
         ${escapeHtml(incident.title || 'Incident en cours')}
       </div>
       <div style="font-size:9px;color:var(--text2)">${escapeHtml(incident.content || '')}</div>
-    </div>`;
-}
-
-// ── Portainer — Stacks & Conteneurs ──────────────────────────────────────────
-async function loadPortainerStacks() {
-  const c = document.getElementById('content-panel-portainer-stacks');
-  if (!c) return;
-  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT STACKS...</div>`;
-
-  const appDomain = S.apps.find(a => a.id === 'portainer')?.domain;
-  const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
-    class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR PORTAINER</a>` : '';
-
-  const r = await fetch('/ui/proxy/portainer/api/stacks');
-  if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    const missingToken = text.includes('unauthorized') || r.status === 401;
-    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-ship"></i></div>
-      <div class="empty-title">PORTAINER ${missingToken ? 'NON CONFIGURÉ' : 'INDISPONIBLE'}</div>
-      <div class="empty-sub">${missingToken
-        ? 'PORTAINER_API_TOKEN manquant dans les secrets. Lancer : caleope configure portainer'
-        : 'Vérifier que le service est démarré.'}</div>
-      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
-    return;
-  }
-
-  const stacks = await r.json();
-
-  const rows = stacks.map(s => `
-    <div class="loc-row">
-      <div style="flex:1;min-width:0">
-        <div style="font-size:10px;font-weight:700">${escapeHtml(s.Name)}</div>
-        <div style="font-size:9px;color:var(--text3)">${escapeHtml(s.Type === 1 ? 'Compose' : 'Swarm')} · ${escapeHtml(s.ProjectPath || '')}</div>
-      </div>
-      <span style="font-size:9px;font-weight:700;color:${s.Status === 1 ? 'var(--green-b)' : 'var(--text3)'}">${s.Status === 1 ? 'ACTIF' : 'INACTIF'}</span>
-    </div>`).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucune stack.</div>';
-
-  c.innerHTML = `
-    <div class="settings-card" style="padding:0">
-      <div class="settings-title" style="padding:10px 12px">
-        <i class="ti ti-layers" style="font-size:12px"></i> STACKS (${stacks.length})
-      </div>
-      <div style="padding:0 12px 12px">${rows}</div>
-    </div>
-    ${adminLink ? `<div style="display:flex;justify-content:center;margin-top:8px">${adminLink}</div>` : ''}`;
-}
-
-async function loadPortainerContainers() {
-  const c = document.getElementById('content-panel-portainer-containers');
-  if (!c) return;
-  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
-
-  // Récupérer l'endpoint local (id=1 en général)
-  const rEnv = await fetch('/ui/proxy/portainer/api/endpoints');
-  if (!rEnv.ok) { c.innerHTML = `<div class="empty-msg">Portainer indisponible.</div>`; return; }
-  const envs = await rEnv.json();
-  const envId = envs?.[0]?.Id || 1;
-
-  const r = await fetch(`/ui/proxy/portainer/api/endpoints/${envId}/docker/containers/json?all=1`);
-  if (!r.ok) { c.innerHTML = `<div class="empty-msg">Impossible de lister les conteneurs.</div>`; return; }
-
-  const containers = await r.json();
-  const running = containers.filter(c2 => c2.State === 'running').length;
-  const stopped = containers.filter(c2 => c2.State !== 'running').length;
-
-  const rows = containers.slice(0, 20).map(ct => {
-    const name = (ct.Names?.[0] || ct.Id.slice(0,12)).replace(/^\//, '');
-    const img  = ct.Image?.split(':')[0].split('/').pop() || '';
-    return `
-      <div class="loc-row">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:10px;font-weight:700">${escapeHtml(name)}</div>
-          <div style="font-size:9px;color:var(--text3)">${escapeHtml(img)}</div>
-        </div>
-        <span style="font-size:9px;font-weight:700;color:${ct.State === 'running' ? 'var(--green-b)' : 'var(--red-b)'}">
-          ${ct.State === 'running' ? 'RUN' : ct.State.toUpperCase()}
-        </span>
-      </div>`;
-  }).join('') || '<div style="font-size:9px;color:var(--text3);padding:8px 0">Aucun conteneur.</div>';
-
-  c.innerHTML = `
-    <div class="dash-row" style="gap:8px;margin-bottom:12px">
-      <div class="stat-card"><div class="stat-val" style="color:var(--green-b)">${running}</div><div class="stat-lbl">EN COURS</div></div>
-      <div class="stat-card"><div class="stat-val" style="color:var(--red-b)">${stopped}</div><div class="stat-lbl">ARRÊTÉS</div></div>
-    </div>
-    <div class="settings-card" style="padding:0">
-      <div class="settings-title" style="padding:10px 12px">
-        <i class="ti ti-box" style="font-size:12px"></i> CONTENEURS (${containers.length})
-      </div>
-      <div style="padding:0 12px 12px">${rows}</div>
     </div>`;
 }
 
@@ -9470,6 +9492,115 @@ async function clearOidcSettings() {
   } catch(e) {}
 }
 
+// ── TOTP 2FA settings ─────────────────────────────────────────────────────────
+
+async function loadTOTPSettings() {
+  const el = document.getElementById('totp-settings-content');
+  if (!el) return;
+  let status = { enabled: false, has_secret: false };
+  try {
+    const r = await fetch('/auth/totp/status');
+    if (r.ok) status = await r.json();
+  } catch(e) {}
+  _renderTOTPSettings(status);
+}
+
+function _renderTOTPSettings(status) {
+  const el = document.getElementById('totp-settings-content');
+  if (!el) return;
+  if (status.enabled) {
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <div style="width:28px;height:28px;background:rgba(52,211,153,.12);border:1px solid var(--ok);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <i class="ti ti-shield-check" style="font-size:14px;color:var(--ok)"></i>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:var(--ok)">2FA ACTIVÉ</div>
+          <div style="font-size:9px;color:var(--text3)">La double authentification est requise à chaque connexion</div>
+        </div>
+      </div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:8px">Pour désactiver, saisissez votre code TOTP actuel :</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="totp-disable-code" class="param-input" style="width:110px;text-align:center;font-size:14px;letter-spacing:4px"
+          placeholder="123456" maxlength="6" inputmode="numeric">
+        <button class="btn btn-sm danger" onclick="disableTOTP()"><i class="ti ti-lock-open"></i>DÉSACTIVER</button>
+      </div>`;
+  } else {
+    el.innerHTML = `
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
+        Ajoutez une couche de sécurité supplémentaire. Après activation, chaque connexion demandera un code TOTP généré par votre application (Google Authenticator, Aegis, Bitwarden…).
+      </div>
+      <div id="totp-setup-area" style="display:none">
+        <div style="margin-bottom:10px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:6px">
+          <div style="font-size:8px;color:var(--text3);margin-bottom:4px;letter-spacing:.5px">SECRET (à entrer manuellement dans votre app)</div>
+          <code id="totp-secret-display" style="font-size:12px;letter-spacing:3px;color:var(--text1);word-break:break-all"></code>
+          <div style="margin-top:8px;font-size:8px;color:var(--text3)">
+            <i class="ti ti-info-circle" style="font-size:9px"></i>
+            Dans Google Authenticator / Aegis : Ajouter → Entrer manuellement → coller le secret ci-dessus.
+          </div>
+        </div>
+        <div style="font-size:9px;color:var(--text3);margin-bottom:6px">Confirmez en entrant le code affiché par votre app :</div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="totp-enable-code" class="param-input" style="width:110px;text-align:center;font-size:14px;letter-spacing:4px"
+            placeholder="123456" maxlength="6" inputmode="numeric">
+          <button class="btn btn-vio" onclick="enableTOTP()"><i class="ti ti-shield-check"></i>ACTIVER LE 2FA</button>
+        </div>
+      </div>
+      <button class="btn" id="totp-gen-btn" onclick="setupTOTP()"><i class="ti ti-key"></i>GÉNÉRER UN SECRET TOTP</button>`;
+  }
+}
+
+async function setupTOTP() {
+  const btn = document.getElementById('totp-gen-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>&nbsp;GÉNÉRATION...'; }
+  try {
+    const r = await fetch('/auth/totp/setup', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) { notify(d.error || 'Erreur génération TOTP', 'err'); return; }
+    const area = document.getElementById('totp-setup-area');
+    const secretEl = document.getElementById('totp-secret-display');
+    if (area) area.style.display = '';
+    if (secretEl) secretEl.textContent = d.secret || '';
+    if (btn) btn.style.display = 'none';
+  } catch(e) {
+    notify('Erreur réseau', 'err');
+  }
+}
+
+async function enableTOTP() {
+  const code = document.getElementById('totp-enable-code')?.value?.trim();
+  if (!code || code.length !== 6) { notify('Code TOTP à 6 chiffres requis', 'err'); return; }
+  const r = await fetch('/auth/totp/enable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.ok && d.status === 'ok') {
+    notify('2FA activé avec succès', 'ok');
+    _renderTOTPSettings({ enabled: true });
+  } else {
+    notify(d.error || 'Code invalide', 'err');
+  }
+}
+
+async function disableTOTP() {
+  const code = document.getElementById('totp-disable-code')?.value?.trim();
+  if (!code || code.length !== 6) { notify('Code TOTP à 6 chiffres requis', 'err'); return; }
+  const r = await fetch('/auth/totp/disable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.ok && d.status === 'ok') {
+    notify('2FA désactivé', 'ok');
+    _renderTOTPSettings({ enabled: false });
+  } else {
+    notify(d.error || 'Code invalide', 'err');
+  }
+}
+
 // ── Login screen ──────────────────────────────────────────────────────────────
 function showLogin() {
   document.getElementById('app').classList.remove('visible');
@@ -9615,10 +9746,18 @@ async function init() {
 
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>&nbsp;CONNEXION...';
+    err.classList.remove('show');
 
-    const ok = await login(pw);
-    if (ok) {
+    const res = await login(pw);
+    if (res.ok) {
       showApp();
+    } else if (res.totp_required) {
+      // Basculer vers l'étape TOTP
+      document.getElementById('login-step-pw').style.display = 'none';
+      document.getElementById('login-step-totp').style.display = '';
+      document.getElementById('login-totp').focus();
+      btn.disabled = false;
+      btn.innerHTML = '<i class="ti ti-arrow-right"></i>CONNECTER';
     } else {
       err.textContent = 'MOT DE PASSE INCORRECT';
       err.classList.add('show');
@@ -9626,6 +9765,52 @@ async function init() {
       btn.innerHTML = '<i class="ti ti-arrow-right"></i>CONNECTER';
     }
   });
+}
+
+// ── TOTP login ────────────────────────────────────────────────────────────────
+
+function resetLoginStep() {
+  document.getElementById('login-step-pw').style.display = '';
+  document.getElementById('login-step-totp').style.display = 'none';
+  document.getElementById('login-totp').value = '';
+  document.getElementById('login-totp-error').classList.remove('show');
+  document.getElementById('login-pw').focus();
+}
+
+async function submitTOTP() {
+  const code = document.getElementById('login-totp').value.trim();
+  const btn  = document.getElementById('login-totp-btn');
+  const err  = document.getElementById('login-totp-error');
+  if (!code || code.length !== 6) {
+    err.textContent = 'Entrez un code à 6 chiffres';
+    err.classList.add('show');
+    return;
+  }
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>&nbsp;VÉRIFICATION...';
+  err.classList.remove('show');
+
+  try {
+    const r = await fetch('/auth/totp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.status === 'ok') {
+      showApp();
+    } else {
+      err.textContent = d.error || 'CODE TOTP INVALIDE';
+      err.classList.add('show');
+      document.getElementById('login-totp').value = '';
+      document.getElementById('login-totp').focus();
+    }
+  } catch(e) {
+    err.textContent = 'ERREUR RÉSEAU';
+    err.classList.add('show');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<i class="ti ti-shield-check"></i>VÉRIFIER';
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

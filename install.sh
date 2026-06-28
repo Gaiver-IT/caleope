@@ -58,7 +58,6 @@ SOCKET_PATH="/run/caleoped.sock"
 PORT_TRAEFIK_HTTP=80
 PORT_TRAEFIK_HTTPS=443
 PORT_TRAEFIK_DASHBOARD=8080
-PORT_PORTAINER=8010
 PORT_COCKPIT=8020  # conservé pour rétro-compat. éventuelle
 PORT_UI=8766
 
@@ -632,7 +631,6 @@ create_structure() {
     log_step "Création de l'arborescence..."
 
     local dirs=(
-        "${CALEOPE_ROOT}/core/portainer"
         "${CALEOPE_ROOT}/core/traefik"
         "${CALEOPE_ROOT}/apps-store"
         "${CALEOPE_ROOT}/apps-installed"
@@ -643,7 +641,6 @@ create_structure() {
         "${CALEOPE_ROOT}/backups"
         "${CALEOPE_ROOT}/logs"
         # Données des services core
-        "${CALEOPE_ROOT}/data/portainer"
         "${CALEOPE_ROOT}/data/traefik/certs"
     )
 
@@ -970,89 +967,6 @@ EOF
 }
 
 # =============================================================================
-# PORTAINER
-# =============================================================================
-
-deploy_portainer() {
-    log_section "Portainer CE"
-
-    if docker ps --format '{{.Names}}' | grep -q "^portainer$"; then
-        log_warning "Portainer déjà en cours d'exécution"
-        return 0
-    fi
-
-    cat > "${CALEOPE_ROOT}/core/portainer/compose.yml" << EOF
-services:
-  portainer:
-    image: portainer/portainer-ce:latest
-    container_name: portainer
-    restart: unless-stopped
-    ports:
-      - "${PORT_PORTAINER}:9443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${CALEOPE_ROOT}/data/portainer:/data
-    networks:
-      - ${DOCKER_NET_INTERNAL}
-
-networks:
-  ${DOCKER_NET_INTERNAL}:
-    external: true
-EOF
-
-    chown "${CALEOPE_USER}:${CALEOPE_USER}" "${CALEOPE_ROOT}/core/portainer/compose.yml"
-
-    log_step "Démarrage de Portainer..."
-    docker compose -f "${CALEOPE_ROOT}/core/portainer/compose.yml" up -d
-
-    local retries=0
-    until docker ps --format '{{.Names}}' | grep -q "^portainer$" || [[ $retries -ge 15 ]]; do
-        sleep 1
-        (( retries++ )) || true
-    done
-
-    if docker ps --format '{{.Names}}' | grep -q "^portainer$"; then
-        local IP
-        IP=$(hostname -I | awk '{print $1}')
-        log_success "Portainer actif"
-
-        # Mode non-interactif : création automatique du compte admin Portainer via API
-        if [[ -n "${CALEOPE_DOMAIN:-}" && -n "${CALEOPE_PROXY_MODE:-}" ]]; then
-            local portainer_pass="${PORTAINER_ADMIN_PASSWORD:-CaleoportAdmin!$(openssl rand -hex 4)}"
-            local portainer_resp
-            portainer_resp=$(curl -sk -X POST "https://${IP}:${PORT_PORTAINER}/api/users/admin/init" \
-                -H "Content-Type: application/json" \
-                -d "{\"Username\":\"admin\",\"Password\":\"${portainer_pass}\"}" 2>/dev/null || echo "{}")
-            if echo "${portainer_resp}" | grep -q '"Id"'; then
-                log_success "Compte admin Portainer créé automatiquement"
-                # Sauvegarder le mot de passe dans les secrets
-                mkdir -p "${CALEOPE_ROOT}/app-config/portainer"
-                echo "PORTAINER_ADMIN_PASSWORD=${portainer_pass}" > "${CALEOPE_ROOT}/app-config/portainer/secrets.env"
-                chmod 600 "${CALEOPE_ROOT}/app-config/portainer/secrets.env"
-                log_step "Portainer → https://${IP}:${PORT_PORTAINER}  |  admin / ${portainer_pass}"
-            else
-                log_warning "Portainer admin auto-création échouée (timer expiré ?) — créer manuellement sur https://${IP}:${PORT_PORTAINER}"
-            fi
-        else
-            echo ""
-            echo -e "${RED}╔══════════════════════════════════════════════════════╗${NC}"
-            echo -e "${RED}║  ⚠️  ACTION REQUISE DANS LES 5 PROCHAINES MINUTES  ║${NC}"
-            echo -e "${RED}║                                                      ║${NC}"
-            echo -e "${RED}║  Connecte-toi sur Portainer et crée ton compte admin ║${NC}"
-            echo -e "${RED}║  avant que le timer de sécurité expire               ║${NC}"
-            echo -e "${RED}║                                                      ║${NC}"
-            echo -e "${RED}║  → https://${IP}:${PORT_PORTAINER}                       ║${NC}"
-            echo -e "${RED}╚══════════════════════════════════════════════════════╝${NC}"
-            echo ""
-            echo -e "${YELLOW}Appuie sur [Entrée] une fois ton compte Portainer créé...${NC}"
-            read -r </dev/tty
-        fi
-    else
-        log_warning "Portainer ne semble pas démarré — vérifier : docker logs portainer"
-    fi
-}
-
-# =============================================================================
 # APPS PAR DÉFAUT (CrowdSec + Authentik)
 # =============================================================================
 
@@ -1273,7 +1187,6 @@ generate_links_file() {
 |--------------------|---------------------------------------------|
 | Caleope UI         | http://${IP}:${PORT_UI}                     |
 | Traefik dashboard  | http://${IP}:${PORT_TRAEFIK_DASHBOARD}      |
-| Portainer          | https://${IP}:${PORT_PORTAINER}             |
 | Terminal           | Intégré dans Caleope UI → section SERVEUR   |
 
 ---
@@ -1340,7 +1253,6 @@ print_summary() {
 
     echo -e "${CYAN}║${NC}  🌐 Caleope UI  → ${YELLOW}http://${IP}:${PORT_UI}${NC}"
     echo -e "${CYAN}║${NC}  🔀 Traefik     → ${YELLOW}http://${IP}:${PORT_TRAEFIK_DASHBOARD}${NC}"
-    echo -e "${CYAN}║${NC}  🐳 Portainer   → ${YELLOW}https://${IP}:${PORT_PORTAINER}${NC}"
     echo -e "${CYAN}║${NC}  🖥️  Terminal    → ${YELLOW}Caleope UI → section SERVEUR${NC}"
     echo -e "${CYAN}╠══════════════════════════════════════════════════════╣${NC}"
     echo -e "${CYAN}║                   Caleope Daemon                     ║${NC}"
@@ -1416,7 +1328,6 @@ main() {
     install_caleoped_service
     install_caleope_ui_service
     deploy_traefik
-    deploy_portainer
     install_default_apps
     generate_links_file
     print_summary

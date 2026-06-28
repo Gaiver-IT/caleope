@@ -1339,6 +1339,109 @@ func dirSize(path string) int64 {
 	return size
 }
 
+// ── Backup status (Restic) ────────────────────────────────────────────────────
+
+// handleBackupStatus : GET /sys/backup-status
+// Vérifie le dépôt Restic Caleope et retourne le dernier snapshot.
+func handleBackupStatus(w http.ResponseWriter, r *http.Request, baseDir string) {
+	w.Header().Set("Content-Type", "application/json")
+
+	repoPath := filepath.Join(baseDir, "data", "backup")
+	if _, err := os.Stat(repoPath); err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"configured": false,
+			"reason":     "no_repo",
+		})
+		return
+	}
+	if _, err := exec.LookPath("restic"); err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"configured": false,
+			"reason":     "no_restic",
+		})
+		return
+	}
+
+	out, err := exec.Command("restic", "--repo", repoPath,
+		"snapshots", "--json", "--last", "--no-lock").Output()
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"configured": true,
+			"error":      err.Error(),
+			"snapshots":  0,
+		})
+		return
+	}
+
+	var snaps []struct {
+		Time     string   `json:"time"`
+		Hostname string   `json:"hostname"`
+		Paths    []string `json:"paths"`
+		ID       string   `json:"id"`
+		Tags     []string `json:"tags"`
+	}
+	_ = json.Unmarshal(out, &snaps)
+
+	if len(snaps) == 0 {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"configured": true,
+			"snapshots":  0,
+		})
+		return
+	}
+	last := snaps[0]
+	shortID := last.ID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"configured":  true,
+		"snapshots":   len(snaps),
+		"last_time":   last.Time,
+		"last_id":     shortID,
+		"last_paths":  last.Paths,
+		"last_host":   last.Hostname,
+		"success":     true,
+	})
+}
+
+// ── Docker pull ───────────────────────────────────────────────────────────────
+
+// handleDockerPull : POST /sys/docker-pull {image, container}
+// Tire la dernière version d'une image Docker (image:tag).
+func handleDockerPull(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Image     string `json:"image"`
+		Container string `json:"container"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	// Validation basique pour éviter l'injection de commandes
+	if body.Image == "" || strings.ContainsAny(body.Image, ";|&`$(){}[]<>\"'\\") {
+		jsonErr(w, http.StatusBadRequest, "image invalide")
+		return
+	}
+
+	out, err := exec.Command("docker", "pull", body.Image).CombinedOutput()
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+			"output":  string(out),
+		})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"output":  string(out),
+	})
+}
+
 // humanBytes formate des bytes en lisible
 func humanBytes(b int64) string {
 	if b <= 0 {

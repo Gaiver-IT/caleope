@@ -428,10 +428,6 @@ func main() {
 		"adguard": {basicUserKey: "ADGUARD_USERNAME", basicPassKey: "ADGUARD_PASSWORD",
 			authScheme: "Basic", containerName: "adguardhome", containerPort: 3000},
 
-		// Portainer — X-API-Key header (PORTAINER_API_TOKEN)
-		"portainer": {tokenKey: "PORTAINER_API_TOKEN", authScheme: "X-Api-Key",
-			containerName: "portainer", containerPort: 9000},
-
 		// Uptime Kuma — pas d'auth sur l'API status-page publique
 		"uptime-kuma": {containerName: "uptime-kuma", containerPort: 3001},
 
@@ -1034,6 +1030,22 @@ func main() {
 			jsonErr(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
+		// Si TOTP activé : émettre un cookie pending et demander le code
+		totpLoad(*baseDir)
+		if enabled, _ := totpIsEnabled(); enabled {
+			pendingTok := pendingStore.create()
+			http.SetCookie(w, &http.Cookie{
+				Name:     "caleope-pending",
+				Value:    pendingTok,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+				MaxAge:   300, // 5 minutes
+			})
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"totp_required": true})
+			return
+		}
 		tok := store.create()
 		http.SetCookie(w, &http.Cookie{
 			Name:     "caleope-session",
@@ -1117,6 +1129,23 @@ func main() {
 		handleOidcCallback(w, r, *baseDir, store)
 	})
 
+	// ── 2FA TOTP ──────────────────────────────────────────────────────────────
+	mux.HandleFunc("/auth/totp/status", func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPStatus(w, r, *baseDir)
+	})
+	mux.HandleFunc("/auth/totp/setup", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPSetup(w, r, *baseDir)
+	}))
+	mux.HandleFunc("/auth/totp/enable", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPEnable(w, r, *baseDir)
+	}))
+	mux.HandleFunc("/auth/totp/disable", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPDisable(w, r, *baseDir)
+	}))
+	mux.HandleFunc("/auth/totp", func(w http.ResponseWriter, r *http.Request) {
+		handleTOTPVerify(w, r, *baseDir, store)
+	})
+
 	// ── Terminal WebSocket (session requise) ──────────────────────────────────
 	mux.HandleFunc("/ws/terminal", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleTerminal(w, r)
@@ -1194,6 +1223,16 @@ func main() {
 	// Update checker (images locales vs registry)
 	mux.HandleFunc("/sys/update-check", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleUpdateCheck(w, r)
+	}))
+
+	// Backup status (Restic)
+	mux.HandleFunc("/sys/backup-status", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleBackupStatus(w, r, *baseDir)
+	}))
+
+	// Docker pull (tire une image depuis le registry)
+	mux.HandleFunc("/sys/docker-pull", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleDockerPull(w, r)
 	}))
 
 	// Notes post-install d'une app
