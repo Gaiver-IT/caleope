@@ -411,6 +411,10 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 		"CALEOPE_DOMAIN="+opts.Domain,
 		"CALEOPE_APP_DATA_DIR="+appDataDir,
 	)
+	for _, port := range manifest.Ports {
+		env = append(env, fmt.Sprintf("CALEOPE_PORT_%s=%d",
+			strings.ToUpper(port.Name), port.Host))
+	}
 	for k, v := range opts.Params {
 		env = append(env, "CALEOPE_PARAM_"+strings.ToUpper(k)+"="+v)
 	}
