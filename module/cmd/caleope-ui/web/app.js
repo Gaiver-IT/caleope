@@ -945,6 +945,7 @@ function appListRow(app) {
       ${APP_PANELS[app.id] && isRunning ? `<button class="btn-sm" onclick="goSection('${APP_PANELS[app.id].panels[0]?.id || 'panel-'+app.id}')" title="Panel"><i class="ti ti-layout-sidebar-right" style="font-size:10px"></i></button>` : ''}
       ${domain ? `<a class="btn-sm" href="${domain}" target="_blank" rel="noopener" title="Ouvrir" style="text-decoration:none"><i class="ti ti-external-link" style="font-size:10px"></i></a>` : ''}
       <button class="btn-sm" onclick="openLogs('${app.id}')" title="Logs"><i class="ti ti-terminal-2" style="font-size:10px"></i></button>
+      ${HARDCODED_PARAMS[app.id]?.length ? `<button class="btn-sm" onclick="openReconfigureModal('${app.id}')" title="Reconfigurer"><i class="ti ti-settings" style="font-size:10px"></i></button>` : ''}
       ${isRunning
         ? `<button class="btn-sm" onclick="openInspect('${app.id}')" title="Inspecter"><i class="ti ti-info-circle" style="font-size:10px"></i></button>
            <button class="btn-sm" onclick="appAction('${app.id}','restart')" title="Redémarrer"><i class="ti ti-refresh" style="font-size:10px"></i></button>
@@ -2850,6 +2851,16 @@ async function loadDashboard() {
       <div id="dash-arr-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
 
+    ${S.apps.some(a => a.id === 'linkding' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MARQUE-PAGES</div>
+      <div id="dash-linkding-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'vaultwarden' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// GESTIONNAIRE MOTS DE PASSE</div>
+      <div id="dash-vaultwarden-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
     ${S.apps.some(a => a.id === 'navidrome' && a.status === 'running') ? `
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MUSIQUE</div>
       <div id="dash-navidrome-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
@@ -2880,6 +2891,21 @@ async function loadDashboard() {
       <div id="dash-changedetect-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
 
+    ${S.apps.some(a => a.id === 'wg-easy' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// VPN</div>
+      <div id="dash-wgeasy-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'wikijs' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// WIKI</div>
+      <div id="dash-wikijs-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'komga' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// BD / MANGAS</div>
+      <div id="dash-komga-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// CONTENEURS</div>
     <div id="dash-containers-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
 
@@ -2907,6 +2933,12 @@ async function loadDashboard() {
   if (S.apps.some(a => a.id === 'arr-stack' && a.status === 'running')) {
     loadDashArrWidget();
   }
+  if (S.apps.some(a => a.id === 'linkding' && a.status === 'running')) {
+    loadDashLinkdingWidget();
+  }
+  if (S.apps.some(a => a.id === 'vaultwarden' && a.status === 'running')) {
+    loadDashVaultwardenWidget();
+  }
   if (S.apps.some(a => a.id === 'navidrome' && a.status === 'running')) {
     loadDashNavidromeWidget();
   }
@@ -2925,9 +2957,236 @@ async function loadDashboard() {
   if (S.apps.some(a => a.id === 'changedetection' && a.status === 'running')) {
     loadDashChangedetectWidget();
   }
+  if (S.apps.some(a => a.id === 'wg-easy' && a.status === 'running')) {
+    loadDashWgEasyWidget();
+  }
+  if (S.apps.some(a => a.id === 'wikijs' && a.status === 'running')) {
+    loadDashWikiJsWidget();
+  }
+  if (S.apps.some(a => a.id === 'komga' && a.status === 'running')) {
+    loadDashKomgaWidget();
+  }
   loadDashContainersWidget();
   loadDashEventsWidget();
   loadDashJournalErrorsWidget();
+}
+
+async function loadDashLinkdingWidget() {
+  const w = document.getElementById('dash-linkding-widget');
+  if (!w) return;
+  let bookmarkCount = 0, recentBookmarks = [];
+  try {
+    const r = await fetch('/ui/proxy/linkding/api/bookmarks/?limit=3');
+    if (r.ok) {
+      const d = await r.json();
+      bookmarkCount = d.count || 0;
+      recentBookmarks = d.results || [];
+    }
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'linkding')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  const rows = recentBookmarks.slice(0, 3).map(b => `
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--card);border-radius:4px;border:1px solid var(--border);margin-bottom:3px">
+      <i class="ti ti-bookmark" style="font-size:9px;color:var(--vio);flex-shrink:0"></i>
+      <div style="flex:1;min-width:0">
+        ${b.url ? `<a href="${escapeHtml(b.url)}" target="_blank" rel="noopener" style="font-size:8px;font-weight:600;color:var(--text1);text-decoration:none;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || b.url)}</a>`
+          : `<div style="font-size:8px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || '—')}</div>`}
+      </div>
+    </div>`).join('');
+
+  w.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="font-size:13px">🔖</span>
+      <span style="font-size:9px;font-weight:700">Linkding</span>
+      <span style="font-size:8px;color:var(--text3)">${bookmarkCount} favori(s)</span>
+      <div style="margin-left:auto;display:flex;gap:4px">
+        ${openBtn}
+        <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-linkding-bookmarks')">
+          <i class="ti ti-bookmark" style="font-size:9px"></i>
+        </button>
+      </div>
+    </div>
+    ${rows || '<div style="font-size:9px;color:var(--text3);text-align:center;padding:6px 0">Aucun marque-page.</div>'}`;
+}
+
+async function loadDashVaultwardenWidget() {
+  const w = document.getElementById('dash-vaultwarden-widget');
+  if (!w) return;
+  const appDomain = S.apps.find(a => a.id === 'vaultwarden')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+  const adminBtn = appDomain
+    ? `<a href="https://${appDomain}/admin" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-settings" style="font-size:9px"></i> ADMIN</a>`
+    : '';
+
+  let userCount = null;
+  try {
+    const r = await fetch('/ui/proxy/vaultwarden/admin/users/overview');
+    if (r.ok) {
+      const html = await r.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const rows = doc.querySelectorAll('table tbody tr');
+      userCount = rows.length;
+    }
+  } catch(e) {}
+
+  const userStr = userCount === null ? '—' : String(userCount);
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:13px">🔐</span>
+        <span style="font-size:9px;font-weight:700">Vaultwarden</span>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          ${userCount !== null ? `<div style="text-align:center"><div style="font-size:18px;font-weight:800;color:var(--accent)">${userStr}</div><div style="font-size:7px;color:var(--text3);letter-spacing:.5px">COMPTES</div></div>` : ''}
+          <div style="display:flex;gap:4px">
+            ${openBtn}
+            ${adminBtn}
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashWgEasyWidget() {
+  const w = document.getElementById('dash-wgeasy-widget');
+  if (!w) return;
+  let clients = null;
+  try {
+    const r = await fetch('/ui/proxy/wg-easy/api/wireguard/client');
+    if (r.ok) clients = await r.json();
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'wg-easy')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  if (!Array.isArray(clients)) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <i class="ti ti-vpn" style="color:var(--text3);font-size:13px"></i>
+      <span style="font-size:9px;color:var(--text3)">WG-Easy indisponible</span>
+      <div style="margin-left:auto">${openBtn}</div>
+    </div>`;
+    return;
+  }
+
+  const connected = clients.filter(c => c.endpoint && c.latestHandshakeAt && (Date.now() - new Date(c.latestHandshakeAt).getTime()) < 3 * 60000);
+  const enabled = clients.filter(c => c.enabled !== false);
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <i class="ti ti-shield-lock" style="font-size:13px;color:var(--vio)"></i>
+        <span style="font-size:9px;font-weight:700">WireGuard VPN</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          ${openBtn}
+          <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-wgeasy-peers')">
+            <i class="ti ti-vpn" style="font-size:9px"></i>
+          </button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;text-align:center">
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:${connected.length > 0 ? 'var(--green-b)' : 'var(--text3)'}">${connected.length}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">CONNECTÉS</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:var(--accent)">${enabled.length}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">ACTIVÉS</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:var(--text2)">${clients.length}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">TOTAL</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashWikiJsWidget() {
+  const w = document.getElementById('dash-wikijs-widget');
+  if (!w) return;
+  const appDomain = S.apps.find(a => a.id === 'wikijs')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  let pageCount = null;
+  try {
+    const r = await fetch('/ui/proxy/wikijs/graphql', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: '{ pages { list(orderBy: UPDATED) { id title updatedAt } } }' }),
+    });
+    if (r.ok) { const d = await r.json(); pageCount = d?.data?.pages?.list?.length ?? null; }
+  } catch(e) {}
+
+  const pageStr = pageCount === null ? '—' : String(pageCount);
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:13px">📖</span>
+        <span style="font-size:9px;font-weight:700">Wiki.js</span>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          <span style="font-size:20px;font-weight:800;color:var(--accent)">${escapeHtml(pageStr)}</span>
+          <span style="font-size:7px;color:var(--text3);letter-spacing:.5px">PAGES</span>
+          <div style="display:flex;gap:4px">
+            ${openBtn}
+            <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-wikijs-pages')">
+              <i class="ti ti-file-text" style="font-size:9px"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashKomgaWidget() {
+  const w = document.getElementById('dash-komga-widget');
+  if (!w) return;
+  let seriesCount = 0, bookCount = 0;
+  try {
+    const [rs, rb] = await Promise.all([
+      fetch('/ui/proxy/komga/api/v1/series?page=0&size=0'),
+      fetch('/ui/proxy/komga/api/v1/books?page=0&size=0'),
+    ]);
+    if (rs.ok) { const d = await rs.json(); seriesCount = d?.totalElements || 0; }
+    if (rb.ok) { const d = await rb.json(); bookCount = d?.totalElements || 0; }
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'komga')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <span style="font-size:13px">📔</span>
+        <span style="font-size:9px;font-weight:700">Komga</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          ${openBtn}
+          <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-komga-library')">
+            <i class="ti ti-books" style="font-size:9px"></i>
+          </button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px;text-align:center">
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:var(--accent)">${seriesCount}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">SÉRIES</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:var(--accent)">${bookCount}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">VOLUMES</div>
+        </div>
+      </div>
+    </div>`;
 }
 
 async function loadDashGrocyWidget() {
