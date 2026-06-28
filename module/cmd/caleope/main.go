@@ -519,37 +519,57 @@ func cmdList(args []string) {
 	}
 
 	// Mode humain : tableau formaté
-	// tabwriter = bibliothèque Go pour aligner les colonnes
-	apps, ok := resp.Data.([]interface{})
-	if !ok || len(apps) == 0 {
-		fmt.Println("Aucune application installée.")
-		return
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+
+	// Le daemon retourne {apps: [...], services: [...]}
+	var appsRaw []interface{}
+	var servicesRaw []interface{}
+	if dataMap, ok := resp.Data.(map[string]interface{}); ok {
+		if a, ok := dataMap["apps"].([]interface{}); ok {
+			appsRaw = a
+		}
+		if s, ok := dataMap["services"].([]interface{}); ok {
+			servicesRaw = s
+		}
+	} else {
+		// Compat descendante : ancien daemon retourne []interface{} directement
+		appsRaw, _ = resp.Data.([]interface{})
 	}
 
-	// tabwriter.NewWriter(os.Stdout, minWidth, tabWidth, padding, padChar, flags)
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NOM\tSTATUT\tVERSION\tPORT\tDÉPÔT")
-	fmt.Fprintln(w, "───\t──────\t───────\t────\t─────")
-
-	for _, a := range apps {
-		app, _ := a.(map[string]interface{})
-		name := strField(app, "id")
-		status := formatStatus(strField(app, "status"))
-		version := strField(app, "version")
-		repo := strField(app, "repository")
-
-		// Extraire le premier port
-		port := "-"
-		if ports, ok := app["ports"].([]interface{}); ok && len(ports) > 0 {
-			if p, ok := ports[0].(map[string]interface{}); ok {
-				if h, ok := p["host"].(float64); ok && h > 0 {
-					port = fmt.Sprintf("%d", int(h))
+	if len(appsRaw) == 0 {
+		fmt.Println("Aucune application installée.")
+	} else {
+		fmt.Fprintln(w, "NOM\tSTATUT\tVERSION\tPORT\tDÉPÔT")
+		fmt.Fprintln(w, "───\t──────\t───────\t────\t─────")
+		for _, a := range appsRaw {
+			app, _ := a.(map[string]interface{})
+			name := strField(app, "id")
+			status := formatStatus(strField(app, "status"))
+			version := strField(app, "version")
+			repo := strField(app, "repository")
+			port := "-"
+			if ports, ok := app["ports"].([]interface{}); ok && len(ports) > 0 {
+				if p, ok := ports[0].(map[string]interface{}); ok {
+					if h, ok := p["host"].(float64); ok && h > 0 {
+						port = fmt.Sprintf("%d", int(h))
+					}
 				}
 			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", name, status, version, port, repo)
 		}
-
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", name, status, version, port, repo)
 	}
+
+	if len(servicesRaw) > 0 {
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "SERVICES PLATEFORME")
+		fmt.Fprintln(w, "NOM\tSTATUT")
+		fmt.Fprintln(w, "───\t──────")
+		for _, s := range servicesRaw {
+			svc, _ := s.(map[string]interface{})
+			fmt.Fprintf(w, "%s\t%s\n", strField(svc, "id"), formatStatus(strField(svc, "status")))
+		}
+	}
+
 	w.Flush()
 }
 

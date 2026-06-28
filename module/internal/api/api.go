@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
@@ -391,12 +392,38 @@ func (s *Server) handleRemove(args map[string]string) error {
 	return s.installer.Remove(appID, keepData)
 }
 
+// isPlatformService indique si l'id correspond à un service systemd de la plateforme.
+func isPlatformService(id string) bool {
+	return id == "caleope-ui" || id == "caleoped"
+}
+
+// systemServiceStatus retourne "running" si le service systemd est actif, sinon "stopped".
+func systemServiceStatus(name string) string {
+	out, err := exec.Command("systemctl", "is-active", name).Output()
+	if err != nil {
+		return "stopped"
+	}
+	if strings.TrimSpace(string(out)) == "active" {
+		return "running"
+	}
+	return "stopped"
+}
+
 func (s *Server) handleList() (interface{}, error) {
 	apps, err := s.rt.ListApps()
 	if err != nil {
 		return nil, err
 	}
-	return apps, nil
+
+	services := []map[string]interface{}{
+		{"id": "caleope-ui", "name": "Caleope UI", "status": systemServiceStatus("caleope-ui"), "type": "system"},
+		{"id": "caleoped", "name": "Caleope Daemon", "status": systemServiceStatus("caleoped"), "type": "system"},
+	}
+
+	return map[string]interface{}{
+		"apps":     apps,
+		"services": services,
+	}, nil
 }
 
 func (s *Server) handleInfo(args map[string]string) (interface{}, error) {
@@ -413,16 +440,25 @@ func (s *Server) handleLogs(args map[string]string) (interface{}, error) {
 		return nil, fmt.Errorf("argument 'app' manquant")
 	}
 
-	app, err := s.rt.GetApp(appID)
-	if err != nil {
-		return nil, err
-	}
-
 	tail := 100
 	if t := args["tail"]; t != "" {
 		if n, err := fmt.Sscanf(t, "%d", &tail); n != 1 || err != nil {
 			tail = 100
 		}
+	}
+
+	if isPlatformService(appID) {
+		out, err := exec.Command("journalctl", "-u", appID,
+			fmt.Sprintf("-n%d", tail), "--no-pager").Output()
+		if err != nil {
+			return nil, fmt.Errorf("journalctl %s: %w", appID, err)
+		}
+		return map[string]string{"logs": string(out)}, nil
+	}
+
+	app, err := s.rt.GetApp(appID)
+	if err != nil {
+		return nil, err
 	}
 
 	logs, err := s.dc.Logs(app.ComposeDir, tail)
@@ -452,6 +488,9 @@ func (s *Server) handleStop(args map[string]string) error {
 	if !ok || appID == "" {
 		return fmt.Errorf("argument 'app' manquant")
 	}
+	if isPlatformService(appID) {
+		return exec.Command("systemctl", "stop", appID).Run()
+	}
 	app, err := s.rt.GetApp(appID)
 	if err != nil {
 		return err
@@ -469,6 +508,9 @@ func (s *Server) handleStart(args map[string]string) error {
 	if !ok || appID == "" {
 		return fmt.Errorf("argument 'app' manquant")
 	}
+	if isPlatformService(appID) {
+		return exec.Command("systemctl", "start", appID).Run()
+	}
 	app, err := s.rt.GetApp(appID)
 	if err != nil {
 		return err
@@ -485,6 +527,17 @@ func (s *Server) handleRestart(args map[string]string) error {
 	appID, ok := args["app"]
 	if !ok || appID == "" {
 		return fmt.Errorf("argument 'app' manquant")
+	}
+	if isPlatformService(appID) {
+		if appID == "caleoped" {
+			// Le daemon redémarre lui-même : on laisse la réponse partir avant de couper.
+			go func() {
+				time.Sleep(300 * time.Millisecond)
+				_ = exec.Command("systemctl", "restart", "caleoped").Run()
+			}()
+			return nil
+		}
+		return exec.Command("systemctl", "restart", appID).Run()
 	}
 	app, err := s.rt.GetApp(appID)
 	if err != nil {
