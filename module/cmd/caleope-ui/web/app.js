@@ -2907,18 +2907,28 @@ async function loadDashUptimeWidget() {
   if (!w) return;
   let monitors = null;
   try {
-    const r = await fetch('/ui/proxy/uptime-kuma/api/status-page/heartbeat/default');
-    if (r.ok) {
-      const d = await r.json();
-      monitors = Object.values(d.heartbeatList || {}).map(beats => {
-        const last = beats[beats.length - 1] || {};
-        return { status: last.status, msg: last.msg || '' };
-      });
+    const epCtrl = new AbortController();
+    const epTimer = setTimeout(() => epCtrl.abort(), 4000);
+    const epResp = await fetch('/ui/proxy/uptime-kuma/api/entry-page', { signal: epCtrl.signal }).catch(() => null);
+    clearTimeout(epTimer);
+    const epData = epResp?.ok ? await epResp.json().catch(() => null) : null;
+    const slug = epData?.entryPage || null;
+    if (slug) {
+      const hbCtrl = new AbortController();
+      const hbTimer = setTimeout(() => hbCtrl.abort(), 6000);
+      const r = await fetch(`/ui/proxy/uptime-kuma/api/status-page/heartbeat/${slug}`, { signal: hbCtrl.signal }).catch(() => null);
+      clearTimeout(hbTimer);
+      if (r?.ok) {
+        const d = await r.json();
+        monitors = Object.values(d.heartbeatList || {}).map(beats => {
+          const last = beats[beats.length - 1] || {};
+          return { status: last.status, msg: last.msg || '' };
+        });
+      }
     }
   } catch(e) {}
 
   if (!monitors) {
-    // Fallback: essai API JSON directe (nécessite clé API)
     w.innerHTML = '';
     return;
   }
@@ -5010,8 +5020,24 @@ async function loadUptimeMonitors() {
   const adminLink = appDomain ? `<a href="https://${appDomain}" target="_blank" rel="noopener"
     class="btn btn-vio" style="text-decoration:none"><i class="ti ti-external-link"></i>OUVRIR UPTIME KUMA</a>` : '';
 
-  const r = await fetch('/ui/proxy/uptime-kuma/api/status-page/default');
-  if (!r.ok) {
+  const epCtrl = new AbortController();
+  const epTimer = setTimeout(() => epCtrl.abort(), 4000);
+  const epResp = await fetch('/ui/proxy/uptime-kuma/api/entry-page', { signal: epCtrl.signal }).catch(() => null);
+  clearTimeout(epTimer);
+  const epData = epResp?.ok ? await epResp.json().catch(() => null) : null;
+  const ukSlug = epData?.entryPage || null;
+  if (!ukSlug) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-heartbeat"></i></div>
+      <div class="empty-title">AUCUNE PAGE DE STATUT</div>
+      <div class="empty-sub">Créer un compte admin puis une page de statut dans Uptime Kuma.</div>
+      ${adminLink ? `<div style="margin-top:12px">${adminLink}</div>` : ''}</div>`;
+    return;
+  }
+  const spCtrl = new AbortController();
+  const spTimer = setTimeout(() => spCtrl.abort(), 8000);
+  const r = await fetch(`/ui/proxy/uptime-kuma/api/status-page/${ukSlug}`, { signal: spCtrl.signal }).catch(() => null);
+  clearTimeout(spTimer);
+  if (!r?.ok) {
     c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-heartbeat"></i></div>
       <div class="empty-title">UPTIME KUMA INDISPONIBLE</div>
       <div class="empty-sub">Vérifier que le service est démarré.</div>
@@ -5064,8 +5090,25 @@ async function loadUptimeIncidents() {
   if (!c) return;
   c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
 
-  const r = await fetch('/ui/proxy/uptime-kuma/api/status-page/default');
-  if (!r.ok) { c.innerHTML = `<div class="empty-msg">Indisponible.</div>`; return; }
+  const incEpCtrl = new AbortController();
+  const incEpTimer = setTimeout(() => incEpCtrl.abort(), 4000);
+  const incEpResp = await fetch('/ui/proxy/uptime-kuma/api/entry-page', { signal: incEpCtrl.signal }).catch(() => null);
+  clearTimeout(incEpTimer);
+  const incEpData = incEpResp?.ok ? await incEpResp.json().catch(() => null) : null;
+  const incSlug = incEpData?.entryPage || null;
+  if (!incSlug) {
+    c.innerHTML = `<div class="empty-state">
+      <div class="empty-icon" style="color:var(--green-b)"><i class="ti ti-circle-check"></i></div>
+      <div class="empty-title" style="color:var(--green-b)">AUCUN INCIDENT</div>
+      <div class="empty-sub">Configurer Uptime Kuma pour activer le suivi d'incidents.</div>
+    </div>`;
+    return;
+  }
+  const incCtrl = new AbortController();
+  const incTimer = setTimeout(() => incCtrl.abort(), 8000);
+  const r = await fetch(`/ui/proxy/uptime-kuma/api/status-page/${incSlug}`, { signal: incCtrl.signal }).catch(() => null);
+  clearTimeout(incTimer);
+  if (!r?.ok) { c.innerHTML = `<div class="empty-msg">Indisponible.</div>`; return; }
 
   const data = await r.json();
   const incident = data.incident;

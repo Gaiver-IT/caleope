@@ -85,6 +85,15 @@ type navidromeTokenCache struct {
 
 var navidromeCache = &navidromeTokenCache{}
 
+// wgEasySessionCache : cookie de session WG-Easy (POST /api/session → cookie)
+type wgEasySessionCache struct {
+	mu      sync.Mutex
+	cookie  string
+	expires time.Time
+}
+
+var wgEasyCache = &wgEasySessionCache{}
+
 // ghostAdminJWT génère un JWT signé HMAC-SHA256 pour l'Admin API Ghost.
 // apiKey format : "keyid:hexsecret" (copié depuis Ghost admin → Intégrations)
 func ghostAdminJWT(apiKey string) (string, error) {
@@ -471,11 +480,12 @@ func main() {
 		// Homarr — dashboard de liens, sans auth proxy
 		"homarr": {containerName: "homarr", containerPort: 7575},
 
-		// WG-Easy — interface web WireGuard
-		"wg-easy": {containerName: "wg-easy", containerPort: 51821},
+		// WG-Easy — interface web WireGuard (session cookie via POST /api/session)
+		"wg-easy": {basicPassKey: "WG_ADMIN_PASSWORD", authScheme: "WGEasySession",
+			containerName: "wg-easy", containerPort: 51821},
 
-		// CrowdSec — LAPI locale pour consulter alertes/décisions (bouncer API key)
-		"crowdsec": {tokenKey: "CROWDSEC_LOCAL_API_KEY", authScheme: "X-Api-Key",
+		// CrowdSec — bouncer API key pour consulter décisions/alertes
+		"crowdsec": {tokenKey: "CROWDSEC_BOUNCER_API_KEY", authScheme: "X-Api-Key",
 			containerName: "crowdsec", containerPort: 8080},
 
 		// Grocy — gestion inventaire maison, API key dans GROCY-API-KEY header
@@ -798,6 +808,51 @@ func main() {
 			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
 			outReq.Header.Set("Session-Token", glpiToken)
 			outReq.Header.Set("Accept", "application/json")
+			resp, err := client.Do(outReq)
+			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			defer resp.Body.Close()
+			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+			w.Header().Set("X-Proxy-App", appID)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+
+		// WGEasySession : POST /api/session avec password → cookie de session (expiry ~24h)
+		if cfg.authScheme == "WGEasySession" {
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
+			if pass == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "wg-easy: WG_ADMIN_PASSWORD non disponible")
+				return
+			}
+			wgEasyCache.mu.Lock()
+			wgCookie := wgEasyCache.cookie
+			if wgCookie == "" || time.Now().After(wgEasyCache.expires) {
+				loginBody := strings.NewReader(fmt.Sprintf(`{"password":%q}`, pass))
+				loginReq, _ := http.NewRequest(http.MethodPost, targetBase+"/api/session", loginBody)
+				loginReq.Header.Set("Content-Type", "application/json")
+				loginResp, err := client.Do(loginReq)
+				if err == nil {
+					for _, c := range loginResp.Cookies() {
+						if c.Name == "connect.sid" {
+							wgCookie = c.Name + "=" + c.Value
+							wgEasyCache.cookie = wgCookie
+							wgEasyCache.expires = time.Now().Add(22 * time.Hour)
+							break
+						}
+					}
+					loginResp.Body.Close()
+				}
+			}
+			wgEasyCache.mu.Unlock()
+			if wgCookie == "" {
+				jsonErr(w, http.StatusServiceUnavailable, "wg-easy: impossible d'obtenir un cookie de session")
+				return
+			}
+			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			outReq.Header.Set("Cookie", wgCookie)
 			resp, err := client.Do(outReq)
 			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
 			defer resp.Body.Close()
