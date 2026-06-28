@@ -2845,7 +2845,7 @@ async function loadDashboard() {
       <div id="dash-memos-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
 
-    ${(S.apps.some(a => a.id === 'arr-radarr' && a.status === 'running') || S.apps.some(a => a.id === 'arr-sonarr' && a.status === 'running')) ? `
+    ${S.apps.some(a => a.id === 'arr-stack' && a.status === 'running') ? `
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// MÉDIAS RÉCENTS</div>
       <div id="dash-arr-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
@@ -2868,6 +2868,16 @@ async function loadDashboard() {
     ${S.apps.some(a => a.id === 'freshrss' && a.status === 'running') ? `
       <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// FLUX RSS</div>
       <div id="dash-freshrss-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'grocy' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// STOCKS GROCY</div>
+      <div id="dash-grocy-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
+    ` : ''}
+
+    ${S.apps.some(a => a.id === 'changedetection' && a.status === 'running') ? `
+      <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// SURVEILLANCE WEB</div>
+      <div id="dash-changedetect-widget"><div class="dash-loading" style="padding:8px 0"><span class="spinner"></span></div></div>
     ` : ''}
 
     <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// CONTENEURS</div>
@@ -2894,7 +2904,7 @@ async function loadDashboard() {
   if (S.apps.some(a => a.id === 'memos' && a.status === 'running')) {
     loadDashMemosWidget();
   }
-  if (S.apps.some(a => (a.id === 'arr-radarr' || a.id === 'arr-sonarr') && a.status === 'running')) {
+  if (S.apps.some(a => a.id === 'arr-stack' && a.status === 'running')) {
     loadDashArrWidget();
   }
   if (S.apps.some(a => a.id === 'navidrome' && a.status === 'running')) {
@@ -2909,9 +2919,131 @@ async function loadDashboard() {
   if (S.apps.some(a => a.id === 'freshrss' && a.status === 'running')) {
     loadDashFreshRssWidget();
   }
+  if (S.apps.some(a => a.id === 'grocy' && a.status === 'running')) {
+    loadDashGrocyWidget();
+  }
+  if (S.apps.some(a => a.id === 'changedetection' && a.status === 'running')) {
+    loadDashChangedetectWidget();
+  }
   loadDashContainersWidget();
   loadDashEventsWidget();
   loadDashJournalErrorsWidget();
+}
+
+async function loadDashGrocyWidget() {
+  const w = document.getElementById('dash-grocy-widget');
+  if (!w) return;
+  let stock = null, tasks = null;
+  try {
+    const [rs, rt] = await Promise.all([
+      fetch('/ui/proxy/grocy/api/stock'),
+      fetch('/ui/proxy/grocy/api/tasks?done=0'),
+    ]);
+    if (rs.ok) stock = await rs.json();
+    if (rt.ok) tasks = await rt.json();
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'grocy')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  if (!stock) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <span style="font-size:13px">🛒</span>
+      <span style="font-size:9px;color:var(--text3)">Grocy indisponible</span>
+      <div style="margin-left:auto">${openBtn}</div>
+    </div>`;
+    return;
+  }
+
+  const lowStock = Array.isArray(stock) ? stock.filter(p => {
+    if (!p.min_stock_amount) return false;
+    return parseFloat(p.amount || 0) <= parseFloat(p.min_stock_amount);
+  }) : [];
+  const dueSoon = Array.isArray(stock) ? stock.filter(p =>
+    p.best_before_date && new Date(p.best_before_date) < new Date(Date.now() + 7 * 86400000)
+  ) : [];
+  const pendingTasks = Array.isArray(tasks) ? tasks.length : 0;
+
+  w.innerHTML = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <span style="font-size:13px">🛒</span>
+        <span style="font-size:9px;font-weight:700">Grocy</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          ${openBtn}
+          <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-grocy-stock')">
+            <i class="ti ti-shopping-cart" style="font-size:9px"></i>
+          </button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;text-align:center">
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:${lowStock.length > 0 ? 'var(--warn)' : 'var(--text3)'}">${lowStock.length}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">STOCK BAS</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:${dueSoon.length > 0 ? 'var(--red-b)' : 'var(--text3)'}">${dueSoon.length}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">EXPIRE BIENTÔT</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:4px;padding:6px 4px">
+          <div style="font-size:16px;font-weight:800;color:${pendingTasks > 0 ? 'var(--blue)' : 'var(--text3)'}">${pendingTasks}</div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:.5px">TÂCHES</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadDashChangedetectWidget() {
+  const w = document.getElementById('dash-changedetect-widget');
+  if (!w) return;
+  let watches = null;
+  try {
+    const r = await fetch('/ui/proxy/changedetection/api/v1/watch?limit=50', { headers: { Accept: 'application/json' } });
+    if (r.ok) { const d = await r.json(); watches = Array.isArray(d) ? d : Object.values(d); }
+  } catch(e) {}
+
+  const appDomain = S.apps.find(a => a.id === 'changedetection')?.domain;
+  const openBtn = appDomain
+    ? `<a href="https://${appDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px"><i class="ti ti-external-link" style="font-size:9px"></i></a>`
+    : '';
+
+  if (!watches) {
+    w.innerHTML = `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px">
+      <i class="ti ti-eye-off" style="color:var(--text3);font-size:13px"></i>
+      <span style="font-size:9px;color:var(--text3)">Changedetection indisponible</span>
+      <div style="margin-left:auto">${openBtn}</div>
+    </div>`;
+    return;
+  }
+
+  const changed = watches.filter(w => w.last_changed && w.last_changed > 0).length;
+  const recent = watches.filter(w => w.last_changed && w.last_changed > 0)
+    .sort((a, b) => b.last_changed - a.last_changed).slice(0, 3);
+
+  const rows = recent.length === 0
+    ? `<div style="font-size:9px;color:var(--text3);text-align:center;padding:8px 0">Aucune modification détectée.</div>`
+    : recent.map(r => {
+        const title = r.title || r.url || '—';
+        const dt = r.last_changed ? new Date(r.last_changed * 1000).toLocaleDateString('fr-FR') : '';
+        return `<div style="padding:5px 8px;background:var(--card);border-radius:5px;border:1px solid var(--border);border-left:3px solid var(--warn);margin-bottom:4px">
+          <div style="font-size:9px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(title)}</div>
+          <div style="font-size:7px;color:var(--text3)">${escapeHtml(dt)}</div>
+        </div>`;
+      }).join('');
+
+  w.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="font-size:9px;color:var(--text3)">${watches.length} surveillance(s) · ${changed} modifiée(s)</span>
+      <div style="margin-left:auto;display:flex;gap:4px">
+        ${openBtn}
+        <button class="btn-sm" style="font-size:8px" onclick="goSection('panel-changedetection-watches')">
+          <i class="ti ti-eye" style="font-size:9px"></i>
+        </button>
+      </div>
+    </div>
+    ${rows}`;
 }
 
 async function loadDashAdGuardWidget() {
@@ -3225,8 +3357,9 @@ async function loadDashGiteaWidget() {
 async function loadDashArrWidget() {
   const w = document.getElementById('dash-arr-widget');
   if (!w) return;
-  const radarrRunning = S.apps.some(a => a.id === 'arr-radarr' && a.status === 'running');
-  const sonarrRunning = S.apps.some(a => a.id === 'arr-sonarr' && a.status === 'running');
+  const arrRunning = S.apps.some(a => a.id === 'arr-stack' && a.status === 'running');
+  const radarrRunning = arrRunning;
+  const sonarrRunning = arrRunning;
 
   let radarrMovies = null, sonarrHistory = null;
   try {
@@ -3264,8 +3397,8 @@ async function loadDashArrWidget() {
     return;
   }
 
-  const appRadarrDomain = S.apps.find(a => a.id === 'arr-radarr')?.domain;
-  const appSonarrDomain = S.apps.find(a => a.id === 'arr-sonarr')?.domain;
+  const arrApp = S.apps.find(a => a.id === 'arr-stack');
+  const arrDomain = arrApp?.domain;
 
   const rows = items.map(it => `
     <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--card);border-radius:5px;border:1px solid var(--border);margin-bottom:4px">
@@ -3277,8 +3410,9 @@ async function loadDashArrWidget() {
     </div>`).join('');
 
   const arrLinks = [
-    radarrRunning && appRadarrDomain ? `<a href="https://${appRadarrDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px">🎬</a>` : '',
-    sonarrRunning && appSonarrDomain ? `<a href="https://${appSonarrDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px">📺</a>` : '',
+    arrDomain ? `<a href="https://${arrDomain}" target="_blank" rel="noopener" class="btn-sm" style="text-decoration:none;font-size:8px">📡 ARR</a>` : '',
+    `<button class="btn-sm" style="font-size:8px" onclick="goSection('panel-arr-radarr')"><i class="ti ti-movie" style="font-size:9px"></i></button>`,
+    `<button class="btn-sm" style="font-size:8px" onclick="goSection('panel-arr-sonarr')"><i class="ti ti-device-tv" style="font-size:9px"></i></button>`,
   ].filter(Boolean).join('');
 
   w.innerHTML = `
