@@ -1283,7 +1283,7 @@ print_summary() {
 main() {
     parse_args "$@"
 
-    clear
+    clear 2>/dev/null || true
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════╗"
     echo "║      Caleope — Installation              ║"
