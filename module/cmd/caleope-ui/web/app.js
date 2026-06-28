@@ -191,6 +191,8 @@ const HARDCODED_PARAMS = {
 
   // ── authentik (Identity Provider / SSO) ──────────────────────────────────────
   'authentik': [
+    { id: '_ram_info', label: '', type: 'info',
+      description: '⚠️ Authentik nécessite ~600 Mo de RAM minimum. Si votre serveur a moins de 2 Go de RAM, préférez une solution plus légère comme Authelia ou gérez l\'accès au niveau réseau.' },
     { id: 'admin_email',    label: 'Email administrateur',   type: 'text',   default: '',       required: true,
       description: 'Email du premier compte admin Authentik' },
     { id: 'admin_password', label: 'Mot de passe admin',     type: 'secret', default: '',       required: true,
@@ -1171,7 +1173,11 @@ async function openInstallModal(appId) {
 // Rendu d'un champ de paramètre dans le modal install/reconfigure.
 function renderParamField(p) {
   let inner;
-  if (p.type === 'bool') {
+  if (p.type === 'info') {
+    return `<div id="param-wrap-${p.id}" class="field full">
+      <div style="padding:8px 12px;border-radius:6px;background:rgba(217,119,6,.08);border:1px solid var(--warn);font-size:9px;color:var(--text2);line-height:1.5">${p.description || ''}</div>
+    </div>`;
+  } else if (p.type === 'bool') {
     inner = `
       <div style="display:flex;gap:6px">
         <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text2);cursor:pointer">
@@ -2867,6 +2873,137 @@ function resetDashBlocks() {
   notify('Tous les blocs affichés', 'ok');
 }
 
+// ── Dashboard mode simple (Heimdall-style) ────────────────────────────────────
+function getDashMode() {
+  return localStorage.getItem('caleope-dash-mode') || 'extended';
+}
+function toggleDashMode() {
+  const cur = getDashMode();
+  localStorage.setItem('caleope-dash-mode', cur === 'extended' ? 'simple' : 'extended');
+  loadDashboard();
+}
+
+function _sparkline(values, color, w, h) {
+  if (!values || values.length < 2) return '';
+  const max = Math.max(...values, 1);
+  const pts = values.map((v, i) => {
+    const x = Math.round(i / (values.length - 1) * w);
+    const y = Math.round(h - (v / max) * (h - 2) - 1);
+    return `${x},${y}`;
+  }).join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;overflow:visible">
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+async function loadDashSimple() {
+  const c = document.getElementById('content-dashboard');
+  if (!c) return;
+
+  const ram  = S.stats.mem_total_mb  ? Math.round(S.stats.mem_used_mb  / S.stats.mem_total_mb  * 100) : 0;
+  const disk = S.stats.disk_total_gb ? Math.round(S.stats.disk_used_gb / S.stats.disk_total_gb * 100) : 0;
+  const cpu  = Math.round(S.stats.cpu_pct || 0);
+
+  // Fetch history for sparklines (best-effort)
+  let hist = null;
+  try {
+    const rh = await fetch('/sys/stats/history');
+    if (rh.ok) { const dh = await rh.json(); hist = dh.samples || null; }
+  } catch(e) {}
+
+  // Fetch health (best-effort, no await → non-blocking UI)
+  let healthMap = {};
+  fetch('/sys/healthcheck').then(r => r.ok ? r.json() : null).then(d => {
+    if (!d) return;
+    (d.containers || []).forEach(c => { healthMap[c.name] = c; });
+    // Mettre à jour les badges health après chargement
+    document.querySelectorAll('[data-hc]').forEach(el => {
+      const h = healthMap[el.dataset.hc];
+      if (!h) return;
+      const isHealthy = h.health === 'healthy' || (h.health === 'none' && h.status === 'running');
+      const isUnhealthy = h.health === 'unhealthy';
+      el.innerHTML = isHealthy
+        ? `<span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--green-b)" title="Healthy"></span>`
+        : isUnhealthy
+        ? `<span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--red-b)" title="Unhealthy"></span>`
+        : '';
+    });
+  }).catch(() => {});
+
+  const cpuHist  = hist ? hist.map(s => s.cpu)  : [];
+  const ramHist  = hist ? hist.map(s => s.ram)  : [];
+  const diskHist = hist ? hist.map(s => s.disk) : [];
+
+  const runApps  = S.apps.filter(a => a.status === 'running');
+  const stopApps = S.apps.filter(a => a.status !== 'running');
+  const allApps  = [...runApps, ...stopApps];
+
+  const sysCard = `
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;gap:20px;flex-wrap:wrap;align-items:center">
+      ${[
+        { label:'CPU',  pct: cpu,  hist: cpuHist,  color:'var(--vio-b)' },
+        { label:'RAM',  pct: ram,  hist: ramHist,  color:'var(--blue)' },
+        { label:'DISK', pct: disk, hist: diskHist, color: disk > 85 ? 'var(--red-b)' : 'var(--ok)' },
+      ].map(m => {
+        const col = m.pct > 85 ? 'var(--red-b)' : m.pct > 70 ? 'var(--warn)' : m.color;
+        return `<div style="display:flex;align-items:center;gap:10px">
+          <div>
+            <div style="font-size:8px;color:var(--text3);letter-spacing:1px">${m.label}</div>
+            <div style="font-size:18px;font-weight:700;color:${col};line-height:1">${m.pct}%</div>
+          </div>
+          <div style="opacity:.7">${_sparkline(m.hist, m.color, 60, 24)}</div>
+        </div>`;
+      }).join('<div style="width:1px;height:30px;background:var(--border)"></div>')}
+      <div style="margin-left:auto;font-size:8px;color:var(--text3)">
+        <span style="color:var(--green-b);font-weight:700">${runApps.length}</span> apps actives
+        · <span style="color:var(--text3)">${stopApps.length}</span> arrêtées
+      </div>
+    </div>`;
+
+  const tiles = allApps.map(app => {
+    const isRun = app.status === 'running';
+    const domain = app.domain ? `https://${app.domain}` : null;
+    const hasPanel = APP_PANELS[app.id];
+    const containerName = app.container_name || app.id;
+    const statusColor = isRun ? 'var(--green-b)' : 'var(--red-b)';
+    const statusLabel = isRun ? 'EN LIGNE' : (app.status || 'ARRÊTÉ').toUpperCase().slice(0,8);
+    return `<div class="dash-tile-simple${isRun ? '' : ' offline'}">
+      <div class="dts-icon">${icon(app.id)}</div>
+      <div class="dts-name" title="${escapeHtml(app.name || app.id)}">${escapeHtml((app.name || app.id).toUpperCase())}</div>
+      <div class="dts-status">
+        <span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${statusColor};flex-shrink:0"></span>
+        <span style="font-size:7px;color:${statusColor}">${statusLabel}</span>
+        <span data-hc="${escapeHtml(containerName)}" style="margin-left:2px"></span>
+      </div>
+      <div class="dts-actions">
+        ${domain ? `<a href="${domain}" target="_blank" rel="noopener" class="btn-sm" title="Ouvrir ${escapeHtml(app.name||app.id)}" style="font-size:9px;text-decoration:none;flex:1;text-align:center"><i class="ti ti-external-link"></i></a>` : '<span style="flex:1"></span>'}
+        ${hasPanel ? `<button class="btn-sm" onclick="goSection('${hasPanel.panels?.[0]?.id||''}')" title="Panel" style="font-size:9px;flex:1;text-align:center"><i class="ti ti-layout-sidebar-right"></i></button>` : ''}
+        ${!isRun ? `<button class="btn-sm" style="color:var(--green-b);font-size:9px;flex:0" onclick="appAction('${app.id}','start');setTimeout(loadDashboard,2500)" title="Démarrer"><i class="ti ti-player-play"></i></button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:8px;color:var(--text3)">
+        <i class="ti ti-refresh" style="font-size:9px"></i>
+        ${new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}
+      </div>
+      <div style="display:flex;gap:4px">
+        <button class="btn-sm active" id="dash-mode-btn" onclick="toggleDashMode()" title="Mode étendu (widgets détaillés)">
+          <i class="ti ti-layout-grid" style="font-size:10px"></i> SIMPLE
+        </button>
+        <button class="btn-sm" onclick="refreshSection()" title="Actualiser">
+          <i class="ti ti-refresh" style="font-size:10px"></i>
+        </button>
+      </div>
+    </div>
+    ${sysCard}
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:0 0 10px">// APPLICATIONS</div>
+    <div class="dash-simple-grid">${tiles}</div>
+  `;
+}
+
 async function loadDashboard() {
   const c = document.getElementById('content-dashboard');
   if (!c) return;
@@ -2880,6 +3017,12 @@ async function loadDashboard() {
 
   // Charger stats + sysinfo si absent
   if (!S.stats.mem_total_mb) await loadStats();
+
+  // Dispatcher selon le mode (simple ou étendu)
+  if (getDashMode() === 'simple') {
+    await loadDashSimple();
+    return;
+  }
 
   const running = S.apps.filter(a => a.status === 'running').length;
   const stopped = S.apps.length - running;
@@ -2927,6 +3070,9 @@ async function loadDashboard() {
         · <span id="dash-next-refresh" style="color:var(--accent)">prochain dans 30s</span>
       </div>
       <div style="display:flex;gap:4px;align-items:center">
+        <button class="btn-sm" id="dash-mode-btn" onclick="toggleDashMode()" title="Mode simple (vue Heimdall)">
+          <i class="ti ti-layout-grid" style="font-size:10px"></i>
+        </button>
         <span id="dash-hidden-count" style="font-size:8px;color:var(--text3)"></span>
         <button class="btn-sm" id="dash-customize-btn" onclick="toggleDashCustomize()" title="Personnaliser — masquer/afficher les blocs">
           <i class="ti ti-layout-columns" style="font-size:10px"></i>
@@ -5014,44 +5160,88 @@ async function loadDashResourcesWidget() {
   const w = document.getElementById('dash-resources-widget');
   if (!w) return;
 
+  // Charger historique des stats pour sparklines (non-bloquant)
+  let hist = null;
+  try {
+    const rh = await fetch('/sys/stats/history');
+    if (rh.ok) { const dh = await rh.json(); hist = dh.samples || null; }
+  } catch(e) {}
+
   let appStats = S.stats?.apps;
   if (!appStats || !appStats.length) {
     const r = await api.get('/api/v1/stats').catch(() => null);
     if (r?.data?.apps) { Object.assign(S.stats, r.data); appStats = r.data.apps; }
   }
-  if (!appStats || !appStats.length) { w.innerHTML = ''; return; }
 
-  // Top 5 par RAM (memory_mb > 0)
-  const topMem = [...appStats]
-    .filter(a => a.memory_mb > 0 && a.status === 'running')
-    .sort((a, b) => b.memory_mb - a.memory_mb)
-    .slice(0, 6);
+  // ── Sparklines système ───────────────────────────────────────────────────────
+  const ram  = S.stats.mem_total_mb  ? Math.round(S.stats.mem_used_mb  / S.stats.mem_total_mb  * 100) : 0;
+  const disk = S.stats.disk_total_gb ? Math.round(S.stats.disk_used_gb / S.stats.disk_total_gb * 100) : 0;
+  const cpu  = Math.round(S.stats.cpu_pct || 0);
+  const cpuHist  = hist ? hist.map(s => s.cpu)  : [];
+  const ramHist  = hist ? hist.map(s => s.ram)  : [];
+  const diskHist = hist ? hist.map(s => s.disk) : [];
 
-  if (!topMem.length) { w.innerHTML = ''; return; }
-
-  const maxMem = topMem[0].memory_mb;
-  const rows = topMem.map(a => {
-    const memPct = Math.round(a.memory_mb / maxMem * 100);
-    const memStr = a.memory_mb >= 1024 ? (a.memory_mb / 1024).toFixed(1) + ' Go' : Math.round(a.memory_mb) + ' Mo';
-    const cpuStr = a.cpu_percent > 0 ? a.cpu_percent.toFixed(1) + '%' : '';
-    const barColor = memPct > 80 ? 'var(--red-b)' : memPct > 50 ? 'var(--warn)' : 'var(--accent)';
-    return `
-      <div style="display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:8px;padding:4px 0">
-        <span style="font-size:14px;width:20px;text-align:center">${icon(a.app_id)}</span>
+  const sysMetrics = [
+    { label: 'CPU',  pct: cpu,  hist: cpuHist,  color: 'var(--vio-b)' },
+    { label: 'RAM',  pct: ram,  hist: ramHist,  color: 'var(--blue)' },
+    { label: 'DISK', pct: disk, hist: diskHist, color: disk > 85 ? 'var(--red-b)' : 'var(--ok)' },
+  ].map(m => {
+    const col = m.pct > 85 ? 'var(--red-b)' : m.pct > 70 ? 'var(--warn)' : m.color;
+    const sparkSvg = _sparkline(m.hist, m.color, 56, 22);
+    return `<div style="flex:1;min-width:0">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:6px">
         <div>
-          <div style="font-size:9px;font-weight:600;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(a.name || a.app_id)}</div>
-          <div style="height:3px;background:var(--border);border-radius:2px;margin-top:2px">
-            <div style="height:100%;width:${memPct}%;background:${barColor};border-radius:2px;transition:width .3s"></div>
-          </div>
+          <div style="font-size:7px;color:var(--text3);letter-spacing:1px;margin-bottom:2px">${m.label}</div>
+          <div style="font-size:16px;font-weight:700;color:${col};line-height:1">${m.pct}%</div>
         </div>
-        <span style="font-size:8px;color:var(--text2);font-family:monospace;white-space:nowrap">${memStr}</span>
-        ${cpuStr ? `<span style="font-size:8px;color:var(--text3);font-family:monospace">${cpuStr}</span>` : '<span></span>'}
-      </div>`;
-  }).join('');
+        <div style="opacity:.8;flex-shrink:0">${sparkSvg}</div>
+      </div>
+      <div style="height:2px;background:var(--border);border-radius:1px;margin-top:4px">
+        <div style="height:100%;width:${m.pct}%;background:${col};border-radius:1px;transition:width .3s"></div>
+      </div>
+    </div>`;
+  }).join('<div style="width:1px;background:var(--border)"></div>');
 
-  w.innerHTML = `
-    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:20px 0 10px">// RESSOURCES APPS</div>
-    <div class="settings-card" style="padding:8px 12px">${rows}</div>`;
+  const sparkHtml = `
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:0 0 10px">// SYSTÈME${hist && hist.length > 1 ? ` <span style="font-size:7px;font-weight:400;opacity:.5">· ${hist.length} pts / 1h</span>` : ''}</div>
+    <div class="settings-card" style="padding:10px 12px;margin-bottom:14px">
+      <div style="display:flex;gap:14px;align-items:stretch">${sysMetrics}</div>
+    </div>`;
+
+  // ── Top apps par RAM ─────────────────────────────────────────────────────────
+  let appRows = '';
+  if (appStats && appStats.length) {
+    const topMem = [...appStats]
+      .filter(a => a.memory_mb > 0 && a.status === 'running')
+      .sort((a, b) => b.memory_mb - a.memory_mb)
+      .slice(0, 6);
+    if (topMem.length) {
+      const maxMem = topMem[0].memory_mb;
+      appRows = topMem.map(a => {
+        const memPct = Math.round(a.memory_mb / maxMem * 100);
+        const memStr = a.memory_mb >= 1024 ? (a.memory_mb / 1024).toFixed(1) + ' Go' : Math.round(a.memory_mb) + ' Mo';
+        const cpuStr = a.cpu_percent > 0 ? a.cpu_percent.toFixed(1) + '%' : '';
+        const barColor = memPct > 80 ? 'var(--red-b)' : memPct > 50 ? 'var(--warn)' : 'var(--accent)';
+        return `
+          <div style="display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:8px;padding:4px 0">
+            <span style="font-size:14px;width:20px;text-align:center">${icon(a.app_id)}</span>
+            <div>
+              <div style="font-size:9px;font-weight:600;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(a.name || a.app_id)}</div>
+              <div style="height:3px;background:var(--border);border-radius:2px;margin-top:2px">
+                <div style="height:100%;width:${memPct}%;background:${barColor};border-radius:2px;transition:width .3s"></div>
+              </div>
+            </div>
+            <span style="font-size:8px;color:var(--text2);font-family:monospace;white-space:nowrap">${memStr}</span>
+            ${cpuStr ? `<span style="font-size:8px;color:var(--text3);font-family:monospace">${cpuStr}</span>` : '<span></span>'}
+          </div>`;
+      }).join('');
+      appRows = `
+        <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:14px 0 10px">// RESSOURCES APPS</div>
+        <div class="settings-card" style="padding:8px 12px">${appRows}</div>`;
+    }
+  }
+
+  w.innerHTML = sparkHtml + appRows;
 }
 
 // ── SECTION: TASKS ───────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ import (
 	"time"
 )
 
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 type oidcCfg struct {
@@ -186,9 +187,155 @@ func randBytes(n int) ([]byte, error) {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
+// ── Auto-configuration depuis Authentik ───────────────────────────────────────
+
+// tryAutoConfigAuthentik tente de créer automatiquement une application OIDC
+// dans Authentik pour Caleope UI, en utilisant le token bootstrap Authentik.
+// Appelée si OIDC n'est pas encore configuré mais Authentik est installé.
+func tryAutoConfigAuthentik(baseDir string, r *http.Request) {
+	// Vérifier Authentik installé
+	if _, err := os.Stat(filepath.Join(baseDir, "apps-installed", "authentik")); err != nil {
+		return
+	}
+	akSecrets := filepath.Join(baseDir, "app-config", "authentik", "secrets.env")
+	token := readEnvKey(akSecrets, "AUTHENTIK_BOOTSTRAP_TOKEN")
+	akDomain := readEnvKey(akSecrets, "AUTHENTIK_DOMAIN")
+	if token == "" {
+		return
+	}
+	if akDomain == "" {
+		// Dériver depuis CALEOPE_DOMAIN si disponible
+		caleoCfg := filepath.Join(baseDir, "caleope.conf")
+		baseDomain := readEnvKey(caleoCfg, "CALEOPE_DOMAIN")
+		if baseDomain != "" {
+			akDomain = "authentik." + baseDomain
+		}
+	}
+	if akDomain == "" {
+		return
+	}
+
+	apiBase := "https://" + akDomain + "/api/v3"
+	hdr := map[string]string{
+		"Authorization": "Bearer " + token,
+		"Content-Type":  "application/json",
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	doJSON := func(method, url string, body interface{}) (map[string]interface{}, int, error) {
+		var bodyBytes []byte
+		if body != nil {
+			b, err := json.Marshal(body)
+			if err != nil {
+				return nil, 0, err
+			}
+			bodyBytes = b
+		}
+		req, err := http.NewRequest(method, url, strings.NewReader(string(bodyBytes)))
+		if err != nil {
+			return nil, 0, err
+		}
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer resp.Body.Close()
+		var result map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&result)
+		return result, resp.StatusCode, nil
+	}
+
+	// Vérifier si l'application caleope-ui existe déjà
+	existing, status, err := doJSON("GET", apiBase+"/core/applications/?slug=caleope-ui", nil)
+	if err != nil || status != 200 {
+		return
+	}
+	results, _ := existing["results"].([]interface{})
+	if len(results) > 0 {
+		// App déjà créée — récupérer les credentials si on les a pas
+		// (on ne peut pas récupérer le client_secret après création, skip)
+		return
+	}
+
+	// Récupérer le flow d'authentification par défaut
+	flows, status, err := doJSON("GET", apiBase+"/flows/instances/?designation=authentication&page_size=1", nil)
+	if err != nil || status != 200 {
+		return
+	}
+	flowResults, _ := flows["results"].([]interface{})
+	if len(flowResults) == 0 {
+		return
+	}
+	flowMap, _ := flowResults[0].(map[string]interface{})
+	flowUUID, _ := flowMap["pk"].(string)
+	if flowUUID == "" {
+		return
+	}
+
+	// Déterminer le redirect_uri (scheme + host de la requête courante)
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	redirectURI := scheme + "://" + r.Host + "/auth/oidc/callback"
+
+	// Créer le provider OAuth2/OIDC
+	provResp, status, err := doJSON("POST", apiBase+"/providers/oauth2/", map[string]interface{}{
+		"name":                  "Caleope UI",
+		"authorization_flow":    flowUUID,
+		"client_type":           "confidential",
+		"sub_mode":              "hashed_user_id",
+		"redirect_uris":         redirectURI + "\n" + strings.Replace(redirectURI, "http://", "https://", 1),
+		"access_code_validity":  "minutes=1",
+		"access_token_validity": "hours=1",
+		"refresh_token_validity": "days=30",
+		"issuer_mode":           "global",
+		"signing_key":           nil,
+	})
+	if err != nil || status != 201 {
+		return
+	}
+	provPK, _ := provResp["pk"].(float64)
+	clientID, _ := provResp["client_id"].(string)
+	clientSecret, _ := provResp["client_secret"].(string)
+	if clientID == "" || clientSecret == "" {
+		return
+	}
+
+	// Créer l'application
+	_, _, _ = doJSON("POST", apiBase+"/core/applications/", map[string]interface{}{
+		"name":             "Caleope UI",
+		"slug":             "caleope-ui",
+		"provider":         int(provPK),
+		"meta_launch_url":  scheme + "://" + r.Host,
+		"meta_description": "Interface d'administration Caleope",
+	})
+
+	// Sauvegarder la config OIDC
+	issuer := "https://" + akDomain + "/application/o/caleope-ui/"
+	cfg := oidcCfg{
+		Issuer:       issuer,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		Name:         "Connexion Authentik",
+		RedirectURI:  redirectURI,
+	}
+	_ = oidcSaveConfig(baseDir, cfg)
+}
+
 // GET /auth/oidc/config — public
 func handleOidcConfig(w http.ResponseWriter, r *http.Request, baseDir string) {
 	cfg := oidcLoadConfig(baseDir)
+
+	// Auto-configuration depuis Authentik si OIDC non encore configuré
+	if !cfg.Enabled {
+		tryAutoConfigAuthentik(baseDir, r)
+		cfg = oidcLoadConfig(baseDir) // re-lire après tentative
+	}
+
 	name := cfg.Name
 	if name == "" {
 		name = "Connexion SSO"

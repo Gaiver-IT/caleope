@@ -1181,6 +1181,21 @@ func main() {
 		handleMaintenance(w, r, *baseDir)
 	}))
 
+	// Historique des stats système (ring buffer 60 min)
+	mux.HandleFunc("/sys/stats/history", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleStatsHistory(w, r)
+	}))
+
+	// Health check Docker (état santé par conteneur)
+	mux.HandleFunc("/sys/healthcheck", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleHealthCheck(w, r)
+	}))
+
+	// Update checker (images locales vs registry)
+	mux.HandleFunc("/sys/update-check", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleUpdateCheck(w, r)
+	}))
+
 	// Notes post-install d'une app
 	mux.HandleFunc("/sys/app-notes/", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		appID := strings.TrimPrefix(r.URL.Path, "/sys/app-notes/")
@@ -1241,6 +1256,9 @@ func main() {
 	fmt.Printf("╚══════════════════════════════════════╝\n")
 	fmt.Printf("  Interface : http://0.0.0.0%s\n", addr)
 	fmt.Printf("  Daemon    : %s\n\n", *daemon)
+
+	// Démarrer la collecte d'historique des stats (ring buffer 60 min)
+	startStatsHistory(*daemon, daemonToken)
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)

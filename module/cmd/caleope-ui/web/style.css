@@ -955,6 +955,39 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
 /* ── REFRESH SPIN ─────────────────────────────────────────────────────────────── */
 .spinning .ti { animation: spin .6s linear; }
 
+/* ── DASHBOARD SIMPLE MODE (Heimdall-style) ────────────────────────────────────── */
+.dash-simple-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.dash-tile-simple {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: border-color .1s, background .1s;
+  position: relative;
+  min-height: 90px;
+}
+.dash-tile-simple:hover { border-color: var(--vio-dim); background: var(--vio-g); }
+.dash-tile-simple.offline { opacity: 0.55; }
+.dts-icon { font-size: 20px; line-height: 1; margin-bottom: 2px; }
+.dts-name {
+  font-size: 8px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  letter-spacing: .5px;
+}
+.dts-status { display: flex; align-items: center; gap: 3px; margin-top: 1px; }
+.dts-actions {
+  display: flex; gap: 3px; margin-top: auto; padding-top: 6px;
+}
+.dts-actions .btn-sm { padding: 2px 5px; font-size: 9px; }
+
 /* ── DASHBOARD CUSTOMIZE MODE ─────────────────────────────────────────────────── */
 .dash-block { position: relative; }
 .dash-block-hide-btn {
