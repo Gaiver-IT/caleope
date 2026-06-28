@@ -973,12 +973,31 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		ghToken = cfg.GithubToken
 	}
 	curlGH := func(url string) ([]byte, error) {
-		args := []string{"-fsSL"}
+		curlArgs := []string{"-sSL", "-w", "\n%{http_code}"}
 		if ghToken != "" {
-			args = append(args, "-H", "Authorization: token "+ghToken)
+			curlArgs = append(curlArgs, "-H", "Authorization: token "+ghToken)
 		}
-		args = append(args, url)
-		return exec.Command("curl", args...).Output()
+		curlArgs = append(curlArgs, url)
+		out, err := exec.Command("curl", curlArgs...).Output()
+		if err != nil {
+			return nil, fmt.Errorf("erreur réseau vers GitHub: %w", err)
+		}
+		// La dernière ligne contient le code HTTP
+		raw := strings.TrimRight(string(out), "\n")
+		lastNL := strings.LastIndex(raw, "\n")
+		code := raw[lastNL+1:]
+		body := []byte(raw[:lastNL])
+		if code != "200" {
+			switch code {
+			case "403":
+				return nil, fmt.Errorf("GitHub API: accès refusé (HTTP 403) — rate limit ou repo privé. Configurez un token: caleope configure --gh-token <token>")
+			case "404":
+				return nil, fmt.Errorf("GitHub API: aucune release trouvée (HTTP 404) — vérifiez le canal (caleope version)")
+			default:
+				return nil, fmt.Errorf("GitHub API: HTTP %s pour %s", code, url)
+			}
+		}
+		return body, nil
 	}
 
 	// Choisir l'endpoint GitHub selon le canal
