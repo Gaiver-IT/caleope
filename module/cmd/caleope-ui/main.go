@@ -1160,6 +1160,9 @@ func main() {
 	mux.HandleFunc("/sys/app-sizes", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		handleAppSizes(w, r, *baseDir)
 	}))
+	mux.HandleFunc("/sys/maintenance", requireSession(func(w http.ResponseWriter, r *http.Request) {
+		handleMaintenance(w, r, *baseDir)
+	}))
 
 	// Notes post-install d'une app
 	mux.HandleFunc("/sys/app-notes/", requireSession(func(w http.ResponseWriter, r *http.Request) {

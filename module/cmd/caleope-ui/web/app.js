@@ -2359,6 +2359,14 @@ async function loadSettings() {
         }).join('')}
       </div>
     </div>
+    <div class="settings-card" id="maintenance-card">
+      <div class="settings-title">MAINTENANCE</div>
+      <div id="maintenance-content">
+        <div style="display:flex;align-items:center;gap:8px;color:var(--text3);font-size:9px">
+          <span class="spinner"></span> Analyse en cours...
+        </div>
+      </div>
+    </div>
     <div class="settings-card">
       <div class="settings-title">SESSION</div>
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -2368,6 +2376,136 @@ async function loadSettings() {
     </div>
   `;
   loadSettingsCerts();
+  loadMaintenancePanel();
+}
+
+async function loadMaintenancePanel() {
+  const el = document.getElementById('maintenance-content');
+  if (!el) return;
+
+  // Lecture du mode submarine depuis la config daemon
+  let submarineMode = false;
+  try {
+    const r = await api.get('/api/v1/ping');
+    submarineMode = !!(r?.data?.submarine_mode || r?.submarine_mode);
+  } catch(e) {}
+
+  // Chargement du preview
+  let tasks = [];
+  try {
+    const r = await fetch('/sys/maintenance');
+    if (r.ok) { const d = await r.json(); tasks = d.tasks || []; }
+  } catch(e) {}
+
+  const totalReclaimable = tasks.reduce((s, t) => s + (t.reclaimable_bytes || 0), 0);
+
+  const renderTasks = (running = false) => {
+    return tasks.map(t => {
+      const isSubWarning = t.submarine && submarineMode;
+      const checkId = `maint-chk-${t.id}`;
+      return `
+        <label style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer" for="${checkId}">
+          <input type="checkbox" id="${checkId}" data-task="${t.id}" ${isSubWarning ? '' : 'checked'}
+            style="margin-top:2px;accent-color:var(--blue);flex-shrink:0" ${running ? 'disabled' : ''}>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+              <span style="font-size:9px;font-weight:700;color:var(--text)">${t.label}</span>
+              ${t.estimate && t.estimate !== '0 B' && t.estimate !== '—' ? `<span style="font-size:8px;color:var(--ok);background:rgba(22,163,74,.1);padding:1px 5px;border-radius:3px">~${t.estimate}</span>` : ''}
+              ${isSubWarning ? `<span style="font-size:8px;color:var(--warn);background:rgba(217,119,6,.1);padding:1px 5px;border-radius:3px"><i class="ti ti-submarine" style="font-size:8px"></i> MODE HORS-LIGNE</span>` : ''}
+              ${t.submarine && !submarineMode ? `<span style="font-size:8px;color:var(--text3);background:var(--bg3);padding:1px 5px;border-radius:3px"><i class="ti ti-cloud-off" style="font-size:8px"></i> NÉCESSITE INTERNET</span>` : ''}
+            </div>
+            <div style="font-size:8px;color:var(--text3);line-height:1.5">${t.description}</div>
+          </div>
+        </label>`;
+    }).join('');
+  };
+
+  el.innerHTML = `
+    <div style="margin-bottom:10px;padding:8px 10px;background:var(--bg3);border-radius:6px;display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <span style="font-size:9px;color:var(--text2)">ESPACE POTENTIELLEMENT RÉCUPÉRABLE</span>
+        <span style="font-size:16px;font-weight:700;color:var(--blue);margin-left:10px">${formatBytes(totalReclaimable)}</span>
+      </div>
+      ${submarineMode ? `<span style="font-size:8px;color:var(--warn);background:rgba(217,119,6,.1);padding:3px 8px;border-radius:4px;border:1px solid var(--warn)"><i class="ti ti-submarine"></i> MODE SUBMARINE ACTIF</span>` : ''}
+    </div>
+    <div id="maint-task-list" style="margin-bottom:12px">${renderTasks()}</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn" id="maint-run-btn" onclick="runMaintenance()">
+        <i class="ti ti-trash"></i> NETTOYER LA SÉLECTION
+      </button>
+      <button class="btn-sm" onclick="loadMaintenancePanel()" style="font-size:8px">
+        <i class="ti ti-refresh" style="font-size:9px"></i> Rafraîchir
+      </button>
+    </div>
+    <div id="maint-results" style="margin-top:12px;display:none"></div>
+  `;
+}
+
+async function runMaintenance() {
+  const btn = document.getElementById('maint-run-btn');
+  const resultsEl = document.getElementById('maint-results');
+  if (!btn || !resultsEl) return;
+
+  const checkboxes = document.querySelectorAll('#maint-task-list input[type=checkbox]:checked');
+  const tasks = Array.from(checkboxes).map(c => c.dataset.task);
+  if (tasks.length === 0) { notify('Aucune tâche sélectionnée', 'warn'); return; }
+
+  // Confirmation pour images Docker (submarine warning)
+  const hasAllImages = tasks.includes('docker_all_images');
+  if (hasAllImages) {
+    const ok = confirm('⚠ Supprimer TOUTES les images Docker inutilisées ?\n\nEn mode hors-ligne (submarine), ces images ne pourront pas être re-téléchargées et les apps concernées ne pourront plus démarrer.\n\nConfirmer ?');
+    if (!ok) return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> NETTOYAGE EN COURS...';
+  resultsEl.style.display = 'none';
+
+  try {
+    const r = await fetch('/sys/maintenance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const results = data.results || [];
+
+    let totalFreed = 0;
+    const rows = results.map(res => {
+      const icon = res.success ? '✓' : '✗';
+      const color = res.success ? 'var(--ok)' : 'var(--err)';
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)">
+        <span style="font-size:9px;color:${color}">${icon} ${res.id.replace(/_/g,' ').toUpperCase()}</span>
+        <span style="font-size:9px;font-weight:700;color:var(--blue)">${res.freed || '—'} libérés</span>
+      </div>`;
+    }).join('');
+
+    resultsEl.innerHTML = `
+      <div style="background:var(--bg3);border-radius:6px;padding:10px 12px">
+        <div style="font-size:9px;font-weight:700;color:var(--text2);margin-bottom:8px">RÉSULTATS</div>
+        ${rows}
+      </div>`;
+    resultsEl.style.display = 'block';
+    notify('Nettoyage terminé', 'ok');
+
+    // Rafraîchir les estimations
+    setTimeout(loadMaintenancePanel, 1000);
+  } catch(e) {
+    notify('Erreur : ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-trash"></i> NETTOYER LA SÉLECTION';
+  }
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  const units = ['B','KB','MB','GB','TB'];
+  let i = 0;
+  let v = bytes;
+  while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
+  return v.toFixed(1) + ' ' + units[i];
 }
 
 async function loadSettingsCerts() {
@@ -2679,7 +2817,7 @@ async function loadDashboard() {
 
   // ── Alertes système ──────────────────────────────────────────────────────────
   const alerts = [];
-  if (disk > 90)       alerts.push({ lvl: 'err',  msg: `Disque critique : ${disk}% utilisé (${(sys.disk_free/1073741824).toFixed(1)} Go libres)`, icon: 'ti-device-floppy' });
+  if (disk > 90)       alerts.push({ lvl: 'err',  msg: `Disque critique : ${disk}% utilisé (${((S.stats.disk_total_gb||0)-(S.stats.disk_used_gb||0)).toFixed(1)} Go libres)`, icon: 'ti-device-floppy' });
   else if (disk > 85)  alerts.push({ lvl: 'warn', msg: `Disque presque plein : ${disk}% utilisé`, icon: 'ti-device-floppy' });
   if (ram > 90)        alerts.push({ lvl: 'err',  msg: `RAM critique : ${ram}% utilisée`, icon: 'ti-cpu' });
   else if (ram > 85)   alerts.push({ lvl: 'warn', msg: `RAM élevée : ${ram}% utilisée`, icon: 'ti-cpu' });

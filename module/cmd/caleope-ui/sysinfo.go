@@ -1009,3 +1009,349 @@ func formatBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
+
+// ── Maintenance / nettoyage ───────────────────────────────────────────────────
+
+type maintenanceTask struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Estimate    string `json:"estimate"`
+	Submarine   bool   `json:"submarine"` // risqué en mode hors-ligne
+	Reclaimable int64  `json:"reclaimable_bytes"`
+}
+
+type maintenanceResult struct {
+	ID      string `json:"id"`
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+	Freed   string `json:"freed"`
+}
+
+// parsePruneBytes extrait les octets récupérés depuis la sortie "docker ... prune"
+func parsePruneBytes(out string) int64 {
+	// cherche "Total reclaimed space: X.XGB" ou "XMB" etc.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "Total reclaimed space:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				valStr := parts[len(parts)-1]
+				var val float64
+				var unit string
+				fmt.Sscanf(valStr, "%f%s", &val, &unit)
+				unit = strings.ToUpper(unit)
+				switch {
+				case strings.HasPrefix(unit, "G"):
+					return int64(val * 1e9)
+				case strings.HasPrefix(unit, "M"):
+					return int64(val * 1e6)
+				case strings.HasPrefix(unit, "K"):
+					return int64(val * 1e3)
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func handleMaintenance(w http.ResponseWriter, r *http.Request, baseDir string) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		// Preview : retourne la liste des tâches avec estimation de l'espace récupérable
+		tasks := maintenancePreview(baseDir)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"tasks": tasks,
+		})
+
+	case http.MethodPost:
+		// Run : exécute les tâches sélectionnées
+		var body struct {
+			Tasks []string `json:"tasks"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "body invalide"})
+			return
+		}
+		results := maintenanceRun(body.Tasks, baseDir)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": results,
+		})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func maintenancePreview(baseDir string) []maintenanceTask {
+	tasks := []maintenanceTask{}
+
+	// ── Docker dangling images ────────────────────────────────────────────────
+	danglingOut, _ := exec.Command("docker", "image", "prune", "--dry-run", "-f").Output()
+	_ = danglingOut // dry-run not available, estimate via df
+	// Compter les dangling images
+	imgListOut, _ := exec.Command("docker", "images", "-f", "dangling=true", "--format", "{{.Size}}").Output()
+	danglingBytes := estimateDockerSizes(string(imgListOut))
+	tasks = append(tasks, maintenanceTask{
+		ID:          "docker_dangling",
+		Label:       "Images Docker inutilisées (dangling)",
+		Description: "Images sans tag, non référencées par aucun conteneur.",
+		Estimate:    humanBytes(danglingBytes),
+		Reclaimable: danglingBytes,
+		Submarine:   false,
+	})
+
+	// ── Docker all unused images ──────────────────────────────────────────────
+	// Images non utilisées par aucun conteneur actif
+	unusedOut, _ := exec.Command("docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}").Output()
+	usedIDs, _ := exec.Command("docker", "ps", "-a", "--format", "{{.Image}}").Output()
+	usedSet := map[string]bool{}
+	for _, img := range strings.Split(strings.TrimSpace(string(usedIDs)), "\n") {
+		usedSet[strings.TrimSpace(img)] = true
+	}
+	var unusedBytes int64
+	for _, line := range strings.Split(strings.TrimSpace(string(unusedOut)), "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) == 2 && !usedSet[parts[0]] {
+			unusedBytes += parseDockerSize(strings.TrimSpace(parts[1]))
+		}
+	}
+	tasks = append(tasks, maintenanceTask{
+		ID:          "docker_all_images",
+		Label:       "Toutes les images Docker inutilisées",
+		Description: "Images non utilisées par un conteneur actif ou arrêté. En mode hors-ligne (submarine), ces images ne pourront pas être re-téléchargées.",
+		Estimate:    humanBytes(unusedBytes),
+		Reclaimable: unusedBytes,
+		Submarine:   true,
+	})
+
+	// ── Docker stopped containers ─────────────────────────────────────────────
+	stoppedOut, _ := exec.Command("docker", "ps", "-a", "--filter", "status=exited",
+		"--filter", "status=dead", "--filter", "status=created",
+		"--format", "{{.Size}}").Output()
+	stoppedBytes := estimateDockerSizes(string(stoppedOut))
+	stoppedCount, _ := exec.Command("docker", "ps", "-a", "--filter", "status=exited",
+		"--filter", "status=dead", "--format", "{{.Names}}").Output()
+	nStopped := len(strings.Fields(string(stoppedCount)))
+	tasks = append(tasks, maintenanceTask{
+		ID:          "docker_containers",
+		Label:       fmt.Sprintf("Conteneurs arrêtés (%d)", nStopped),
+		Description: "Conteneurs en état exited/dead/created non actifs.",
+		Estimate:    humanBytes(stoppedBytes),
+		Reclaimable: stoppedBytes,
+		Submarine:   false,
+	})
+
+	// ── Docker unused volumes ─────────────────────────────────────────────────
+	volOut, _ := exec.Command("docker", "volume", "ls", "-q", "-f", "dangling=true").Output()
+	nVols := len(strings.Fields(string(volOut)))
+	tasks = append(tasks, maintenanceTask{
+		ID:          "docker_volumes",
+		Label:       fmt.Sprintf("Volumes Docker orphelins (%d)", nVols),
+		Description: "Volumes non montés par aucun conteneur.",
+		Estimate:    "—",
+		Reclaimable: 0,
+		Submarine:   false,
+	})
+
+	// ── APT cache ────────────────────────────────────────────────────────────
+	aptCacheSize := dirSize("/var/cache/apt/archives")
+	tasks = append(tasks, maintenanceTask{
+		ID:          "apt_cache",
+		Label:       "Cache APT (paquets .deb)",
+		Description: "Paquets téléchargés par apt, non nécessaires après installation.",
+		Estimate:    humanBytes(aptCacheSize),
+		Reclaimable: aptCacheSize,
+		Submarine:   false,
+	})
+
+	// ── Systemd journal ───────────────────────────────────────────────────────
+	journalOut, _ := exec.Command("journalctl", "--disk-usage").Output()
+	var journalBytes int64
+	for _, line := range strings.Split(string(journalOut), "\n") {
+		if strings.Contains(line, "take up") {
+			// "Archived and active journals take up X in the file system."
+			parts := strings.Fields(line)
+			for i, p := range parts {
+				if p == "up" && i+1 < len(parts) {
+					journalBytes = parseDockerSize(parts[i+1])
+					break
+				}
+			}
+		}
+	}
+	tasks = append(tasks, maintenanceTask{
+		ID:          "journal",
+		Label:       "Journal systemd (> 7 jours)",
+		Description: "Logs système journald. Conserve les 7 derniers jours.",
+		Estimate:    humanBytes(journalBytes / 2), // approximation : vacuum ~50%
+		Reclaimable: journalBytes / 2,
+		Submarine:   false,
+	})
+
+	// ── /tmp Caleope binaries ─────────────────────────────────────────────────
+	tmpSize := int64(0)
+	entries, _ := os.ReadDir("/tmp")
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "caleop") {
+			info, err := e.Info()
+			if err == nil {
+				tmpSize += info.Size()
+			}
+		}
+	}
+	tasks = append(tasks, maintenanceTask{
+		ID:          "tmp_caleope",
+		Label:       "Fichiers temporaires Caleope (/tmp)",
+		Description: "Anciens binaires et archives de déploiement dans /tmp.",
+		Estimate:    humanBytes(tmpSize),
+		Reclaimable: tmpSize,
+		Submarine:   false,
+	})
+
+	return tasks
+}
+
+func maintenanceRun(taskIDs []string, baseDir string) []maintenanceResult {
+	taskSet := map[string]bool{}
+	for _, id := range taskIDs {
+		taskSet[id] = true
+	}
+	results := []maintenanceResult{}
+
+	if taskSet["docker_dangling"] {
+		out, err := exec.Command("docker", "image", "prune", "-f").Output()
+		freed := parsePruneBytes(string(out))
+		results = append(results, maintenanceResult{
+			ID: "docker_dangling", Success: err == nil,
+			Output: string(out), Freed: humanBytes(freed),
+		})
+	}
+
+	if taskSet["docker_all_images"] {
+		out, err := exec.Command("docker", "image", "prune", "-a", "-f").Output()
+		freed := parsePruneBytes(string(out))
+		results = append(results, maintenanceResult{
+			ID: "docker_all_images", Success: err == nil,
+			Output: string(out), Freed: humanBytes(freed),
+		})
+	}
+
+	if taskSet["docker_containers"] {
+		out, err := exec.Command("docker", "container", "prune", "-f").Output()
+		freed := parsePruneBytes(string(out))
+		results = append(results, maintenanceResult{
+			ID: "docker_containers", Success: err == nil,
+			Output: string(out), Freed: humanBytes(freed),
+		})
+	}
+
+	if taskSet["docker_volumes"] {
+		out, err := exec.Command("docker", "volume", "prune", "-f").Output()
+		freed := parsePruneBytes(string(out))
+		results = append(results, maintenanceResult{
+			ID: "docker_volumes", Success: err == nil,
+			Output: string(out), Freed: humanBytes(freed),
+		})
+	}
+
+	if taskSet["apt_cache"] {
+		out, err := exec.Command("apt-get", "clean").CombinedOutput()
+		results = append(results, maintenanceResult{
+			ID: "apt_cache", Success: err == nil,
+			Output: string(out), Freed: "—",
+		})
+	}
+
+	if taskSet["journal"] {
+		out, err := exec.Command("journalctl", "--vacuum-time=7d").CombinedOutput()
+		results = append(results, maintenanceResult{
+			ID: "journal", Success: err == nil,
+			Output: string(out), Freed: "—",
+		})
+	}
+
+	if taskSet["tmp_caleope"] {
+		freed := int64(0)
+		entries, _ := os.ReadDir("/tmp")
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), "caleop") {
+				info, _ := e.Info()
+				if info != nil {
+					freed += info.Size()
+				}
+				_ = os.Remove("/tmp/" + e.Name())
+			}
+		}
+		results = append(results, maintenanceResult{
+			ID: "tmp_caleope", Success: true,
+			Output: "Fichiers /tmp/caleop* supprimés", Freed: humanBytes(freed),
+		})
+	}
+
+	return results
+}
+
+// estimateDockerSizes parse les tailles depuis "docker images --format {{.Size}}"
+func estimateDockerSizes(output string) int64 {
+	var total int64
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			total += parseDockerSize(line)
+		}
+	}
+	return total
+}
+
+// parseDockerSize convertit "1.09GB", "322MB", "27.6kB" en bytes
+func parseDockerSize(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0B" {
+		return 0
+	}
+	var val float64
+	var unit string
+	fmt.Sscanf(s, "%f%s", &val, &unit)
+	unit = strings.ToUpper(unit)
+	switch {
+	case strings.HasPrefix(unit, "G"):
+		return int64(val * 1e9)
+	case strings.HasPrefix(unit, "M"):
+		return int64(val * 1e6)
+	case strings.HasPrefix(unit, "K"):
+		return int64(val * 1e3)
+	}
+	return int64(val)
+}
+
+// dirSize retourne la taille d'un répertoire en bytes
+func dirSize(path string) int64 {
+	var size int64
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size
+}
+
+// humanBytes formate des bytes en lisible
+func humanBytes(b int64) string {
+	if b <= 0 {
+		return "0 B"
+	}
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
