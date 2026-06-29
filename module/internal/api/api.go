@@ -1530,6 +1530,27 @@ WantedBy=multi-user.target
 `, domain, hostIP)
 	}
 	_ = os.WriteFile(filepath.Join(traefikDir, "caleope-ui.yml"), []byte(traefikConf), 0644)
+
+	// 3. UFW — ouvrir port 8766 depuis les bridges Docker vers caleope-ui (service host).
+	// UFW avec policy DROP bloque le trafic container → service systemd.
+	// On autorise le /16 de la gateway caleope-public ET le réseau par défaut de Traefik.
+	if hostIP != "" {
+		parts := strings.Split(hostIP, ".")
+		if len(parts) == 4 {
+			subnet := fmt.Sprintf("%s.%s.0.0/16", parts[0], parts[1])
+			_ = exec.Command("ufw", "allow", "from", subnet, "to", "any", "port", "8766",
+				"comment", "caleope-ui Traefik bridge").Run()
+		}
+	}
+	// Autoriser aussi le réseau par défaut de Traefik (peut différer de caleope-public).
+	if dfltGW := getTraefikDefaultGateway(); dfltGW != "" && dfltGW != hostIP {
+		parts := strings.Split(dfltGW, ".")
+		if len(parts) == 4 {
+			subnet := fmt.Sprintf("%s.%s.0.0/16", parts[0], parts[1])
+			_ = exec.Command("ufw", "allow", "from", subnet, "to", "any", "port", "8766",
+				"comment", "caleope-ui Traefik default-gw").Run()
+		}
+	}
 }
 
 // getHostIP retourne l'IP principale de l'hôte (interface sortante).
@@ -1556,6 +1577,17 @@ func getDockerGateway(network string) string {
 		return ""
 	}
 	return ip
+}
+
+// getTraefikDefaultGateway retourne l'IP de la default gateway vue depuis le container Traefik.
+// Utile pour autoriser les réseaux Docker supplémentaires que Traefik utilise via UFW.
+func getTraefikDefaultGateway() string {
+	out, err := exec.Command("docker", "exec", "traefik",
+		"sh", "-c", "ip route show default | awk '{print $3}'").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // ─────────────────────────────────────────────
