@@ -682,7 +682,8 @@ async function loadApps() {
     api.get('/api/v1/stats'),
     api.get('/api/v1/ping'),
   ]);
-  S.apps    = apps?.data    || [];
+  const _appsData = apps?.data;
+  S.apps    = Array.isArray(_appsData) ? _appsData : (_appsData?.apps || []);
   S.catalog = store?.data   || [];
   S.stats   = { ...(stats?.data || {}), version: ping?.data?.version };
   updateTbSysbar();
@@ -2592,7 +2593,7 @@ async function exportSystemSnapshot() {
       exported_at: new Date().toISOString(),
       version: '0.5',
       system: sysR?.data || null,
-      apps: appsR?.data || [],
+      apps: (Array.isArray(appsR?.data) ? appsR.data : appsR?.data?.apps) || [],
       tasks: tasksR?.data || [],
       events: eventsR?.data || [],
     };
