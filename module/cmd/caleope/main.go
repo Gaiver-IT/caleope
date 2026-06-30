@@ -1389,6 +1389,7 @@ Commandes:
 
   remove <app>      Désinstaller une application
     --keep-data     Conserver les données
+    -y, --yes       Ne pas demander de confirmation (mode non-interactif)
 
   list              Lister les applications installées
     --json          Sortie JSON (mode machine)

@@ -22,6 +22,12 @@ APP="${1:-vaultwarden}"
 BASE="${CALEOPE_BASE:-/opt/gaiver-it/caleope}"
 TIMEOUT="${SMOKE_TIMEOUT:-180}"   # secondes max pour voir le conteneur démarrer
 
+# Détection robuste des conteneurs de l'app : par label de projet compose
+# (= l'id de l'app), pas par nom — marche même si les conteneurs ont un nom
+# différent de l'app (ex: prometheus-grafana → prometheus, grafana).
+PROJ_FILTER="label=com.docker.compose.project=$APP"
+app_containers() { docker ps --filter "$PROJ_FILTER" --format '{{.Names}}'; }
+
 if [ -t 1 ]; then
   R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; B=$'\e[1m'; D=$'\e[2m'; Z=$'\e[0m'
 else
@@ -47,8 +53,8 @@ cleanup() {
     caleope remove "$APP" --yes >/dev/null 2>&1
     sleep 4
     # Vérifier RÉELLEMENT que c'est parti (ne pas se fier au code retour).
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "$APP"; then
-      ko "Désinstallation incomplète — conteneur '$APP' encore présent."
+    if [ -n "$(app_containers 2>/dev/null)" ]; then
+      ko "Désinstallation incomplète — conteneur(s) de '$APP' encore présent(s)."
       info "À nettoyer à la main : caleope remove $APP --yes"
     else
       ok "App '$APP' désinstallée (conteneurs supprimés)"
@@ -94,7 +100,7 @@ step "2. Attente du démarrage (max ${TIMEOUT}s)"
 elapsed=0
 up=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "$APP"; then
+  if [ -n "$(app_containers 2>/dev/null)" ]; then
     up=1; break
   fi
   sleep 3; elapsed=$((elapsed+3))
@@ -102,8 +108,8 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
 done
 printf '\r'
 if [ "$up" = "1" ]; then
-  ok "Conteneur '$APP' démarré (après ${elapsed}s)"
-  docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | grep "$APP"
+  ok "Conteneur(s) de '$APP' démarré(s) (après ${elapsed}s)"
+  docker ps --filter "$PROJ_FILTER" --format '    {{.Names}}\t{{.Status}}' 2>/dev/null
 else
   ko "Aucun conteneur '$APP' après ${TIMEOUT}s"
   info "Logs : caleope logs $APP"
@@ -127,12 +133,13 @@ fi
 # ── 4. Conteneur en bonne santé (pas en restart-loop) ───────────────
 step "4. Stabilité du conteneur"
 sleep 5
-state=$(docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep "$APP" | head -1)
-if echo "$state" | grep -qiE 'restarting|unhealthy'; then
-  ko "Conteneur instable : $state"
+unstable=$(docker ps --filter "$PROJ_FILTER" --format '{{.Names}} {{.Status}}' 2>/dev/null | grep -iE 'restarting|unhealthy' | head -3)
+if [ -n "$unstable" ]; then
+  ko "Conteneur(s) instable(s) :"
+  printf '    %s\n' "$unstable"
   info "Logs : caleope logs $APP"
 else
-  ok "Conteneur stable : ${state:-introuvable}"
+  ok "Conteneur(s) stable(s) : $(app_containers | tr '\n' ' ')"
 fi
 
 # ── Bilan (le trap EXIT s'occupe de la désinstallation) ─────────────
