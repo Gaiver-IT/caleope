@@ -1253,6 +1253,14 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"notes": string(data), "found": true})
 	}))
 
+	// Routes licence — publiques (accessibles avant authentification, pendant le setup)
+	mux.HandleFunc("/api/v1/license/activate", func(w http.ResponseWriter, r *http.Request) {
+		proxy.ServeHTTP(w, r)
+	})
+	mux.HandleFunc("/api/v1/license", func(w http.ResponseWriter, r *http.Request) {
+		proxy.ServeHTTP(w, r)
+	})
+
 	// API proxy (session requise) — logs en streaming aussi
 	mux.HandleFunc("/api/", requireSession(func(w http.ResponseWriter, r *http.Request) {
 		// SSE : désactiver le buffering
