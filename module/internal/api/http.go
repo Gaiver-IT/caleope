@@ -260,6 +260,41 @@ func (s *Server) StartHTTP(port int) error {
 		s.httpOK(w, map[string]interface{}{"containers": containers})
 	})))
 
+	// GET /api/v1/license — statut licence (public, pas d'auth — besoin pendant setup)
+	mux.HandleFunc("/api/v1/license", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		st := s.lic.Status()
+		s.httpOK(w, st)
+	})
+
+	// POST /api/v1/license/activate — activer la licence (public — besoin pendant setup)
+	mux.HandleFunc("/api/v1/license/activate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			LicenseKey string `json:"license_key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			s.httpError(w, "JSON invalide", http.StatusBadRequest)
+			return
+		}
+		if err := s.lic.Activate(body.LicenseKey); err != nil {
+			s.httpError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		st := s.lic.Status()
+		s.httpOK(w, map[string]interface{}{
+			"activated": true,
+			"edition":   st.Edition,
+			"message":   "Licence activée avec succès",
+		})
+	})
+
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("✓ API REST sur %s\n", addr)
 	return http.ListenAndServe(addr, s.rateLimit(mux))
@@ -441,13 +476,16 @@ func (s *Server) httpPing(w http.ResponseWriter, r *http.Request) {
 	if cfg != nil {
 		channel = cfg.Channel
 	}
-	s.httpOK(w, map[string]string{
-		"status":     "ok",
-		"version":    ver,
-		"commit":     version.Commit,
-		"channel":    channel,
-		"domain":     cfg.Domain,
-		"proxy_mode": cfg.ProxyMode,
+	licSt := s.lic.Status()
+	s.httpOK(w, map[string]interface{}{
+		"status":          "ok",
+		"version":         ver,
+		"commit":          version.Commit,
+		"channel":         channel,
+		"domain":          cfg.Domain,
+		"proxy_mode":      cfg.ProxyMode,
+		"license_active":  licSt.Activated,
+		"license_edition": licSt.Edition,
 	})
 }
 

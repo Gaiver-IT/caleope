@@ -32,6 +32,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
 	"github.com/gaiver-it/caleope/internal/install"
+	"github.com/gaiver-it/caleope/internal/license"
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
@@ -88,6 +89,15 @@ func main() {
 	}
 	audit.Log(audit.ActionStartup, "daemon", "started")
 
+	// ── Vérification de la licence ──
+	licMgr := license.NewManager(*baseDir)
+	licStatus := licMgr.Status()
+	if licStatus.Activated {
+		fmt.Printf("✓ Licence %s active\n", strings.ToUpper(licStatus.Edition))
+	} else {
+		fmt.Println("⚠️  Licence non activée — mode limité (caleope license activate <clé>)")
+	}
+
 	st := store.NewStore(*baseDir)
 	dc := docker.NewClient()
 	em := events.NewEmitter(*baseDir)
@@ -113,7 +123,7 @@ func main() {
 		_ = http.ListenAndServe(":9100", mux)
 	}()
 
-	server := api.NewServer(*socketPath, rt, st, installer, bkp, dc, col, em, net, *baseDir)
+	server := api.NewServer(*socketPath, rt, st, installer, bkp, dc, col, em, net, *baseDir, licMgr)
 
 	// Garantir que caleope-ui.service et sa config Traefik sont à jour au démarrage.
 	// Indispensable après un upgrade : c'est le nouvel exécutable qui reécrit la config,

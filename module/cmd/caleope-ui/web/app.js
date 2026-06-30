@@ -682,7 +682,8 @@ async function loadApps() {
     api.get('/api/v1/stats'),
     api.get('/api/v1/ping'),
   ]);
-  S.apps    = apps?.data    || [];
+  const _appsData = apps?.data;
+  S.apps    = Array.isArray(_appsData) ? _appsData : (_appsData?.apps || []);
   S.catalog = store?.data   || [];
   S.stats   = { ...(stats?.data || {}), version: ping?.data?.version };
   updateTbSysbar();
@@ -2304,6 +2305,10 @@ async function loadSettings() {
         </div>
       </div>
     </div>
+    <div class="settings-card" id="license-settings-card">
+      <div class="settings-title">LICENCE</div>
+      <div id="license-settings-content"><div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement…</div></div>
+    </div>
     <div class="settings-card">
       <div class="settings-title">MOT DE PASSE</div>
       <div style="display:flex;flex-direction:column;gap:8px">
@@ -2409,6 +2414,7 @@ async function loadSettings() {
     </div>
   `;
   loadSettingsCerts();
+  loadSettingsLicense();
   loadMaintenancePanel();
   loadOidcSettings();
   loadTOTPSettings();
@@ -2578,6 +2584,57 @@ async function loadSettingsCerts() {
   card.innerHTML = `<div class="settings-title">CERTIFICATS SSL <span style="font-size:8px;color:var(--text3);font-weight:400;letter-spacing:0">${data.certs.length}</span></div>${rows}`;
 }
 
+async function loadSettingsLicense() {
+  const el = document.getElementById('license-settings-content');
+  if (!el) return;
+  const r = await fetch('/api/v1/license');
+  const d = r.ok ? await r.json() : null;
+  if (!d) { el.innerHTML = '<div style="font-size:9px;color:var(--red-b)">Impossible de contacter le serveur de licence</div>'; return; }
+
+  if (d.activated) {
+    el.innerHTML = `
+      <div class="setting-row"><span>ÉDITION</span><span class="badge badge-ok">${(d.edition||'').toUpperCase()}</span></div>
+      <div class="setting-row"><span>CLÉ</span><span class="setting-val" style="font-family:monospace">${d.license_key || '—'}</span></div>
+      <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:9px;color:var(--text3)">Changer de clé de licence :</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="lic-settings-input" class="param-input" type="text" placeholder="CALP-XXXX-XXXX-XXXX" style="flex:1;font-family:monospace;text-transform:uppercase">
+          <button class="btn" onclick="activateLicenseSettings()"><i class="ti ti-refresh"></i>CHANGER</button>
+        </div>
+        <div id="lic-settings-err" style="display:none;font-size:9px;color:var(--red-b)"></div>
+      </div>`;
+  } else {
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px">
+        <i class="ti ti-alert-circle" style="color:var(--warn);font-size:13px"></i>
+        <div style="font-size:9px;color:var(--text2)">Licence non activée — l'installation d'apps est désactivée.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="lic-settings-input" class="param-input" type="text" placeholder="CALP-XXXX-XXXX-XXXX" style="flex:1;font-family:monospace;text-transform:uppercase">
+          <button class="btn btn-vio" onclick="activateLicenseSettings()"><i class="ti ti-check"></i>ACTIVER</button>
+        </div>
+        <div id="lic-settings-err" style="display:none;font-size:9px;color:var(--red-b)"></div>
+        <a href="https://caleope-pay.gaiver-it.fr" target="_blank" style="font-size:8px;color:var(--vio-b)">Obtenir une clé (Community gratuit)</a>
+      </div>`;
+  }
+}
+
+async function activateLicenseSettings() {
+  const key = document.getElementById('lic-settings-input')?.value.trim().toUpperCase();
+  const errEl = document.getElementById('lic-settings-err');
+  errEl.style.display = 'none';
+  if (!key || !key.startsWith('CALP-')) { errEl.textContent = 'Format invalide (CALP-XXXX-XXXX-XXXX)'; errEl.style.display = 'block'; return; }
+  const r = await fetch('/api/v1/license/activate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({license_key: key})
+  });
+  const d = await r.json();
+  if (!r.ok) { errEl.textContent = d.error || 'Erreur'; errEl.style.display = 'block'; return; }
+  notify(`Licence ${(d.edition||'').toUpperCase()} activée ✓`, 'ok');
+  loadSettingsLicense();
+}
+
 async function exportSystemSnapshot() {
   const btn = document.getElementById('snapshot-btn');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> EXPORT...'; }
@@ -2592,7 +2649,7 @@ async function exportSystemSnapshot() {
       exported_at: new Date().toISOString(),
       version: '0.5',
       system: sysR?.data || null,
-      apps: appsR?.data || [],
+      apps: (Array.isArray(appsR?.data) ? appsR.data : appsR?.data?.apps) || [],
       tasks: tasksR?.data || [],
       events: eventsR?.data || [],
     };
@@ -9956,9 +10013,72 @@ function showApp() {
   restoreSbGroups();
   startClock();
   goSection('dashboard');
-  // Auto-refresh dashboard + stats (interval configurable)
   _startDashRefresh();
   pollEventsBadge();
+  checkLicenseOnLogin();
+}
+
+async function checkLicenseOnLogin() {
+  try {
+    const r = await fetch('/api/v1/license');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.activated) showLicenseModal();
+  } catch(e) {}
+}
+
+function showLicenseModal() {
+  let m = document.getElementById('license-modal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'license-modal';
+    m.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)';
+    m.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--border1);border-radius:12px;padding:32px;max-width:420px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.5)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+          <i class="ti ti-license" style="font-size:20px;color:var(--vio-b)"></i>
+          <div>
+            <div style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--text1)">ACTIVATION REQUISE</div>
+            <div style="font-size:9px;color:var(--text3);margin-top:2px">Caleope n'est pas encore activé sur ce serveur</div>
+          </div>
+        </div>
+        <div style="font-size:9px;color:var(--text3);margin-bottom:14px">Entrez votre clé de licence (Community ou Pro) pour activer. Sans licence, l'installation d'apps est désactivée.</div>
+        <input id="lic-key-input" class="param-input" type="text" placeholder="CALP-XXXX-XXXX-XXXX" style="width:100%;margin-bottom:10px;font-family:monospace;text-transform:uppercase">
+        <div id="lic-modal-err" style="display:none;font-size:9px;color:var(--red-b);margin-bottom:8px"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-vio" onclick="activateLicenseModal()" style="flex:1"><i class="ti ti-check"></i>ACTIVER</button>
+          <button class="btn" onclick="document.getElementById('license-modal').style.display='none'" style="font-size:9px">Plus tard</button>
+        </div>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border1);font-size:8px;color:var(--text3)">
+          Pas de licence ? <a href="https://caleope-pay.gaiver-it.fr" target="_blank" style="color:var(--vio-b)">Obtenir une clé</a> — Community est gratuit.
+        </div>
+      </div>`;
+    document.body.appendChild(m);
+  }
+  m.style.display = 'flex';
+  setTimeout(() => document.getElementById('lic-key-input')?.focus(), 50);
+}
+
+async function activateLicenseModal() {
+  const key = document.getElementById('lic-key-input')?.value.trim().toUpperCase();
+  const errEl = document.getElementById('lic-modal-err');
+  errEl.style.display = 'none';
+  if (!key || !key.startsWith('CALP-')) { errEl.textContent = 'Format invalide (CALP-XXXX-XXXX-XXXX)'; errEl.style.display = 'block'; return; }
+  const btn = document.querySelector('#license-modal .btn-vio');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  const r = await fetch('/api/v1/license/activate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({license_key: key})
+  });
+  const d = await r.json();
+  if (!r.ok) {
+    errEl.textContent = d.error || 'Erreur activation';
+    errEl.style.display = 'block';
+    btn.disabled = false; btn.innerHTML = '<i class="ti ti-check"></i>ACTIVER';
+    return;
+  }
+  document.getElementById('license-modal').style.display = 'none';
+  notify(`Licence ${(d.edition||'').toUpperCase()} activée ✓`, 'ok');
 }
 
 function _startDashRefresh() {

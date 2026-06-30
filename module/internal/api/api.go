@@ -25,12 +25,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/backup"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
 	"github.com/gaiver-it/caleope/internal/install"
+	"github.com/gaiver-it/caleope/internal/license"
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
@@ -58,6 +60,7 @@ type Server struct {
 	sched      *scheduler.Scheduler
 	baseDir    string
 	token      string
+	lic        *license.Manager
 }
 
 func NewServer(
@@ -71,6 +74,7 @@ func NewServer(
 	emitter *events.Emitter,
 	net *network.Manager,
 	baseDir string,
+	lic *license.Manager,
 ) *Server {
 	s := &Server{
 		socketPath: socketPath,
@@ -84,6 +88,7 @@ func NewServer(
 		net:        net,
 		baseDir:    baseDir,
 		token:      loadOrCreateToken(baseDir),
+		lic:        lic,
 	}
 	// Le scheduler est injecté après construction (le daemon appelle scheduler.New(baseDir, server))
 	return s
@@ -185,7 +190,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 	)
 
 	switch req.Command {
+	case "license.activate":
+		data, err = s.handleLicenseActivate(req.Args)
+	case "license.status":
+		data, err = s.handleLicenseStatus()
 	case "install":
+		if !s.lic.IsActivated() {
+			err = fmt.Errorf("licence non activée — activez d'abord avec : caleope license activate <clé>")
+			break
+		}
 		data, err = s.handleInstall(req.Args)
 	case "store-params":
 		data, err = s.handleStoreParams(req.Args)
@@ -391,12 +404,38 @@ func (s *Server) handleRemove(args map[string]string) error {
 	return s.installer.Remove(appID, keepData)
 }
 
+// isPlatformService indique si l'id correspond à un service systemd de la plateforme.
+func isPlatformService(id string) bool {
+	return id == "caleope-ui" || id == "caleoped"
+}
+
+// systemServiceStatus retourne "running" si le service systemd est actif, sinon "stopped".
+func systemServiceStatus(name string) string {
+	out, err := exec.Command("systemctl", "is-active", name).Output()
+	if err != nil {
+		return "stopped"
+	}
+	if strings.TrimSpace(string(out)) == "active" {
+		return "running"
+	}
+	return "stopped"
+}
+
 func (s *Server) handleList() (interface{}, error) {
 	apps, err := s.rt.ListApps()
 	if err != nil {
 		return nil, err
 	}
-	return apps, nil
+
+	services := []map[string]interface{}{
+		{"id": "caleope-ui", "name": "Caleope UI", "status": systemServiceStatus("caleope-ui"), "type": "system"},
+		{"id": "caleoped", "name": "Caleope Daemon", "status": systemServiceStatus("caleoped"), "type": "system"},
+	}
+
+	return map[string]interface{}{
+		"apps":     apps,
+		"services": services,
+	}, nil
 }
 
 func (s *Server) handleInfo(args map[string]string) (interface{}, error) {
@@ -413,16 +452,25 @@ func (s *Server) handleLogs(args map[string]string) (interface{}, error) {
 		return nil, fmt.Errorf("argument 'app' manquant")
 	}
 
-	app, err := s.rt.GetApp(appID)
-	if err != nil {
-		return nil, err
-	}
-
 	tail := 100
 	if t := args["tail"]; t != "" {
 		if n, err := fmt.Sscanf(t, "%d", &tail); n != 1 || err != nil {
 			tail = 100
 		}
+	}
+
+	if isPlatformService(appID) {
+		out, err := exec.Command("journalctl", "-u", appID,
+			fmt.Sprintf("-n%d", tail), "--no-pager").Output()
+		if err != nil {
+			return nil, fmt.Errorf("journalctl %s: %w", appID, err)
+		}
+		return map[string]string{"logs": string(out)}, nil
+	}
+
+	app, err := s.rt.GetApp(appID)
+	if err != nil {
+		return nil, err
 	}
 
 	logs, err := s.dc.Logs(app.ComposeDir, tail)
@@ -452,6 +500,9 @@ func (s *Server) handleStop(args map[string]string) error {
 	if !ok || appID == "" {
 		return fmt.Errorf("argument 'app' manquant")
 	}
+	if isPlatformService(appID) {
+		return exec.Command("systemctl", "stop", appID).Run()
+	}
 	app, err := s.rt.GetApp(appID)
 	if err != nil {
 		return err
@@ -469,6 +520,9 @@ func (s *Server) handleStart(args map[string]string) error {
 	if !ok || appID == "" {
 		return fmt.Errorf("argument 'app' manquant")
 	}
+	if isPlatformService(appID) {
+		return exec.Command("systemctl", "start", appID).Run()
+	}
 	app, err := s.rt.GetApp(appID)
 	if err != nil {
 		return err
@@ -485,6 +539,17 @@ func (s *Server) handleRestart(args map[string]string) error {
 	appID, ok := args["app"]
 	if !ok || appID == "" {
 		return fmt.Errorf("argument 'app' manquant")
+	}
+	if isPlatformService(appID) {
+		if appID == "caleoped" {
+			// Le daemon redémarre lui-même : on laisse la réponse partir avant de couper.
+			go func() {
+				time.Sleep(300 * time.Millisecond)
+				_ = exec.Command("systemctl", "restart", "caleoped").Run()
+			}()
+			return nil
+		}
+		return exec.Command("systemctl", "restart", appID).Run()
 	}
 	app, err := s.rt.GetApp(appID)
 	if err != nil {
@@ -920,12 +985,31 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		ghToken = cfg.GithubToken
 	}
 	curlGH := func(url string) ([]byte, error) {
-		args := []string{"-fsSL"}
+		curlArgs := []string{"-sSL", "-w", "\n%{http_code}"}
 		if ghToken != "" {
-			args = append(args, "-H", "Authorization: token "+ghToken)
+			curlArgs = append(curlArgs, "-H", "Authorization: token "+ghToken)
 		}
-		args = append(args, url)
-		return exec.Command("curl", args...).Output()
+		curlArgs = append(curlArgs, url)
+		out, err := exec.Command("curl", curlArgs...).Output()
+		if err != nil {
+			return nil, fmt.Errorf("erreur réseau vers GitHub: %w", err)
+		}
+		// La dernière ligne contient le code HTTP
+		raw := strings.TrimRight(string(out), "\n")
+		lastNL := strings.LastIndex(raw, "\n")
+		code := raw[lastNL+1:]
+		body := []byte(raw[:lastNL])
+		if code != "200" {
+			switch code {
+			case "403":
+				return nil, fmt.Errorf("GitHub API: accès refusé (HTTP 403) — rate limit ou repo privé. Configurez un token: caleope configure --gh-token <token>")
+			case "404":
+				return nil, fmt.Errorf("GitHub API: aucune release trouvée (HTTP 404) — vérifiez le canal (caleope version)")
+			default:
+				return nil, fmt.Errorf("GitHub API: HTTP %s pour %s", code, url)
+			}
+		}
+		return body, nil
 	}
 
 	// Choisir l'endpoint GitHub selon le canal
@@ -958,7 +1042,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		}
 		found := false
 		for _, r := range releases {
-			if r.Prerelease {
+			if r.TagName == "alpha-latest" {
 				release = r
 				found = true
 				break
@@ -968,7 +1052,7 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 			return map[string]string{
 				"status":  "up_to_date",
 				"version": version.Version,
-				"message": "Aucune pré-release alpha disponible sur GitHub",
+				"message": "Aucune release alpha disponible sur GitHub",
 			}, nil
 		}
 	} else {
@@ -1458,6 +1542,27 @@ WantedBy=multi-user.target
 `, domain, hostIP)
 	}
 	_ = os.WriteFile(filepath.Join(traefikDir, "caleope-ui.yml"), []byte(traefikConf), 0644)
+
+	// 3. UFW — ouvrir port 8766 depuis les bridges Docker vers caleope-ui (service host).
+	// UFW avec policy DROP bloque le trafic container → service systemd.
+	// On autorise le /16 de la gateway caleope-public ET le réseau par défaut de Traefik.
+	if hostIP != "" {
+		parts := strings.Split(hostIP, ".")
+		if len(parts) == 4 {
+			subnet := fmt.Sprintf("%s.%s.0.0/16", parts[0], parts[1])
+			_ = exec.Command("ufw", "allow", "from", subnet, "to", "any", "port", "8766",
+				"comment", "caleope-ui Traefik bridge").Run()
+		}
+	}
+	// Autoriser aussi le réseau par défaut de Traefik (peut différer de caleope-public).
+	if dfltGW := getTraefikDefaultGateway(); dfltGW != "" && dfltGW != hostIP {
+		parts := strings.Split(dfltGW, ".")
+		if len(parts) == 4 {
+			subnet := fmt.Sprintf("%s.%s.0.0/16", parts[0], parts[1])
+			_ = exec.Command("ufw", "allow", "from", subnet, "to", "any", "port", "8766",
+				"comment", "caleope-ui Traefik default-gw").Run()
+		}
+	}
 }
 
 // getHostIP retourne l'IP principale de l'hôte (interface sortante).
@@ -1484,6 +1589,17 @@ func getDockerGateway(network string) string {
 		return ""
 	}
 	return ip
+}
+
+// getTraefikDefaultGateway retourne l'IP de la default gateway vue depuis le container Traefik.
+// Utile pour autoriser les réseaux Docker supplémentaires que Traefik utilise via UFW.
+func getTraefikDefaultGateway() string {
+	out, err := exec.Command("docker", "exec", "traefik",
+		"sh", "-c", "ip route show default | awk '{print $3}'").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // ─────────────────────────────────────────────
@@ -1682,4 +1798,31 @@ func (s *Server) ensureCoreApps() {
 			fmt.Printf("✅ %s installé\n", app.id)
 		}
 	}
+}
+
+func (s *Server) handleLicenseActivate(args map[string]string) (interface{}, error) {
+	key, ok := args["license_key"]
+	if !ok || key == "" {
+		return nil, fmt.Errorf("argument 'license_key' manquant")
+	}
+	if err := s.lic.Activate(key); err != nil {
+		return nil, err
+	}
+	st := s.lic.Status()
+	return map[string]interface{}{
+		"activated": true,
+		"edition":   st.Edition,
+		"message":   fmt.Sprintf("Licence %s activée avec succès", strings.ToUpper(st.Edition)),
+	}, nil
+}
+
+func (s *Server) handleLicenseStatus() (interface{}, error) {
+	st := s.lic.Status()
+	return map[string]interface{}{
+		"activated":    st.Activated,
+		"edition":      st.Edition,
+		"license_key":  st.LicenseKey,
+		"machine_hash": st.MachineHash,
+		"issued_at":    st.IssuedAt,
+	}, nil
 }
