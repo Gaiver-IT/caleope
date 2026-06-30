@@ -32,6 +32,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
 	"github.com/gaiver-it/caleope/internal/install"
+	"github.com/gaiver-it/caleope/internal/license"
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
 	"github.com/gaiver-it/caleope/internal/runtime"
@@ -59,6 +60,7 @@ type Server struct {
 	sched      *scheduler.Scheduler
 	baseDir    string
 	token      string
+	lic        *license.Manager
 }
 
 func NewServer(
@@ -72,6 +74,7 @@ func NewServer(
 	emitter *events.Emitter,
 	net *network.Manager,
 	baseDir string,
+	lic *license.Manager,
 ) *Server {
 	s := &Server{
 		socketPath: socketPath,
@@ -85,6 +88,7 @@ func NewServer(
 		net:        net,
 		baseDir:    baseDir,
 		token:      loadOrCreateToken(baseDir),
+		lic:        lic,
 	}
 	// Le scheduler est injecté après construction (le daemon appelle scheduler.New(baseDir, server))
 	return s
@@ -186,7 +190,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 	)
 
 	switch req.Command {
+	case "license.activate":
+		data, err = s.handleLicenseActivate(req.Args)
+	case "license.status":
+		data, err = s.handleLicenseStatus()
 	case "install":
+		if !s.lic.IsActivated() {
+			err = fmt.Errorf("licence non activée — activez d'abord avec : caleope license activate <clé>")
+			break
+		}
 		data, err = s.handleInstall(req.Args)
 	case "store-params":
 		data, err = s.handleStoreParams(req.Args)
@@ -1786,4 +1798,31 @@ func (s *Server) ensureCoreApps() {
 			fmt.Printf("✅ %s installé\n", app.id)
 		}
 	}
+}
+
+func (s *Server) handleLicenseActivate(args map[string]string) (interface{}, error) {
+	key, ok := args["license_key"]
+	if !ok || key == "" {
+		return nil, fmt.Errorf("argument 'license_key' manquant")
+	}
+	if err := s.lic.Activate(key); err != nil {
+		return nil, err
+	}
+	st := s.lic.Status()
+	return map[string]interface{}{
+		"activated": true,
+		"edition":   st.Edition,
+		"message":   fmt.Sprintf("Licence %s activée avec succès", strings.ToUpper(st.Edition)),
+	}, nil
+}
+
+func (s *Server) handleLicenseStatus() (interface{}, error) {
+	st := s.lic.Status()
+	return map[string]interface{}{
+		"activated":    st.Activated,
+		"edition":      st.Edition,
+		"license_key":  st.LicenseKey,
+		"machine_hash": st.MachineHash,
+		"issued_at":    st.IssuedAt,
+	}, nil
 }

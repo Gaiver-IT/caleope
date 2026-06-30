@@ -92,6 +92,8 @@ func main() {
 		fmt.Printf("caleope %s (commit: %s)\n", version.Version, version.Commit)
 	case "ping":
 		cmdPing()
+	case "license":
+		cmdLicense(args)
 	case "token":
 		cmdToken()
 	case "offline-pack":
@@ -1491,4 +1493,58 @@ func contains(slice []string, item string) bool {
 func die(msg string) {
 	fmt.Fprintln(os.Stderr, msg)
 	os.Exit(1)
+}
+
+// ─────────────────────────────────────────────
+// LICENCE
+// ─────────────────────────────────────────────
+
+func cmdLicense(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage:")
+		fmt.Println("  caleope license activate <CALP-XXXX-XXXX-XXXX>")
+		fmt.Println("  caleope license status")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "activate":
+		if len(args) < 2 {
+			die("❌ Usage: caleope license activate <CALP-XXXX-XXXX-XXXX>")
+		}
+		resp := callDaemon("license.activate", map[string]string{"license_key": args[1]})
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		data, _ := resp.Data.(map[string]interface{})
+		edition := ""
+		if data != nil {
+			edition, _ = data["edition"].(string)
+		}
+		fmt.Printf("✓ Licence %s activée avec succès\n", strings.ToUpper(edition))
+
+	case "status":
+		resp := callDaemon("license.status", nil)
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		data, _ := resp.Data.(map[string]interface{})
+		if data == nil {
+			die("❌ Réponse invalide")
+		}
+		activated, _ := data["activated"].(bool)
+		if !activated {
+			fmt.Println("⚠️  Licence non activée")
+			fmt.Println("   Activez avec : caleope license activate <CALP-XXXX-XXXX-XXXX>")
+			return
+		}
+		edition, _ := data["edition"].(string)
+		key, _ := data["license_key"].(string)
+		fmt.Printf("✓ Licence active\n")
+		fmt.Printf("  Édition     : %s\n", strings.ToUpper(edition))
+		fmt.Printf("  Clé         : %s\n", key)
+
+	default:
+		die("❌ Sous-commande inconnue: caleope license " + args[0])
+	}
 }

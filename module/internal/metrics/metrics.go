@@ -14,6 +14,7 @@ package metrics
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -103,7 +104,9 @@ type dockerStat struct {
 func collectDockerStats() map[string]dockerStat {
 	result := make(map[string]dockerStat)
 
-	cmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{json .}}")
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "stats", "--no-stream", "--format", "{{json .}}")
 	out, err := cmd.Output()
 	if err != nil {
 		return result
