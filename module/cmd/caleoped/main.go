@@ -158,7 +158,7 @@ func main() {
 	}()
 
 	fmt.Println("\n✓ Daemon prêt — en attente de connexions")
-	fmt.Println("  Appuyez sur Ctrl+C pour arrêter\n")
+	fmt.Print("  Appuyez sur Ctrl+C pour arrêter\n\n")
 
 	// Attendre soit une erreur, soit un signal d'arrêt
 	// select = "attendre le premier canal qui a quelque chose"
