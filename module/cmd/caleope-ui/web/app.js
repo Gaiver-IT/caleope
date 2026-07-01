@@ -5605,7 +5605,7 @@ const SECTIONS = {
   events:    { label: 'ÉVÉNEMENTS',       num: '/07', load: loadEvents,     content: 'content-events',     btn: null },
   audit:     { label: 'AUDIT',           num: '/08', load: loadAudit,      content: 'content-audit',      btn: null },
   settings:  { label: 'PARAMÈTRES',      num: '/09', load: loadSettings,   content: 'content-settings',   btn: null },
-  stats:     { label: 'SYSTÈME',         num: '/10', load: loadStats,      content: 'content-stats',      btn: null },
+  stats:     { label: 'RESSOURCES',      num: '/10', load: loadStats,      content: 'content-stats',      btn: null },
   terminal:  { label: 'TERMINAL',        num: '/11', load: loadTerminal,   content: 'content-terminal',   btn: null },
   services:  { label: 'SERVICES',        num: '/12', load: loadServices,   content: 'content-services',   btn: null },
   network:   { label: 'RÉSEAU',          num: '/13', load: loadNetwork,    content: 'content-network',    btn: null },

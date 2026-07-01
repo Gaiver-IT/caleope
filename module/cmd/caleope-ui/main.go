@@ -47,6 +47,7 @@ var webFiles embed.FS
 type sessions struct {
 	mu   sync.RWMutex
 	data map[string]time.Time
+	path string // fichier de persistance (vide = pas de persistance)
 }
 
 // vwSessionCache : cookie VW_ADMIN mis en cache pour éviter le rate-limit (Max-Age=1200s)
@@ -116,7 +117,11 @@ func ghostAdminJWT(apiKey string) (string, error) {
 	return msg + "." + sig, nil
 }
 
-func newSessions() *sessions { return &sessions{data: make(map[string]time.Time)} }
+func newSessions(path string) *sessions {
+	s := &sessions{data: make(map[string]time.Time), path: path}
+	s.load()
+	return s
+}
 
 func (s *sessions) create() string {
 	b := make([]byte, 32)
@@ -125,6 +130,7 @@ func (s *sessions) create() string {
 	s.mu.Lock()
 	s.data[tok] = time.Now().Add(24 * time.Hour)
 	s.mu.Unlock()
+	s.save()
 	return tok
 }
 
@@ -139,6 +145,54 @@ func (s *sessions) delete(tok string) {
 	s.mu.Lock()
 	delete(s.data, tok)
 	s.mu.Unlock()
+	s.save()
+}
+
+// load charge les sessions persistées (best-effort, fail-safe : en cas d'erreur
+// on démarre avec un store vide — équivalent au comportement sans persistance).
+func (s *sessions) load() {
+	if s.path == "" {
+		return
+	}
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return
+	}
+	var m map[string]int64 // token → expiry (unix)
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return
+	}
+	now := time.Now()
+	s.mu.Lock()
+	for tok, exp := range m {
+		if t := time.Unix(exp, 0); t.After(now) {
+			s.data[tok] = t // ignorer les sessions expirées
+		}
+	}
+	s.mu.Unlock()
+}
+
+// save persiste les sessions non expirées (best-effort ; un échec d'écriture ne
+// bloque jamais l'authentification, qui reste en mémoire).
+func (s *sessions) save() {
+	if s.path == "" {
+		return
+	}
+	now := time.Now()
+	s.mu.RLock()
+	m := make(map[string]int64, len(s.data))
+	for tok, exp := range s.data {
+		if exp.After(now) {
+			m[tok] = exp.Unix()
+		}
+	}
+	s.mu.RUnlock()
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(s.path), 0o700)
+	_ = os.WriteFile(s.path, raw, 0o600)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -201,7 +255,7 @@ func main() {
 	}
 	var uiPasswordMu sync.RWMutex
 
-	store := newSessions()
+	store := newSessions(filepath.Join(*baseDir, "data", "ui", "sessions.json"))
 
 	// Répertoire pour le logo custom
 	logoDir  := filepath.Join(*baseDir, "data", "ui")
