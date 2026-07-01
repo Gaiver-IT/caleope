@@ -161,6 +161,9 @@
           <button class="nav-btn" data-section="apps" onclick="goSection('apps')">
             <i class="ti ti-layout-grid" aria-hidden="true"></i>APPLICATIONS
           </button>
+          <button class="nav-btn" id="nav-integrations" data-section="integrations" onclick="goSection('integrations')" style="display:none">
+            <i class="ti ti-puzzle" aria-hidden="true"></i>INTÉGRATIONS
+          </button>
           <button class="nav-btn" data-section="logs" onclick="goSection('logs')">
             <i class="ti ti-terminal-2" aria-hidden="true"></i>LOGS
           </button>
@@ -292,6 +295,9 @@
 
       <!-- DASHBOARD -->
       <div id="content-dashboard" class="section-content hidden" role="main"></div>
+
+      <!-- INTÉGRATIONS (page dédiée : cartes par app installée) -->
+      <div id="content-integrations" class="section-content hidden"><div id="integrations-grid"></div></div>
 
       <!-- APPS -->
       <div id="content-apps" class="section-content hidden" role="main"></div>

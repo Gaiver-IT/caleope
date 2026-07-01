@@ -5611,6 +5611,7 @@ const SECTIONS = {
   network:   { label: 'RÉSEAU',          num: '/13', load: loadNetwork,    content: 'content-network',    btn: null },
   storage:   { label: 'STOCKAGE',        num: '/14', load: loadStorage,    content: 'content-storage',    btn: null },
   journal:   { label: 'JOURNAL',         num: '/15', load: loadJournal,    content: 'content-journal',    btn: null },
+  integrations: { label: 'INTÉGRATIONS', num: '/INT', load: buildDynamicNav, content: 'content-integrations', btn: null },
 };
 
 // ── Intégrations apps (panels embarqués) ─────────────────────────────────────
@@ -6008,36 +6009,24 @@ function buildPinnedSection() {
   }).join('');
 }
 
+// Intégrations : au lieu d'empiler des sous-groupes déroulants dans la sidebar
+// (qui prenaient tout l'espace vertical), on enregistre les panels puis on rend
+// une PAGE dédiée (cartes par app). La sidebar garde un seul item "INTÉGRATIONS".
 function buildDynamicNav() {
-  const sbInt = document.getElementById('sb-integrations');
-  if (!sbInt) return;
-
   const installedIds = new Set(S.apps.map(a => a.id));
   const content = document.querySelector('.content');
-
-  let html = '';
   let hasAny = false;
+  const cards = [];
 
   Object.entries(APP_PANELS).forEach(([appId, app]) => {
     if (!installedIds.has(appId)) return;
     hasAny = true;
-    const gid = 'int-' + appId;
     const appObj = S.apps.find(a => a.id === appId);
     const isRunning = appObj?.status === 'running';
-    const healthDot = `<span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${isRunning ? 'var(--green-b)' : 'var(--red-b)'};margin-right:4px;flex-shrink:0"></span>`;
-    html += `
-      <div class="sb-section">
-        <button class="sb-app-toggle" data-gid="${gid}" id="sb-items-${gid}-toggle"
-          onclick="toggleSbGroup('${gid}')">
-          <i class="ti ${app.icon}" style="font-size:11px;opacity:.7"></i>
-          ${healthDot}<span>${appObj?.name || appId}</span>
-          <i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
-        </button>
-        <div class="sb-app-items" id="sb-items-${gid}">`;
+
+    // Enregistrer les sections de panels + créer leurs content divs
+    // (goSection('panel-...') s'appuie dessus — inchangé).
     app.panels.forEach(panel => {
-      html += `<button class="nav-btn" data-section="${panel.id}" onclick="goSection('${panel.id}')">
-        <i class="ti ${panel.icon}" aria-hidden="true"></i>${panel.label}
-      </button>`;
       if (!SECTIONS[panel.id]) {
         SECTIONS[panel.id] = {
           label: panel.label, num: '/INT', load: panel.load,
@@ -6051,30 +6040,41 @@ function buildDynamicNav() {
         content.appendChild(el);
       }
     });
-    html += `</div></div>`;
+
+    // Carte de l'app pour la page dédiée
+    const dot = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isRunning ? 'var(--green-b)' : 'var(--red-b)'};flex-shrink:0"></span>`;
+    const panelBtns = app.panels.map(p =>
+      `<button class="btn" onclick="goSection('${p.id}')" style="justify-content:flex-start"><i class="ti ${p.icon}"></i>${p.label}</button>`
+    ).join('');
+    cards.push(`
+      <div class="int-card" style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <i class="ti ${app.icon}" style="font-size:18px;color:var(--vio-b)"></i>
+          ${dot}
+          <span style="font-weight:700;font-size:12px;letter-spacing:.3px">${escapeHtml(appObj?.name || appId)}</span>
+          <span style="margin-left:auto;font-size:8px;color:var(--text3);letter-spacing:.5px">${app.group || ''}</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${panelBtns}</div>
+      </div>`);
   });
 
-  sbInt.innerHTML = html;
+  // Rendre la page dédiée
+  const grid = document.getElementById('integrations-grid');
+  if (grid) {
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px';
+    grid.innerHTML = hasAny ? cards.join('')
+      : '<div style="padding:40px;text-align:center;color:var(--text3);font-size:10px">Aucune intégration disponible. Installe une app compatible (Authentik, Nextcloud, Gitea…) pour la gérer ici.</div>';
+  }
 
-  // Afficher / masquer le groupe parent INTÉGRATIONS
-  const sbSectionInt = document.getElementById('sb-section-integrations');
-  if (sbSectionInt) sbSectionInt.style.display = hasAny ? '' : 'none';
+  // Item de nav unique (visible seulement si au moins une intégration installée)
+  const navItem = document.getElementById('nav-integrations');
+  if (navItem) navItem.style.display = hasAny ? '' : 'none';
 
-  // Restaurer état collapse pour les sous-groupes intégrations
-  Object.keys(APP_PANELS).forEach(appId => {
-    if (!installedIds.has(appId)) return;
-    const gid = 'int-' + appId;
-    try {
-      if (localStorage.getItem('sb-col-' + gid) === '1') {
-        const items = document.getElementById(`sb-items-${gid}`);
-        const tog   = document.querySelector(`[data-gid="${gid}"]`);
-        if (items) { items.classList.add('collapsed'); }
-        if (tog)   { tog.classList.add('collapsed'); }
-      }
-    } catch(e) {}
-  });
+  // Neutraliser l'ancien groupe déroulant de la sidebar
+  const oldGroup = document.getElementById('sb-section-integrations');
+  if (oldGroup) oldGroup.style.display = 'none';
 
-  // Re-marquer le bouton actif si on est déjà dans un panel
+  // Re-marquer le bouton actif
   document.querySelectorAll('.nav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.section === S.section);
   });
