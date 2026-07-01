@@ -22,7 +22,7 @@
       </div>
       <div>
         <div class="logo-name">CALEOPE</div>
-        <div class="logo-ver">CLIENT V0.5.1</div>
+        <div class="logo-ver">INTERFACE WEB</div>
       </div>
     </div>
 
@@ -201,16 +201,14 @@
         </div>
       </div>
 
+      <!-- Supervision : observer l'état du serveur -->
       <div class="sb-section">
-        <button class="sb-group-toggle" data-gid="g-sys" onclick="toggleSbGroup('g-sys')">
-          <span>// SYSTÈME</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        <button class="sb-group-toggle" data-gid="g-supervision" onclick="toggleSbGroup('g-supervision')">
+          <span>// SUPERVISION</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
         </button>
-        <div class="sb-items" id="sb-items-g-sys">
-          <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
-            <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
-          </button>
-          <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
-            <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
+        <div class="sb-items" id="sb-items-g-supervision">
+          <button class="nav-btn" data-section="stats" onclick="goSection('stats')">
+            <i class="ti ti-chart-bar" aria-hidden="true"></i>RESSOURCES
           </button>
           <button class="nav-btn" data-section="events" onclick="goSection('events');clearEventsBadge()">
             <i class="ti ti-history" aria-hidden="true"></i>ÉVÉNEMENTS
@@ -220,8 +218,20 @@
           <button class="nav-btn" data-section="audit" onclick="goSection('audit')">
             <i class="ti ti-clipboard-list" aria-hidden="true"></i>AUDIT
           </button>
-          <button class="nav-btn" data-section="stats" onclick="goSection('stats')">
-            <i class="ti ti-chart-bar" aria-hidden="true"></i>SYSTÈME
+        </div>
+      </div>
+
+      <!-- Configuration : régler le serveur -->
+      <div class="sb-section">
+        <button class="sb-group-toggle" data-gid="g-config" onclick="toggleSbGroup('g-config')">
+          <span>// CONFIGURATION</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-config">
+          <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
+            <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
+          </button>
+          <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
+            <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
           </button>
           <button class="nav-btn" data-section="settings" onclick="goSection('settings')">
             <i class="ti ti-settings" aria-hidden="true"></i>PARAMÈTRES
@@ -747,8 +757,8 @@ async function updateSidebarInfo() {
   const d = resp.data ?? resp;
   const host = d.domain?.split('.')[0]?.toUpperCase() || 'CALEOPE';
   document.getElementById('chip-host').textContent = host;
-  document.getElementById('chip-ip').textContent   = d.version ? 'v' + d.version : '—';
-  document.getElementById('sb-version').textContent = d.version ? 'V' + d.version.toUpperCase() : 'V—';
+  document.getElementById('chip-ip').textContent   = d.version || '—';
+  document.getElementById('sb-version').textContent = d.version ? d.version.toUpperCase() : 'V—';
 }
 
 const _showApp = showApp;
