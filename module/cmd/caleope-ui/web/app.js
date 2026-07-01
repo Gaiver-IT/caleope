@@ -2588,8 +2588,10 @@ async function loadSettingsLicense() {
   const el = document.getElementById('license-settings-content');
   if (!el) return;
   const r = await fetch('/api/v1/license');
-  const d = r.ok ? await r.json() : null;
-  if (!d) { el.innerHTML = '<div style="font-size:9px;color:var(--red-b)">Impossible de contacter le serveur de licence</div>'; return; }
+  const raw = r.ok ? await r.json() : null;
+  if (!raw) { el.innerHTML = '<div style="font-size:9px;color:var(--red-b)">Impossible de contacter le serveur de licence</div>'; return; }
+  // Réponse API enveloppée : {data:{...},success}. On lit d.data.
+  const d = (raw && raw.data) ? raw.data : raw;
 
   if (d.activated) {
     el.innerHTML = `
@@ -10023,7 +10025,9 @@ async function checkLicenseOnLogin() {
     const r = await fetch('/api/v1/license');
     if (!r.ok) return;
     const d = await r.json();
-    if (!d.activated) showLicenseModal();
+    // La réponse API est enveloppée : {data:{activated,...},success}. On lit d.data.
+    const lic = (d && d.data) ? d.data : d;
+    if (!lic || !lic.activated) showLicenseModal();
   } catch(e) {}
 }
 
