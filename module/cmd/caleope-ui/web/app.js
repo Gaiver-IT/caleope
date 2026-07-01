@@ -3101,7 +3101,7 @@ async function loadDashboard() {
     { id: 'secrets',   icon: 'ti-lock',            label: 'SECRETS',      val: 'AES-256-GCM' },
     { id: 'events',    icon: 'ti-history',         label: 'ÉVÉNEMENTS',   val: 'Historique' },
     { id: 'audit',     icon: 'ti-clipboard-list',  label: 'AUDIT',        val: 'Journal sécurisé' },
-    { id: 'stats',     icon: 'ti-chart-bar',       label: 'SYSTÈME',      val: ram ? `RAM ${ram}%` : '—' },
+    { id: 'stats',     icon: 'ti-chart-bar',       label: 'RESSOURCES',   val: ram ? `RAM ${ram}%` : '—' },
     { id: 'settings',  icon: 'ti-settings',        label: 'PARAMÈTRES',   val: `v${S.stats.version || '—'}` },
   ];
 
@@ -5382,7 +5382,7 @@ async function loadDashResourcesWidget() {
   }).join('<div style="width:1px;background:var(--border)"></div>');
 
   const sparkHtml = `
-    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:0 0 10px">// SYSTÈME${hist && hist.length > 1 ? ` <span style="font-size:7px;font-weight:400;opacity:.5">· ${hist.length} pts / 1h</span>` : ''}</div>
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:0 0 10px">// RESSOURCES${hist && hist.length > 1 ? ` <span style="font-size:7px;font-weight:400;opacity:.5">· ${hist.length} pts / 1h</span>` : ''}</div>
     <div class="settings-card" style="padding:10px 12px;margin-bottom:14px">
       <div style="display:flex;gap:14px;align-items:stretch">${sysMetrics}</div>
     </div>`;
