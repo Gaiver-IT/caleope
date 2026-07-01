@@ -896,10 +896,6 @@ function appCard(app) {
             <i class="ti ti-notes"></i>
             <span class="btn-label">NOTES</span>
           </button>
-          <button class="action-btn danger" onclick="removeApp('${app.id}')" title="Supprimer">
-            <i class="ti ti-trash"></i>
-            <span class="btn-label">SUPPRIMER</span>
-          </button>
           ${APP_PANELS[app.id] && isRunning ? `
           <button class="action-btn" onclick="goSection('${APP_PANELS[app.id].panels[0]?.id || 'panel-'+app.id}')" title="Ouvrir le panel intégré">
             <i class="ti ti-layout-sidebar-right"></i>
@@ -912,6 +908,10 @@ function appCard(app) {
               <span class="btn-label">${pinned ? 'ÉPINGLÉ' : 'ÉPINGLER'}</span>
             </button>`;
           })()}
+          <button class="action-btn danger" onclick="removeApp('${app.id}')" title="Supprimer (action irréversible)">
+            <i class="ti ti-trash"></i>
+            <span class="btn-label">SUPPRIMER</span>
+          </button>
         </div>
         ${domain ? `<a class="app-link" href="${domain}" target="_blank" rel="noopener"><i class="ti ti-external-link" style="font-size:10px"></i>OUVRIR</a>` : ''}
       </div>

@@ -677,7 +677,7 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
   padding-top: 9px;
   gap: 6px;
 }
-.app-actions { display: flex; gap: 4px; }
+.app-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 
 /* Boutons avec expand au hover */
 .action-btn {
