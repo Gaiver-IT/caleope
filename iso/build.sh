@@ -21,8 +21,18 @@ set -euo pipefail
 # ── Paramètres ──────────────────────────────────────────────────────────────
 DEBIAN_VER="${DEBIAN_VER:-13.0.0}"
 ARCH="amd64"
-CALEOPE_VERSION="${CALEOPE_VERSION:-v0.6.3}"
+CALEOPE_VERSION="${CALEOPE_VERSION:-v0.6.6}"
 REPO="Gaiver-IT/caleope"
+STORE_REPO="gaiver-it/caleope-store"
+# Canal : stable → branche store main, alpha → branche store alpha
+CHANNEL="${CHANNEL:-stable}"
+# Registre miroir baké dans l'ISO (les apps pull depuis là plutôt que Docker Hub)
+CALEOPE_REGISTRY="${CALEOPE_REGISTRY:-}"
+CALEOPE_REGISTRY_USER="${CALEOPE_REGISTRY_USER:-}"
+CALEOPE_REGISTRY_PASS="${CALEOPE_REGISTRY_PASS:-}"
+# ISO offline : dossier d'images Docker (.tar) à embarquer (produit par
+# offline-builder). Vide = ISO online (apps pull depuis le registre/Docker Hub).
+OFFLINE_IMAGES_DIR="${OFFLINE_IMAGES_DIR:-}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="${WORK:-$HERE/build}"
@@ -61,20 +71,64 @@ for INITRD in "$EXTRACT/install.amd/initrd.gz" "$EXTRACT/install.amd/gtk/initrd.
   rm -rf "$TMP"
 done
 
-# ── 4. Copier le payload Caleope (binaires + install.sh + cache store) ──────
-echo "📦 Assemblage du payload Caleope (${CALEOPE_VERSION})..."
-PAYLOAD="$EXTRACT/caleope"; mkdir -p "$PAYLOAD/bin"
+# ── 4. Assembler le payload Caleope (format bundle offline) ─────────────────
+# Layout attendu par install.sh --iso / --offline :
+#   caleope/binaries/{caleoped,caleope,caleope-ui}
+#   caleope/store.tar.gz            (le store, wrappé dans un dossier)
+#   caleope/install.sh              (l'installeur, lancé par le preseed)
+#   caleope/caleope-completion.bash (autocomplétion)
+#   caleope/pack-info.json          (métadonnées : version, canal, registre)
+#   caleope/images/*.tar            (optionnel — ISO offline uniquement)
+echo "📦 Assemblage du payload Caleope (${CALEOPE_VERSION}, canal ${CHANNEL})..."
+PAYLOAD="$EXTRACT/caleope"; rm -rf "$PAYLOAD"; mkdir -p "$PAYLOAD/binaries"
 BASE="https://github.com/${REPO}/releases/download/${CALEOPE_VERSION}"
 for b in caleoped caleope caleope-ui; do
-  wget -qO "$PAYLOAD/bin/$b" "$BASE/${b}-linux-amd64"
+  echo "   ⬇️  $b"
+  wget -qO "$PAYLOAD/binaries/$b" "$BASE/${b}-linux-amd64"
 done
-# install.sh depuis la branche correspondante (ou embarqué)
-wget -qO "$PAYLOAD/install.sh" "https://raw.githubusercontent.com/${REPO}/main/install.sh"
-# Cache du store (clone shallow — pour l'offline des définitions d'apps)
-if command -v git >/dev/null 2>&1; then
-  git clone --depth 1 "https://github.com/gaiver-it/caleope-store.git" "$PAYLOAD/store" 2>/dev/null || \
-    echo "⚠️  clone store échoué (le cache store sera sync au 1er boot)"
+chmod +x "$PAYLOAD/binaries/"*
+
+# install.sh + autocomplétion depuis le tag correspondant (fallback main)
+wget -qO "$PAYLOAD/install.sh" "https://raw.githubusercontent.com/${REPO}/${CALEOPE_VERSION}/install.sh" \
+  || wget -qO "$PAYLOAD/install.sh" "https://raw.githubusercontent.com/${REPO}/main/install.sh"
+chmod +x "$PAYLOAD/install.sh"
+wget -qO "$PAYLOAD/caleope-completion.bash" \
+  "https://raw.githubusercontent.com/${REPO}/${CALEOPE_VERSION}/module/scripts/caleope-completion.bash" 2>/dev/null || true
+
+# Store : clone de la branche du canal, wrappé dans un dossier puis tar.gz
+# (install.sh extrait avec --strip-components=1 → dossier wrapper retiré).
+STORE_BRANCH="main"; [[ "$CHANNEL" == "alpha" ]] && STORE_BRANCH="alpha"
+STORE_TMP="$WORK/store-clone"; rm -rf "$STORE_TMP"
+if git clone --depth 1 --branch "$STORE_BRANCH" "https://github.com/${STORE_REPO}.git" \
+     "$STORE_TMP/caleope-store" 2>/dev/null; then
+  ( cd "$STORE_TMP" && tar czf "$PAYLOAD/store.tar.gz" caleope-store )
+  rm -rf "$STORE_TMP"
+  echo "   ✅ store ($STORE_BRANCH) empaqueté"
+else
+  echo "   ❌ clone du store échoué — build interrompu"; exit 1
 fi
+
+# Images Docker (ISO offline uniquement)
+if [[ -n "$OFFLINE_IMAGES_DIR" && -d "$OFFLINE_IMAGES_DIR" ]]; then
+  echo "   📦 Intégration des images offline depuis $OFFLINE_IMAGES_DIR"
+  mkdir -p "$PAYLOAD/images"; cp "$OFFLINE_IMAGES_DIR"/*.tar "$PAYLOAD/images/" 2>/dev/null || true
+fi
+
+# Service systemd d'install au 1er boot (activé par le preseed late_command)
+cp "$HERE/caleope-install.service" "$PAYLOAD/caleope-install.service"
+
+# pack-info.json — métadonnées du bundle
+cat > "$PAYLOAD/pack-info.json" << JSON
+{
+  "caleope_version": "${CALEOPE_VERSION}",
+  "channel": "${CHANNEL}",
+  "packed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "mode": "$([[ -d "$PAYLOAD/images" ]] && echo offline || echo online)",
+  "registry": "${CALEOPE_REGISTRY}",
+  "registry_user": "${CALEOPE_REGISTRY_USER}",
+  "registry_pass": "${CALEOPE_REGISTRY_PASS}"
+}
+JSON
 
 # ── 5. Patcher les bootloaders pour l'install auto (BIOS + UEFI) ────────────
 echo "⚙️  Patch des bootloaders (auto-install)..."

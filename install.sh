@@ -19,6 +19,13 @@ export PATH="/usr/sbin:/sbin:/usr/bin:/bin:/usr/local/bin:${PATH}"
 LOG_MODE="classic"
 OFFLINE_MODE=false
 OFFLINE_BUNDLE_PATH=""
+# Mode ISO : install non-interactive depuis le payload embarqué sur l'ISO
+# (voir iso/build.sh + iso/preseed.cfg). La config utilisateur (domaine, proxy,
+# mots de passe) est reportée au wizard de 1er démarrage (--iso-finalize).
+ISO_MODE=false
+ISO_FINALIZE=false
+# Répertoire du script lui-même (= payload ISO quand lancé en mode --iso)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo ".")"
 
 parse_args() {
     local i=1
@@ -34,6 +41,22 @@ parse_args() {
                     echo "Erreur : --offline requiert un chemin vers le bundle" >&2
                     exit 1
                 }
+                ;;
+            # ── Mode ISO ────────────────────────────────────────────────────
+            # --iso : install de base non-interactive (preseed late_command).
+            #   Le payload (binaires + store [+ images]) est à côté de ce script.
+            #   Réutilise la machinerie offline ; la config est reportée au 1er boot.
+            --iso)
+                ISO_MODE=true
+                OFFLINE_MODE=true
+                # payload = dossier du script, sauf si --offline l'a déjà défini
+                [[ -z "${OFFLINE_BUNDLE_PATH}" ]] && OFFLINE_BUNDLE_PATH="${SCRIPT_DIR}"
+                ;;
+            # --iso-finalize : wizard interactif de 1er démarrage. Complète la
+            #   config différée (domaine/proxy/mdp), déploie Traefik + apps, puis
+            #   se désactive. Lancé par caleope-firstboot.service sur tty1.
+            --iso-finalize)
+                ISO_FINALIZE=true
                 ;;
         esac
         i=$((i + 1))
@@ -80,6 +103,11 @@ CALEOPE_SMTP_FROM="${CALEOPE_SMTP_FROM:-}"
 CALEOPE_SECRETS_PASSWORD="${CALEOPE_SECRETS_PASSWORD:-}"
 # Mot de passe interface web
 CALEOPE_UI_PASSWORD="${CALEOPE_UI_PASSWORD:-}"
+# Registre d'images miroir (optionnel) — les apps pull leurs images depuis ici
+# au lieu de Docker Hub. Injectable par l'ISO online (build.sh) via env.
+CALEOPE_REGISTRY="${CALEOPE_REGISTRY:-}"
+CALEOPE_REGISTRY_USER="${CALEOPE_REGISTRY_USER:-}"
+CALEOPE_REGISTRY_PASS="${CALEOPE_REGISTRY_PASS:-}"
 
 # Couleurs
 RED='\033[0;31m'
@@ -176,6 +204,27 @@ load_docker_images_from_bundle() {
 
 ask_config() {
     log_section "Configuration de Caleope"
+
+    # Mode ISO (install de base) : aucune question. On pose des valeurs
+    # provisoires ; le wizard de 1er démarrage (--iso-finalize) les remplacera.
+    if [[ "${ISO_MODE}" == "true" ]]; then
+        CALEOPE_DOMAIN="${CALEOPE_DOMAIN:-caleope.local}"
+        CALEOPE_PROXY_MODE="${CALEOPE_PROXY_MODE:-standalone}"
+        # Canal : depuis pack-info.json du payload si présent, sinon stable
+        if [[ -z "${CALEOPE_CHANNEL:-}" ]] && [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]]; then
+            CALEOPE_CHANNEL=$(jq -r '.channel // "stable"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        fi
+        CALEOPE_CHANNEL="${CALEOPE_CHANNEL:-stable}"
+        # Registre miroir baké dans l'ISO online (pack-info.json)
+        if [[ -z "${CALEOPE_REGISTRY:-}" ]] && [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]]; then
+            CALEOPE_REGISTRY=$(jq -r '.registry // ""' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+            CALEOPE_REGISTRY_USER=$(jq -r '.registry_user // ""' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+            CALEOPE_REGISTRY_PASS=$(jq -r '.registry_pass // ""' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        fi
+        log_step "Mode ISO — configuration reportée au 1er démarrage (valeurs provisoires)"
+        echo -e "  Canal : ${YELLOW}${CALEOPE_CHANNEL}${NC}  ${GRAY}(domaine/proxy/mdp au 1er boot)${NC}"
+        return
+    fi
 
     # Mode non-interactif : si les variables essentielles sont déjà définies en
     # variables d'environnement, on les utilise directement sans prompts.
@@ -1080,6 +1129,11 @@ CALEOPE_SMTP_PORT=${CALEOPE_SMTP_PORT}
 CALEOPE_SMTP_USER=${CALEOPE_SMTP_USER}
 CALEOPE_SMTP_PASS=${CALEOPE_SMTP_PASS}
 CALEOPE_SMTP_FROM=${CALEOPE_SMTP_FROM}
+
+# Registre d'images miroir (optionnel) — vide = Docker Hub par défaut
+CALEOPE_REGISTRY=${CALEOPE_REGISTRY}
+CALEOPE_REGISTRY_USER=${CALEOPE_REGISTRY_USER}
+CALEOPE_REGISTRY_PASS=${CALEOPE_REGISTRY_PASS}
 EOF
 
     chmod 640 "${CALEOPE_ROOT}/caleope.conf"
@@ -1092,6 +1146,19 @@ EOF
         chmod 600 "${CALEOPE_ROOT}/core/daemon/ui-password"
         CALEOPE_UI_PASSWORD=""
         log_success "Mot de passe UI enregistré"
+    fi
+
+    # Si un registre miroir est configuré avec des identifiants, tenter un
+    # docker login (best-effort) pour que les pulls d'images fonctionnent.
+    if [[ -n "${CALEOPE_REGISTRY}" && -n "${CALEOPE_REGISTRY_USER}" && -n "${CALEOPE_REGISTRY_PASS}" ]] \
+        && command -v docker >/dev/null 2>&1; then
+        log_step "Connexion au registre miroir ${CALEOPE_REGISTRY}..."
+        if echo "${CALEOPE_REGISTRY_PASS}" | docker login "${CALEOPE_REGISTRY}" \
+            -u "${CALEOPE_REGISTRY_USER}" --password-stdin >/dev/null 2>&1; then
+            log_success "Connecté au registre miroir"
+        else
+            log_warning "Connexion au registre miroir échouée (pulls Docker Hub par défaut)"
+        fi
     fi
 
     log_success "Config sauvegardée dans ${CALEOPE_ROOT}/caleope.conf"
@@ -1277,6 +1344,122 @@ print_summary() {
 }
 
 # =============================================================================
+# WIZARD DE PREMIER DÉMARRAGE (ISO)
+# =============================================================================
+
+FIRSTBOOT_MARKER="${CALEOPE_ROOT}/.firstboot-needed"
+FIRSTBOOT_INSTALLER="${CALEOPE_ROOT}/bin/install.sh"
+FIRSTBOOT_UNIT="/etc/systemd/system/caleope-firstboot.service"
+
+# Installe le service systemd qui lance le wizard interactif au 1er démarrage.
+# Appelé uniquement en mode --iso (install de base).
+setup_firstboot() {
+    log_section "Wizard de premier démarrage"
+
+    # Copier ce script à un emplacement stable (le payload ISO peut disparaître)
+    mkdir -p "${CALEOPE_ROOT}/bin"
+    if cp "${BASH_SOURCE[0]}" "${FIRSTBOOT_INSTALLER}" 2>/dev/null; then
+        chmod 755 "${FIRSTBOOT_INSTALLER}"
+    else
+        log_warning "Impossible de copier install.sh — le wizard utilisera le payload d'origine"
+        FIRSTBOOT_INSTALLER="${SCRIPT_DIR}/install.sh"
+    fi
+
+    # Marqueur : le wizard ne s'exécute que s'il est présent (idempotence)
+    touch "${FIRSTBOOT_MARKER}"
+
+    # Unité systemd : s'exécute sur tty1, prend la main sur getty le temps du wizard
+    cat > "${FIRSTBOOT_UNIT}" << EOF
+[Unit]
+Description=Caleope — Assistant de premier démarrage
+After=network-online.target docker.service caleoped.service
+Wants=network-online.target
+Conflicts=getty@tty1.service
+Before=getty.target
+ConditionPathExists=${FIRSTBOOT_MARKER}
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash ${FIRSTBOOT_INSTALLER} --iso-finalize
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable caleope-firstboot.service 2>/dev/null || true
+    log_success "Wizard de 1er démarrage activé (s'exécutera au prochain boot sur la console)"
+}
+
+# Flux interactif exécuté au 1er démarrage (via caleope-firstboot.service).
+# Complète la config différée, déploie Traefik + apps, puis se désactive.
+run_iso_finalize() {
+    check_root
+
+    # Si le marqueur a disparu (déjà configuré), on ne rejoue pas le wizard
+    if [[ ! -f "${FIRSTBOOT_MARKER}" ]]; then
+        echo -e "${GRAY}Configuration déjà effectuée — rien à faire.${NC}"
+        systemctl disable caleope-firstboot.service 2>/dev/null || true
+        return
+    fi
+
+    clear 2>/dev/null || true
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║   Bienvenue sur Caleope — Configuration initiale     ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo -e "  ${GRAY}Quelques questions pour finaliser ton serveur.${NC}\n"
+
+    # Préserver le canal choisi à la construction de l'ISO
+    if [[ -f "${CALEOPE_ROOT}/caleope.conf" ]]; then
+        CALEOPE_CHANNEL=$(grep -E '^CALEOPE_CHANNEL=' "${CALEOPE_ROOT}/caleope.conf" 2>/dev/null | cut -d= -f2)
+    fi
+
+    # Poser les vraies questions (domaine, proxy, email, SMTP, mots de passe)
+    ask_config
+
+    # Écrire la config réelle + transmettre les secrets au daemon
+    save_config
+    init_secrets_encryption
+
+    # Recharger le daemon avec le vrai domaine
+    log_step "Redémarrage du daemon avec la configuration finale..."
+    systemctl restart caleoped 2>/dev/null || true
+    sleep 3
+
+    # Déployer le reverse proxy et les apps par défaut
+    deploy_traefik
+    install_default_apps
+    generate_links_file
+
+    # Terminé : retirer le marqueur et désactiver le service
+    rm -f "${FIRSTBOOT_MARKER}"
+    systemctl disable caleope-firstboot.service 2>/dev/null || true
+    # Rendre la main à getty (session de login normale)
+    systemctl start getty@tty1.service 2>/dev/null || true
+
+    print_summary
+    echo -e "  ${GREEN}Configuration terminée — ce wizard ne se relancera plus.${NC}\n"
+}
+
+# Résumé affiché après l'install de base ISO (avant le 1er démarrage réel).
+print_iso_summary() {
+    echo ""
+    echo -e "${GREEN}◆ Image Caleope installée (base).${NC}"
+    echo -e "  ${GRAY}Au prochain démarrage, un assistant configurera le domaine,${NC}"
+    echo -e "  ${GRAY}le reverse proxy et les mots de passe, puis déploiera les apps.${NC}"
+    echo ""
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -1292,7 +1475,15 @@ main() {
     echo "╚══════════════════════════════════════════╝"
     echo -e "${NC}"
 
-    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+    # ── Mode finalize (wizard 1er démarrage) : flux dédié, puis on sort ──
+    if [[ "${ISO_FINALIZE}" == "true" ]]; then
+        run_iso_finalize
+        return
+    fi
+
+    if [[ "${ISO_MODE}" == "true" ]]; then
+        echo -e "${YELLOW}Mode : ISO (install de base — config au 1er démarrage)${NC}\n"
+    elif [[ "${OFFLINE_MODE}" == "true" ]]; then
         echo -e "${YELLOW}Mode : SUBMARINE (offline) — bundle : ${OFFLINE_BUNDLE_PATH}${NC}\n"
     elif [[ "${LOG_MODE}" == "debug" ]]; then
         echo -e "${GRAY}Mode : DEBUG${NC}\n"
@@ -1305,9 +1496,9 @@ main() {
     check_debian
     check_debian_codename
     check_user
-    check_offline_bundle       # Valide le bundle si --offline
+    check_offline_bundle       # Valide le bundle si --offline / --iso
 
-    # Configuration interactive (domaine, mode proxy, email)
+    # Configuration interactive (domaine, mode proxy, email) — placeholders en ISO
     ask_config
 
     # Installation dans l'ordre
@@ -1316,17 +1507,27 @@ main() {
     install_docker
     setup_security             # UFW + fail2ban + unattended-upgrades
     create_docker_networks
-    load_docker_images_from_bundle  # Mode submarine : charge les images .tar
+    load_docker_images_from_bundle  # Mode submarine/ISO offline : charge les images .tar
     create_structure
     setup_caleope_group
-    install_caleope_binaries   # release GitHub → bundle (mode submarine)
+    install_caleope_binaries   # release GitHub → bundle (mode submarine/ISO)
     install_bash_completion    # tab completion pour caleope
     init_caleope_runtime
     save_config                # Sauvegarder domaine + mode proxy + SMTP dans caleope.conf
     init_secrets_encryption    # Transmettre mot de passe chiffrement au daemon
-    sync_store                 # git clone officiel → extract bundle (mode submarine)
+    sync_store                 # git clone officiel → extract bundle (mode submarine/ISO)
     install_caleoped_service
     install_caleope_ui_service
+
+    # En mode ISO, on s'arrête ici : le domaine/proxy réels et le déploiement
+    # (Traefik + apps par défaut) sont faits au 1er démarrage par le wizard.
+    if [[ "${ISO_MODE}" == "true" ]]; then
+        setup_firstboot
+        generate_links_file
+        print_iso_summary
+        return
+    fi
+
     deploy_traefik
     install_default_apps
     generate_links_file

@@ -1,0 +1,28 @@
+[Unit]
+# Caleope — installation de base au tout premier démarrage.
+#
+# Le preseed se contente de copier le payload et d'activer ce service ; on
+# n'installe PAS Caleope dans le chroot d-i (où systemd/Docker ne tournent pas).
+# Ici, sur un vrai boot, install.sh --iso pose Docker + les binaires + le daemon,
+# puis active caleope-firstboot.service (le wizard interactif). On reboote
+# ensuite pour que le wizard soit pris dans la transaction systemd du boot suivant.
+Description=Caleope — Installation de base (premier démarrage)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/caleope-install/install.sh
+ConditionPathExists=!/opt/gaiver-it/caleope/.install-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /opt/caleope-install/install.sh --iso
+# Marqueur anti-rejeu + on rend la main : désactivation puis reboot vers le wizard
+ExecStartPost=/bin/mkdir -p /opt/gaiver-it/caleope
+ExecStartPost=/bin/touch /opt/gaiver-it/caleope/.install-done
+ExecStartPost=/bin/systemctl disable caleope-install.service
+ExecStartPost=/bin/systemctl reboot
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
