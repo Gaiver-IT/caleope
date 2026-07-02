@@ -117,7 +117,7 @@ func main() {
 
 func cmdInstall(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--storage <location>] [--param KEY=VALUE] [--gpu]")
+		die("Usage: caleope install <app> [--domain <domaine>] [--channel stable|latest|nightly] [--alpha] [--storage <location>] [--param KEY=VALUE] [--gpu]")
 	}
 
 	apiArgs := map[string]string{
@@ -137,6 +137,10 @@ func cmdInstall(args []string) {
 				apiArgs["channel"] = args[i+1]
 				i++
 			}
+		case "--alpha":
+			// Raccourci équivalent à --channel alpha : installe depuis la branche
+			// alpha du store (le daemon synchronise le cache sur cette branche).
+			apiArgs["channel"] = "alpha"
 		case "--force":
 			apiArgs["force"] = "true"
 		case "--storage":

@@ -355,6 +355,14 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 		opts.StorageDataDir = s.net.AppDataDir(storageLocation, appID)
 	}
 
+	// Synchroniser le store sur la branche du canal demandé AVANT de résoudre l'app.
+	// Sans ça, un `install <app> --alpha` depuis un serveur en canal stable ne trouve
+	// jamais les apps alpha : le cache est resté sur la branche main. Best-effort —
+	// si le fetch échoue, on continue (Resolve renverra "introuvable" si nécessaire).
+	if err := s.handleUpdate(map[string]string{"channel": opts.Channel}); err != nil {
+		fmt.Printf("⚠️  Sync store (canal %s) avant install: %v\n", opts.Channel, err)
+	}
+
 	if err := s.installer.Install(opts); err != nil {
 		return nil, err
 	}
