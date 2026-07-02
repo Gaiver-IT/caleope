@@ -377,6 +377,58 @@ func (m *Manager) writeRepos(repos []types.Repo) error {
 	return os.WriteFile(m.reposFile(), data, 0644)
 }
 
+// AddRepo ajoute un dépôt (ou met à jour celui du même nom) et persiste repos.json.
+func (m *Manager) AddRepo(repo types.Repo) error {
+	if repo.Name == "" || repo.URL == "" {
+		return fmt.Errorf("nom et URL requis")
+	}
+	if repo.Branch == "" {
+		repo.Branch = "main"
+	}
+	if repo.Trust == "" {
+		repo.Trust = types.TrustCommunity
+	}
+	if repo.LocalDir == "" {
+		repo.LocalDir = filepath.Join(m.baseDir, "core", "cache", repo.Name)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	repos, _ := m.readRepos()
+	found := false
+	for i := range repos {
+		if repos[i].Name == repo.Name {
+			repos[i] = repo
+			found = true
+			break
+		}
+	}
+	if !found {
+		repos = append(repos, repo)
+	}
+	return m.writeRepos(repos)
+}
+
+// RemoveRepo retire un dépôt par nom. Le dépôt officiel ne peut pas être retiré.
+func (m *Manager) RemoveRepo(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	repos, err := m.readRepos()
+	if err != nil {
+		return err
+	}
+	kept := make([]types.Repo, 0, len(repos))
+	for _, r := range repos {
+		if r.Name == name {
+			if r.Trust == types.TrustOfficial {
+				return fmt.Errorf("le dépôt officiel ne peut pas être retiré")
+			}
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return m.writeRepos(kept)
+}
+
 // ─────────────────────────────────────────────
 // CONFIG — lecture de caleope.conf
 // ─────────────────────────────────────────────

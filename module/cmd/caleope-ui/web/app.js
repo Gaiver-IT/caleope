@@ -2406,6 +2406,22 @@ async function loadSettings() {
       </div>
     </div>
     <div class="settings-card">
+      <div class="settings-title">DÉPÔTS DE MISE À JOUR</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
+        Dépôts git des définitions d'apps du store. Le dépôt officiel ne peut pas être retiré.
+      </div>
+      <div id="repos-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+        <div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement...</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <input type="text" id="repo-name" placeholder="Nom" class="param-input" style="flex:0 0 110px">
+        <input type="text" id="repo-url" placeholder="URL git (https://github.com/...)" class="param-input" style="flex:1;min-width:160px">
+        <input type="text" id="repo-branch" placeholder="Branche (main)" class="param-input" style="flex:0 0 110px">
+        <button class="btn" onclick="addRepo()"><i class="ti ti-plus"></i> AJOUTER</button>
+      </div>
+      <div id="repos-msg" style="font-size:9px;color:var(--text3);min-height:12px;margin-top:6px"></div>
+    </div>
+    <div class="settings-card">
       <div class="settings-title">REGISTRE D'IMAGES</div>
       <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
         Registre miroir depuis lequel les apps récupèrent leurs images Docker (au lieu de Docker Hub). Laisser vide = images d'origine.
@@ -2441,6 +2457,56 @@ async function loadSettings() {
   loadOidcSettings();
   loadTOTPSettings();
   loadRegistrySettings();
+  loadRepos();
+}
+
+async function loadRepos() {
+  const el = document.getElementById('repos-list');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/v1/repos');
+    const raw = r.ok ? await r.json() : null;
+    const repos = (raw && raw.data) ? raw.data : (Array.isArray(raw) ? raw : []);
+    if (!repos.length) { el.innerHTML = '<div style="font-size:9px;color:var(--text3)">Aucun dépôt.</div>'; return; }
+    el.innerHTML = repos.map(rp => {
+      const official = rp.trust === 'official';
+      const rm = official
+        ? '<span style="font-size:8px;color:var(--text3);flex-shrink:0">verrouillé</span>'
+        : `<button class="btn-sm danger" style="flex-shrink:0" onclick="removeRepo('${escapeHtml(rp.name)}')"><i class="ti ti-trash"></i></button>`;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;font-weight:700">${escapeHtml(rp.name)}
+            <span style="font-size:8px;color:var(--vio-b);letter-spacing:.5px">${(rp.trust||'').toUpperCase()}</span>
+            <span style="font-size:8px;color:var(--text3)">@${escapeHtml(rp.branch||'main')}</span></div>
+          <div style="font-size:9px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(rp.url)}</div>
+        </div>${rm}</div>`;
+    }).join('');
+  } catch(e) { el.innerHTML = '<div style="font-size:9px;color:var(--red-b)">Erreur de chargement</div>'; }
+}
+async function addRepo() {
+  const msg = document.getElementById('repos-msg');
+  const name = (document.getElementById('repo-name').value || '').trim();
+  const url = (document.getElementById('repo-url').value || '').trim();
+  const branch = (document.getElementById('repo-branch').value || '').trim();
+  if (!name || !url) { if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Nom et URL requis'; } return; }
+  if (msg) { msg.style.color = 'var(--text3)'; msg.textContent = 'Ajout...'; }
+  try {
+    const r = await fetch('/api/v1/repos', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, url, branch, trust: 'community' }) });
+    if (r.ok) {
+      if (msg) { msg.style.color = 'var(--ok)'; msg.textContent = '✓ Dépôt ajouté'; }
+      ['repo-name','repo-url','repo-branch'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+      loadRepos();
+    } else { const e = await r.json().catch(() => ({})); if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur : ' + (e.error || r.status); } }
+  } catch(e) { if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur réseau'; } }
+}
+async function removeRepo(name) {
+  const msg = document.getElementById('repos-msg');
+  try {
+    const r = await fetch('/api/v1/repos?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    if (r.ok) { if (msg) { msg.style.color = 'var(--ok)'; msg.textContent = '✓ Dépôt retiré'; } loadRepos(); }
+    else { const e = await r.json().catch(() => ({})); if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur : ' + (e.error || r.status); } }
+  } catch(e) { if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur réseau'; } }
 }
 
 async function loadRegistrySettings() {
