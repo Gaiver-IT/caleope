@@ -2406,6 +2406,28 @@ async function loadSettings() {
       </div>
     </div>
     <div class="settings-card">
+      <div class="settings-title">REGISTRE D'IMAGES</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
+        Registre miroir depuis lequel les apps récupèrent leurs images Docker (au lieu de Docker Hub). Laisser vide = images d'origine.
+      </div>
+      <div id="registry-settings-form" style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:2px">
+          <button class="btn-sm" onclick="setRegistryPreset('caleope-registry.gaiver-it.fr')">Caleope</button>
+          <button class="btn-sm" onclick="setRegistryPreset('ghcr.io')">GHCR</button>
+          <button class="btn-sm" onclick="setRegistryPreset('lscr.io')">LSCR</button>
+          <button class="btn-sm" onclick="setRegistryPreset('registry-1.docker.io')">Docker Hub</button>
+          <button class="btn-sm danger" onclick="setRegistryPreset('')">Aucun</button>
+        </div>
+        <input type="text" id="registry-url" placeholder="URL du registre (ex: caleope-registry.gaiver-it.fr)" class="param-input">
+        <input type="text" id="registry-user" placeholder="Utilisateur (optionnel)" class="param-input" autocomplete="off">
+        <input type="password" id="registry-pass" placeholder="Mot de passe (vide = garder l'actuel)" class="param-input" autocomplete="new-password">
+        <div id="registry-msg" style="font-size:9px;color:var(--text3);min-height:12px"></div>
+        <div style="display:flex;gap:8px;margin-top:2px">
+          <button class="btn" onclick="saveRegistrySettings()"><i class="ti ti-device-floppy"></i> ENREGISTRER</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card">
       <div class="settings-title">SESSION</div>
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
@@ -2418,6 +2440,53 @@ async function loadSettings() {
   loadMaintenancePanel();
   loadOidcSettings();
   loadTOTPSettings();
+  loadRegistrySettings();
+}
+
+async function loadRegistrySettings() {
+  try {
+    const r = await fetch('/api/v1/registry');
+    if (!r.ok) return;
+    const raw = await r.json();
+    const d = (raw && raw.data) ? raw.data : raw;
+    const url = document.getElementById('registry-url');
+    const user = document.getElementById('registry-user');
+    const pass = document.getElementById('registry-pass');
+    if (url) url.value = d.registry || '';
+    if (user) user.value = d.user || '';
+    if (pass) pass.placeholder = d.has_pass ? "Mot de passe enregistré (vide = garder)" : "Mot de passe (optionnel)";
+  } catch(e) {}
+}
+function setRegistryPreset(url) {
+  const el = document.getElementById('registry-url');
+  if (el) el.value = url;
+}
+async function saveRegistrySettings() {
+  const msg = document.getElementById('registry-msg');
+  const body = {
+    registry: (document.getElementById('registry-url').value || '').trim(),
+    user: (document.getElementById('registry-user').value || '').trim(),
+    pass: document.getElementById('registry-pass').value || '',
+  };
+  if (msg) { msg.style.color = 'var(--text3)'; msg.textContent = 'Enregistrement...'; }
+  try {
+    const r = await fetch('/api/v1/registry', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      if (msg) { msg.style.color = 'var(--ok)'; msg.textContent = body.registry
+        ? "✓ Enregistré — les prochaines installs pull depuis ce registre."
+        : "✓ Enregistré — images d'origine."; }
+      const p = document.getElementById('registry-pass'); if (p) p.value = '';
+      loadRegistrySettings();
+    } else {
+      const e = await r.json().catch(() => ({}));
+      if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur : ' + (e.error || r.status); }
+    }
+  } catch(e) {
+    if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur réseau'; }
+  }
 }
 
 async function loadMaintenancePanel() {

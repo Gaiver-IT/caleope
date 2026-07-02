@@ -715,6 +715,71 @@ func (s *Server) handleUpdate(args map[string]string) error {
 }
 
 // ─────────────────────────────────────────────
+// REGISTRE MIROIR (config UI)
+// ─────────────────────────────────────────────
+
+// setConfigKeys upsert des clés dans caleope.conf (remplace la ligne existante
+// ou l'ajoute en fin de fichier).
+func (s *Server) setConfigKeys(keys map[string]string) error {
+	confPath := filepath.Join(s.baseDir, "caleope.conf")
+	data, _ := os.ReadFile(confPath)
+	lines := strings.Split(string(data), "\n")
+	seen := map[string]bool{}
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		for k, v := range keys {
+			if strings.HasPrefix(trimmed, k+"=") {
+				lines[i] = k + "=" + v
+				seen[k] = true
+			}
+		}
+	}
+	for k, v := range keys {
+		if !seen[k] {
+			lines = append(lines, k+"="+v)
+		}
+	}
+	return os.WriteFile(confPath, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+// SetRegistry écrit la config du registre dans caleope.conf et tente un docker
+// login (best-effort). Un mot de passe vide conserve celui déjà enregistré.
+func (s *Server) SetRegistry(registry, user, pass string) error {
+	registry = strings.TrimSpace(registry)
+	user = strings.TrimSpace(user)
+	keys := map[string]string{
+		"CALEOPE_REGISTRY":      registry,
+		"CALEOPE_REGISTRY_USER": user,
+	}
+	if pass != "" {
+		keys["CALEOPE_REGISTRY_PASS"] = pass
+	}
+	if err := s.setConfigKeys(keys); err != nil {
+		return err
+	}
+	if registry != "" && user != "" {
+		if pass == "" {
+			if cfg, _ := s.rt.GetConfig(); cfg != nil {
+				pass = cfg.RegistryPass
+			}
+		}
+		_ = exec.Command("docker", "login", registry, "-u", user, "-p", pass).Run()
+	}
+	return nil
+}
+
+// RegistryStatus retourne la config registre pour l'UI (sans exposer le mot de passe).
+func (s *Server) RegistryStatus() map[string]interface{} {
+	res := map[string]interface{}{"registry": "", "user": "", "has_pass": false}
+	if cfg, _ := s.rt.GetConfig(); cfg != nil {
+		res["registry"] = cfg.Registry
+		res["user"] = cfg.RegistryUser
+		res["has_pass"] = cfg.RegistryPass != ""
+	}
+	return res
+}
+
+// ─────────────────────────────────────────────
 // EVENTS
 // ─────────────────────────────────────────────
 

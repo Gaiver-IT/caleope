@@ -295,6 +295,31 @@ func (s *Server) StartHTTP(port int) error {
 		})
 	})
 
+	// GET/POST /api/v1/registry — lire/écrire la config du registre miroir
+	mux.Handle("/api/v1/registry", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			s.httpOK(w, s.RegistryStatus())
+		case http.MethodPost:
+			var body struct {
+				Registry string `json:"registry"`
+				User     string `json:"user"`
+				Pass     string `json:"pass"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				s.httpError(w, "JSON invalide", http.StatusBadRequest)
+				return
+			}
+			if err := s.SetRegistry(body.Registry, body.User, body.Pass); err != nil {
+				s.httpError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			s.httpOK(w, s.RegistryStatus())
+		default:
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+		}
+	})))
+
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("✓ API REST sur %s\n", addr)
 	return http.ListenAndServe(addr, s.rateLimit(mux))
