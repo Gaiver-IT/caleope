@@ -397,6 +397,12 @@ type Config struct {
 	SMTPFrom string
 	// Token GitHub pour les repos privés (upgrade, update store)
 	GithubToken string
+	// Registre d'images miroir (optionnel). Si défini, les images des apps sont
+	// réécrites vers ce registre à l'install (ex: caleope-registry.gaiver-it.fr
+	// pour les clients, ou 172.16.51.9:5000 en LAN). Vide = images d'origine.
+	Registry     string
+	RegistryUser string
+	RegistryPass string
 }
 
 // GetConfig lit et parse caleope.conf.
@@ -447,6 +453,12 @@ func (m *Manager) GetConfig() (*Config, error) {
 			cfg.SMTPFrom = val
 		case "CALEOPE_GITHUB_TOKEN":
 			cfg.GithubToken = val
+		case "CALEOPE_REGISTRY":
+			cfg.Registry = val
+		case "CALEOPE_REGISTRY_USER":
+			cfg.RegistryUser = val
+		case "CALEOPE_REGISTRY_PASS":
+			cfg.RegistryPass = val
 		}
 	}
 	return cfg, nil

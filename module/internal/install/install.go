@@ -13,6 +13,7 @@
 package install
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -484,13 +485,19 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 		Volumes:    manifest.Volumes,
 	}
 
-	outFile, err := os.Create(filepath.Join(composeDir, "compose.yml"))
-	if err != nil {
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return err
 	}
-	defer outFile.Close()
+	composeContent := buf.String()
 
-	if err := tmpl.Execute(outFile, data); err != nil {
+	// Réécriture registre miroir : si CALEOPE_REGISTRY est défini, préfixer les
+	// images upstream vers le registre (ex: postgres:16 → <registry>/postgres:16).
+	if cfg, cerr := i.rt.GetConfig(); cerr == nil && cfg.Registry != "" {
+		composeContent = rewriteImages(composeContent, cfg.Registry)
+	}
+
+	if err := os.WriteFile(filepath.Join(composeDir, "compose.yml"), []byte(composeContent), 0644); err != nil {
 		return err
 	}
 
@@ -502,6 +509,38 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 	}
 
 	return nil
+}
+
+// rewriteImages préfixe les images upstream d'un compose par le registre miroir.
+// Ex: "image: postgres:16-alpine" → "image: <registry>/postgres:16-alpine".
+// Le miroir stocke chaque image sous son chemin d'origine (voir le peuplement skopeo).
+// N'est PAS réécrit :
+//   - les images construites localement (préfixe "caleope-", absentes du miroir) ;
+//   - les images déjà préfixées par le registre (idempotent) ;
+//   - les valeurs de template non résolues.
+func rewriteImages(compose, registry string) string {
+	reg := strings.TrimRight(registry, "/")
+	if reg == "" {
+		return compose
+	}
+	lines := strings.Split(compose, "\n")
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "image:") {
+			continue
+		}
+		ref := strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
+		ref = strings.Trim(ref, "\"'")
+		if ref == "" ||
+			strings.HasPrefix(ref, "caleope-") || // build local
+			strings.HasPrefix(ref, reg+"/") || // déjà préfixé
+			strings.Contains(ref, "{{") { // template non résolu
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		lines[idx] = indent + "image: " + reg + "/" + ref
+	}
+	return strings.Join(lines, "\n")
 }
 
 // writeGPUOverride génère un compose.override.yml pour le passthrough GPU.
