@@ -491,10 +491,16 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 	}
 	composeContent := buf.String()
 
-	// Réécriture registre miroir : si CALEOPE_REGISTRY est défini, préfixer les
-	// images upstream vers le registre (ex: postgres:16 → <registry>/postgres:16).
-	if cfg, cerr := i.rt.GetConfig(); cerr == nil && cfg.Registry != "" {
-		composeContent = rewriteImages(composeContent, cfg.Registry)
+	// Réécritures post-template dépendant de la config plateforme.
+	if cfg, cerr := i.rt.GetConfig(); cerr == nil {
+		// Registre miroir : préfixer les images upstream (postgres:16 → <reg>/postgres:16).
+		if cfg.Registry != "" {
+			composeContent = rewriteImages(composeContent, cfg.Registry)
+		}
+		// Reverse proxy : en mode npm/standalone, Traefik ne voit que du HTTP,
+		// donc les routers des apps doivent écouter sur l'entrypoint "web"
+		// (les composes du store sont écrits pour le mode traefik : websecure+tls).
+		composeContent = rewriteTraefikEntrypoints(composeContent, cfg.ProxyMode)
 	}
 
 	if err := os.WriteFile(filepath.Join(composeDir, "compose.yml"), []byte(composeContent), 0644); err != nil {
@@ -541,6 +547,39 @@ func rewriteImages(compose, registry string) string {
 		lines[idx] = indent + "image: " + reg + "/" + ref
 	}
 	return strings.Join(lines, "\n")
+}
+
+// rewriteTraefikEntrypoints adapte les labels Traefik des routers d'app au mode
+// reverse proxy de la plateforme. Les composes du store sont écrits pour le mode
+// "traefik" natif (routers sur `websecure` + `tls=true`, Let's Encrypt géré par
+// Traefik). En mode "npm" (ou "standalone"), le TLS est géré en amont (NPM) et
+// Traefik ne reçoit que du HTTP sur l'entrypoint `web` : sans réécriture, les
+// routers restent sur `websecure` et NPM→Traefik:80 ne matche aucun router → 404.
+//
+// En mode npm/standalone on : (1) bascule `entrypoints=websecure` → `web`,
+// (2) supprime les labels TLS des routers (`tls=true`, `tls.certresolver`).
+// En mode traefik : no-op (les labels d'origine sont corrects).
+func rewriteTraefikEntrypoints(compose, proxyMode string) string {
+	// Cohérent avec la génération du router caleope-ui : seul le mode "traefik"
+	// natif garde websecure+tls ; tout le reste (npm, standalone, non configuré)
+	// route en HTTP sur `web`.
+	if proxyMode == "traefik" {
+		return compose
+	}
+	lines := strings.Split(compose, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		l := strings.ToLower(line)
+		if strings.Contains(l, "traefik.http.routers.") &&
+			(strings.Contains(l, ".tls=true") || strings.Contains(l, ".tls.certresolver")) {
+			continue // retirer les labels TLS des routers
+		}
+		if strings.Contains(l, "traefik.http.routers.") && strings.Contains(l, ".entrypoints=websecure") {
+			line = strings.Replace(line, "entrypoints=websecure", "entrypoints=web", 1)
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // writeGPUOverride génère un compose.override.yml pour le passthrough GPU.
