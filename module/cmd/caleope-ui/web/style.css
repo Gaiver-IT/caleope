@@ -679,16 +679,19 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
 }
 .app-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 
-/* Boutons avec expand au hover */
+/* Boutons d'action : icône + label TOUJOURS visibles.
+   (Avant : icône seule qui s'élargissait au survol pour révéler le label —
+   comme la rangée est en flex-wrap, l'agrandissement provoquait un reflow qui
+   faisait "fuir" le bouton sous le curseur → impossible de cliquer SUPPRIMER.
+   En taille fixe, plus aucun mouvement au survol → clic fiable.) */
 .action-btn {
   height: 24px;
-  padding: 0;
-  width: 28px;
+  padding: 0 8px;
   overflow: hidden;
   display: inline-flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 0;
+  justify-content: center;
+  gap: 5px;
   font-size: 9px;
   font-family: var(--mono);
   font-weight: 700;
@@ -697,19 +700,16 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
   background: none;
   color: var(--text3);
   cursor: pointer;
-  transition: width .2s ease, padding .2s ease, color .1s, border-color .1s;
+  transition: color .1s, border-color .1s, background .1s;
   white-space: nowrap;
 }
-.action-btn .ti { font-size: 12px; flex-shrink: 0; margin: 0 8px; }
-.action-btn .btn-label { opacity: 0; width: 0; overflow: hidden; transition: opacity .15s .05s; }
+.action-btn .ti { font-size: 12px; flex-shrink: 0; }
+.action-btn .btn-label { opacity: 1; }
 .action-btn:hover {
-  width: auto;
-  min-width: 80px;
-  padding-right: 10px;
   color: var(--text);
   border-color: var(--text3);
+  background: var(--bg3);
 }
-.action-btn:hover .btn-label { opacity: 1; width: auto; }
 .action-btn.danger:hover { color: var(--err); border-color: var(--err); }
 .action-btn.success:hover { color: var(--ok); border-color: var(--ok); }
 
