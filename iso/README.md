@@ -5,6 +5,16 @@ Trixie + Docker + Caleope), avec un **wizard de premier démarrage** (web ou CLI
 
 ## Deux modes de distribution
 
+### 0. Le plus simple — `make-iso.sh` (assistant guidé)
+Un seul point d'entrée qui pose 3-4 questions (online/offline, version, canal,
+registre/apps) puis appelle ce qu'il faut. Rien à retenir :
+```bash
+cd iso && ./make-iso.sh
+```
+Il vérifie/installe les prérequis, et pour l'offline il construit le bundle
+(via `offline-builder`) avant d'assembler l'ISO. Les sections ci-dessous
+décrivent les briques qu'il orchestre.
+
 ### 1. ISO online (ce dossier — `build.sh`)
 ISO légère (~1-2 Go). Installe Debian 13 minimal + Caleope. Les **images Docker
 des apps sont pull depuis le registre miroir Caleope** (`registry.gaiver-it.fr`, à
