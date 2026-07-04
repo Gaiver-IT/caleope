@@ -276,6 +276,107 @@ func (c *Client) ForceRemoveProjectContainers(project string) {
 }
 
 // ─────────────────────────────────────────────
+// IMAGES — save / load (pour l'export auto-suffisant)
+// ─────────────────────────────────────────────
+
+// SaveImages exporte une ou plusieurs images dans un tar (docker save -o dst img...).
+// Utilisé par `caleope export` pour embarquer les images (restore hors-ligne).
+func (c *Client) SaveImages(images []string, dst string) error {
+	if len(images) == 0 {
+		return fmt.Errorf("aucune image à sauvegarder")
+	}
+	args := append([]string{"save", "-o", dst}, images...)
+	cmd := exec.Command("docker", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker save: %w\n%s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// LoadImages charge les images depuis un tar (docker load -i src).
+func (c *Client) LoadImages(src string) error {
+	cmd := exec.Command("docker", "load", "-i", src)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker load: %w\n%s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// ImageExists indique si une image est présente localement.
+func (c *Client) ImageExists(ref string) bool {
+	return exec.Command("docker", "image", "inspect", ref).Run() == nil
+}
+
+// ExportImages écrit chaque image dans imagesDir (un .tar par image, format
+// docker-archive). Préfère skopeo (copie depuis le registre → couches complètes,
+// fiable avec le store containerd où `docker save` n'exporte que les manifests).
+// Retombe sur `docker save` si skopeo est absent (store classique).
+func (c *Client) ExportImages(refs []string, imagesDir string) error {
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		return err
+	}
+	useSkopeo := exec.Command("skopeo", "--version").Run() == nil
+	for _, ref := range refs {
+		dst := filepath.Join(imagesDir, sanitizeRef(ref)+".tar")
+		if useSkopeo {
+			cmd := exec.Command("skopeo", "copy", "--quiet",
+				"--src-tls-verify=false",
+				"docker://"+ref, "docker-archive:"+dst+":"+ref)
+			var e bytes.Buffer
+			cmd.Stderr = &e
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("skopeo copy %s: %w\n%s", ref, err, strings.TrimSpace(e.String()))
+			}
+			continue
+		}
+		if !c.ImageExists(ref) {
+			if err := c.PullImage(ref); err != nil {
+				return err
+			}
+		}
+		if err := c.SaveImages([]string{ref}, dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LoadImagesDir charge tous les .tar d'un dossier (docker load).
+func (c *Client) LoadImagesDir(imagesDir string) error {
+	tars, _ := filepath.Glob(filepath.Join(imagesDir, "*.tar"))
+	for _, t := range tars {
+		if err := c.LoadImages(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sanitizeRef(ref string) string {
+	return strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(ref)
+}
+
+// PullImage tire une image précise (docker pull <ref>).
+func (c *Client) PullImage(ref string) error {
+	cmd := exec.Command("docker", "pull", ref)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker pull %s: %w\n%s", ref, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// TagImage crée un alias local (docker tag src dst).
+func (c *Client) TagImage(src, dst string) error {
+	return exec.Command("docker", "tag", src, dst).Run()
+}
+
+// ─────────────────────────────────────────────
 // RÉSEAUX — création des réseaux Caleope
 // ─────────────────────────────────────────────
 

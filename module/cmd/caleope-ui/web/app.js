@@ -882,6 +882,10 @@ function appCard(app) {
             <i class="ti ti-device-floppy"></i>
             <span class="btn-label">BACKUP</span>
           </button>
+          <button class="action-btn" onclick="exportApp('${app.id}')" title="Exporter — archive auto-suffisante (données + définition + images), restaurable hors-ligne même sans le store">
+            <i class="ti ti-package-export"></i>
+            <span class="btn-label">EXPORT</span>
+          </button>
           ${HARDCODED_PARAMS[app.id] ? `
           <button class="action-btn" onclick="openReconfigureModal('${app.id}')" title="Reconfigurer">
             <i class="ti ti-settings"></i>
@@ -1116,6 +1120,21 @@ async function triggerAppBackup(id) {
     notify(`${id} — sauvegarde créée`, 'ok');
   } else {
     notify(r?.error || 'Erreur backup', 'err');
+  }
+}
+
+// Export auto-suffisant : archive données + définition + images, restaurable
+// hors-ligne (caleope import) même si l'app disparaît du store.
+async function exportApp(id) {
+  if (!confirm(`Exporter ${id} ?\n\nCrée une archive AUTO-SUFFISANTE (données + définition + images Docker) restaurable des mois plus tard, même hors-ligne ou si l'app quitte le store.\n\nPeut être long (docker save des images).`)) return;
+  notify(`Export de ${id} en cours (images incluses)...`, 'info');
+  const r = await api.post(`/api/v1/apps/${id}/export`);
+  if (r && r.success !== false) {
+    const p = (r.data && r.data.path) || r.path || '';
+    notify(`${id} exporté`, 'ok');
+    if (p) alert(`✅ Archive créée sur le serveur :\n\n${p}\n\nRécupère-la en SSH :\n  scp <user>@<serveur>:${p} .\n\nRestauration : caleope import <archive> [--legacy|--migrate]`);
+  } else {
+    notify(r?.error || 'Erreur export', 'err');
   }
 }
 
