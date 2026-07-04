@@ -371,6 +371,11 @@ func (c *Client) PullImage(ref string) error {
 	return nil
 }
 
+// TagImage crée un alias local (docker tag src dst).
+func (c *Client) TagImage(src, dst string) error {
+	return exec.Command("docker", "tag", src, dst).Run()
+}
+
 // ─────────────────────────────────────────────
 // RÉSEAUX — création des réseaux Caleope
 // ─────────────────────────────────────────────

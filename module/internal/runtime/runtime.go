@@ -455,6 +455,12 @@ type Config struct {
 	Registry     string
 	RegistryUser string
 	RegistryPass string
+	// RegistryMode pilote l'usage du miroir :
+	//   "mirror"   → images réécrites vers le miroir (confiance Caleope, miroir-first)
+	//   "fallback" → images upstream d'abord, bascule sur le miroir si le pull échoue
+	//   "" / "upstream" → images upstream uniquement (défaut si pas de miroir)
+	// Rétro-compat : miroir défini + mode vide = "mirror" (comportement historique).
+	RegistryMode string
 }
 
 // GetConfig lit et parse caleope.conf.
@@ -511,6 +517,8 @@ func (m *Manager) GetConfig() (*Config, error) {
 			cfg.RegistryUser = val
 		case "CALEOPE_REGISTRY_PASS":
 			cfg.RegistryPass = val
+		case "CALEOPE_REGISTRY_MODE":
+			cfg.RegistryMode = val
 		}
 	}
 	return cfg, nil

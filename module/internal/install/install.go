@@ -203,6 +203,9 @@ func (i *Installer) Install(opts InstallOptions) error {
 			return err
 		}
 
+		// ── Étape 8.5 : Pré-pull avec fallback miroir (mode registre "fallback") ──
+		i.pullImagesWithFallback(composeDir)
+
 		// ── Étape 9 : docker compose up ──
 		fmt.Println("  [9/12] Démarrage des containers...")
 		if err := i.docker.Up(composeDir); err != nil {
@@ -493,8 +496,11 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 
 	// Réécritures post-template dépendant de la config plateforme.
 	if cfg, cerr := i.rt.GetConfig(); cerr == nil {
-		// Registre miroir : préfixer les images upstream (postgres:16 → <reg>/postgres:16).
-		if cfg.Registry != "" {
+		// Registre miroir : réécriture des images vers le miroir SEULEMENT en mode
+		// "mirror" (confiance Caleope) ou historique (miroir défini, mode vide).
+		// En "fallback"/"upstream", on garde les refs upstream — le fallback vers
+		// le miroir se fait au pull (voir pullImagesWithFallback dans Install).
+		if cfg.Registry != "" && cfg.RegistryMode != "fallback" && cfg.RegistryMode != "upstream" {
 			composeContent = rewriteImages(composeContent, cfg.Registry)
 		}
 		// Reverse proxy : en mode npm/standalone, Traefik ne voit que du HTTP,
@@ -580,6 +586,58 @@ func rewriteTraefikEntrypoints(compose, proxyMode string) string {
 		out = append(out, line)
 	}
 	return strings.Join(out, "\n")
+}
+
+// composeImageRefs extrait les refs d'images concrètes d'un compose.yml résolu
+// (ignore templates {{...}}, variables ${...} et images locales caleope-*).
+func composeImageRefs(composePath string) []string {
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "image:") {
+			continue
+		}
+		ref := strings.Trim(strings.TrimSpace(strings.TrimPrefix(t, "image:")), "\"'")
+		if ref == "" || strings.Contains(ref, "{{") || strings.Contains(ref, "$") || strings.HasPrefix(ref, "caleope-") {
+			continue
+		}
+		if !seen[ref] {
+			seen[ref] = true
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// pullImagesWithFallback (mode registre "fallback") : pull upstream d'abord, et
+// si ça échoue, bascule sur le miroir (<registry>/<ref>) puis retague vers la ref
+// upstream pour que `docker compose up` trouve l'image. No-op hors mode fallback.
+func (i *Installer) pullImagesWithFallback(composeDir string) {
+	cfg, err := i.rt.GetConfig()
+	if err != nil || cfg.RegistryMode != "fallback" || cfg.Registry == "" {
+		return
+	}
+	reg := strings.TrimRight(cfg.Registry, "/")
+	for _, ref := range composeImageRefs(filepath.Join(composeDir, "compose.yml")) {
+		if i.docker.ImageExists(ref) {
+			continue
+		}
+		if err := i.docker.PullImage(ref); err == nil {
+			continue // upstream OK
+		}
+		mref := reg + "/" + ref
+		fmt.Printf("     ↻ %s indisponible en upstream → bascule miroir\n", ref)
+		if err := i.docker.PullImage(mref); err == nil {
+			_ = i.docker.TagImage(mref, ref)
+		} else {
+			fmt.Printf("     ⚠ %s introuvable (upstream ET miroir)\n", ref)
+		}
+	}
 }
 
 // writeGPUOverride génère un compose.override.yml pour le passthrough GPU.

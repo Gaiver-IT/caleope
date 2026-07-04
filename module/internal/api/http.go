@@ -425,6 +425,8 @@ func (s *Server) routeApp(w http.ResponseWriter, r *http.Request) {
 		s.httpRestartByID(w, r, id)
 	case "POST backup", "POST backups":
 		s.httpBackupByID(w, r, id)
+	case "POST export":
+		s.httpExportByID(w, r, id)
 	case "POST restore":
 		s.httpRestoreByID(w, r, id)
 	case "GET backups":
@@ -785,6 +787,21 @@ func (s *Server) httpRestartByID(w http.ResponseWriter, r *http.Request, id stri
 
 func (s *Server) httpBackupByID(w http.ResponseWriter, r *http.Request, id string) {
 	data, err := s.handleBackup(map[string]string{"app": id})
+	if err != nil {
+		s.httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.httpOK(w, data)
+}
+
+// httpExportByID : POST /api/v1/apps/{id}/export?no_images=true
+// Crée une archive auto-suffisante et renvoie son chemin serveur.
+func (s *Server) httpExportByID(w http.ResponseWriter, r *http.Request, id string) {
+	args := map[string]string{"app": id}
+	if r.URL.Query().Get("no_images") == "true" {
+		args["no_images"] = "true"
+	}
+	data, err := s.handleExport(args)
 	if err != nil {
 		s.httpError(w, err.Error(), http.StatusInternalServerError)
 		return
