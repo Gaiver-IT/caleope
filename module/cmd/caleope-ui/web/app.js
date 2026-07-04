@@ -1166,14 +1166,21 @@ async function openInstallModal(appId) {
   S.installTarget = appId;
   const info = S.catalog.find(a => a.id === appId) || {};
 
-  // Charger les params depuis le store (endpoint individuel)
+  // Charger les params depuis le store (endpoint individuel) PUIS fusionner avec
+  // les HARDCODED_PARAMS de l'UI. Sans ça, une app sans params.json (ex: immich)
+  // renvoyait une liste vide et le champ de stockage (type 'location') n'apparaissait
+  // jamais. On garde les params du store et on ajoute ceux hardcodés absents (par id).
+  let storeParams = [];
   try {
     const paramsData = await api.get(`/api/v1/store/${appId}`);
-    S.installParams = Array.isArray(paramsData?.data) ? paramsData.data : [];
+    storeParams = Array.isArray(paramsData?.data) ? paramsData.data
+      : (info.params || info.parameters || info.install_params || []);
   } catch (_) {
-    S.installParams = info.params || info.parameters || info.install_params
-      || HARDCODED_PARAMS[appId] || [];
+    storeParams = info.params || info.parameters || info.install_params || [];
   }
+  const hardcoded = HARDCODED_PARAMS[appId] || [];
+  const seenIds = new Set(storeParams.map(p => p.id));
+  S.installParams = [...storeParams, ...hardcoded.filter(p => !seenIds.has(p.id))];
 
   // Précharger les emplacements pour le type 'location'
   if (S.installParams.some(p => p.type === 'location') && S.locations.length === 0) {
