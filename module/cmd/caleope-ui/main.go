@@ -1328,8 +1328,75 @@ func main() {
 	}))
 
 	// SPA fallback
+	// ── Premier démarrage (ISO) : setup web SANS login, accessible en IP directe ──
+	// À la sortie de l'install de base (boot 1), le marqueur .firstboot-needed existe.
+	// caleope-UI (root) sert alors une page de configuration à la racine et lance
+	// le finalize (non-interactif) — alternative web au wizard console.
+	firstbootMarker := filepath.Join(*baseDir, ".firstboot-needed")
+	firstbootActive := func() bool { _, err := os.Stat(firstbootMarker); return err == nil }
+
+	mux.HandleFunc("/setup/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"firstboot": firstbootActive()})
+	})
+
+	mux.HandleFunc("/setup", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		if !firstbootActive() {
+			jsonErr(w, http.StatusForbidden, "configuration déjà effectuée")
+			return
+		}
+		var b struct {
+			Domain          string `json:"domain"`
+			ProxyMode       string `json:"proxy_mode"`
+			Email           string `json:"email"`
+			Channel         string `json:"channel"`
+			UIPassword      string `json:"ui_password"`
+			SecretsPassword string `json:"secrets_password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+			jsonErr(w, http.StatusBadRequest, "JSON invalide")
+			return
+		}
+		if b.Domain == "" || b.ProxyMode == "" || b.UIPassword == "" {
+			jsonErr(w, http.StatusBadRequest, "domaine, mode proxy et mot de passe UI requis")
+			return
+		}
+		if b.Channel == "" {
+			b.Channel = "stable"
+		}
+		// Lancer le finalize en tâche de fond (déploie Traefik + apps, retire le marqueur).
+		go func() {
+			cmd := exec.Command("/bin/bash", filepath.Join(*baseDir, "bin", "install.sh"), "--iso-finalize")
+			cmd.Env = append(os.Environ(),
+				"CALEOPE_DOMAIN="+b.Domain,
+				"CALEOPE_PROXY_MODE="+b.ProxyMode,
+				"CALEOPE_CHANNEL="+b.Channel,
+				"CALEOPE_EMAIL="+b.Email,
+				"CALEOPE_UI_PASSWORD="+b.UIPassword,
+				"CALEOPE_SECRETS_PASSWORD="+b.SecretsPassword,
+			)
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+			_ = cmd.Run()
+		}()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
+		// Premier démarrage → servir la page de configuration (sans login).
+		if firstbootActive() && (path == "" || path == "index.html") {
+			if f, err := webFiles.Open("web/setup.html"); err == nil {
+				defer f.Close()
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = io.Copy(w, f)
+				return
+			}
+		}
 		if path == "" {
 			path = "index.html"
 		}
