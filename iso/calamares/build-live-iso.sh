@@ -57,7 +57,7 @@ PKLIST
 
 # ── 3. Payload Caleope + config Calamares → dans le système live ────────────
 echo "📦 Assemblage du payload Caleope..."
-INCL="config/includes.chroot"
+INCL="$WORK/config/includes.chroot"   # absolu : robuste aux cd des sous-shells
 mkdir -p "$INCL/caleope/binaries" "$INCL/etc/calamares" "$INCL/etc/xdg/openbox"
 BASE="https://github.com/${REPO}/releases/download/${CALEOPE_VERSION}"
 for b in caleoped caleope caleope-ui; do
