@@ -26,6 +26,13 @@ need lb live-build; need xorriso xorriso; need debootstrap debootstrap; need mks
 
 [[ $EUID -eq 0 ]] || { echo "❌ live-build doit tourner en root (sudo)"; exit 1; }
 
+# Démonte d'éventuels montages résiduels sous le chroot (build interrompu / tests
+# headless) — sinon « rm -rf » échoue sur /dev, /proc… et set -e avorte le build.
+if [ -d "$WORK/chroot" ]; then
+  for m in $(mount | awk -v w="$WORK/chroot" 'index($3, w)==1 {print $3}' | sort -r); do
+    umount -R -l "$m" 2>/dev/null || true
+  done
+fi
 rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
 
 # ── 1. Config live-build (live, sans debian-installer) ──────────────────────
