@@ -88,9 +88,16 @@ for b in caleoped caleope caleope-ui; do
 done
 chmod +x "$PAYLOAD/binaries/"*
 
-# install.sh + autocomplétion depuis le tag correspondant (fallback main)
-wget -qO "$PAYLOAD/install.sh" "https://raw.githubusercontent.com/${REPO}/${CALEOPE_VERSION}/install.sh" \
-  || wget -qO "$PAYLOAD/install.sh" "https://raw.githubusercontent.com/${REPO}/main/install.sh"
+# install.sh : local (checkout de la branche, contient --iso/--iso-finalize) en
+# priorité, sinon depuis le tag/main. Indispensable tant que la branche ISO n'est
+# pas mergée : les releases n'ont pas encore le mode --iso.
+if [[ -f "$HERE/../install.sh" ]]; then
+  echo "   📎 install.sh local (branche)"
+  cp "$HERE/../install.sh" "$PAYLOAD/install.sh"
+else
+  wget -qO "$PAYLOAD/install.sh" "https://raw.githubusercontent.com/${REPO}/${CALEOPE_VERSION}/install.sh" \
+    || wget -qO "$PAYLOAD/install.sh" "https://raw.githubusercontent.com/${REPO}/main/install.sh"
+fi
 chmod +x "$PAYLOAD/install.sh"
 wget -qO "$PAYLOAD/caleope-completion.bash" \
   "https://raw.githubusercontent.com/${REPO}/${CALEOPE_VERSION}/module/scripts/caleope-completion.bash" 2>/dev/null || true
