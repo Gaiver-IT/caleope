@@ -84,6 +84,10 @@ func main() {
 		cmdRestore(args)
 	case "backups":
 		cmdBackupList(args)
+	case "export":
+		cmdExport(args)
+	case "import":
+		cmdImport(args)
 	case "update":
 		cmdUpdate(args)
 	case "upgrade":
@@ -1125,6 +1129,52 @@ func cmdBackup(args []string) {
 	if m, ok := resp.Data.(map[string]interface{}); ok {
 		fmt.Printf("✅ %s\n", m["message"])
 	}
+}
+
+// cmdExport crée une archive auto-suffisante (données + config + définition +
+// images) restaurable sans le store ni internet.
+func cmdExport(args []string) {
+	if len(args) == 0 {
+		die("Usage: caleope export <app> [<dest.tar.gz>] [--no-images]")
+	}
+	apiArgs := map[string]string{"app": args[0]}
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--no-images" {
+			apiArgs["no_images"] = "true"
+		} else if !strings.HasPrefix(args[i], "--") {
+			apiArgs["dest"] = args[i]
+		}
+	}
+	fmt.Printf("📦 Export auto-suffisant de '%s' (docker save inclus, peut être long)...\n", args[0])
+	resp := callDaemon("export", apiArgs)
+	if !resp.Success {
+		die("❌ " + resp.Error)
+	}
+	if m, ok := resp.Data.(map[string]interface{}); ok {
+		fmt.Printf("✅ %s\n", m["message"])
+	}
+}
+
+// cmdImport recrée une app depuis une archive d'export (legacy par défaut).
+func cmdImport(args []string) {
+	if len(args) == 0 {
+		die("Usage: caleope import <archive.tar.gz> [--migrate|--legacy]")
+	}
+	apiArgs := map[string]string{"archive": args[0], "mode": "legacy"}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--migrate":
+			apiArgs["mode"] = "migrate"
+		case "--legacy":
+			apiArgs["mode"] = "legacy"
+		}
+	}
+	fmt.Printf("♻️  Import depuis '%s' (mode: %s)...\n", args[0], apiArgs["mode"])
+	resp := callDaemon("import", apiArgs)
+	if !resp.Success {
+		die("❌ " + resp.Error)
+	}
+	fmt.Println("✅ Import terminé")
 }
 
 func cmdRestore(args []string) {

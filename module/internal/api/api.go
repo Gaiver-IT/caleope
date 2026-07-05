@@ -226,6 +226,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleRestore(req.Args)
 	case "backup-list":
 		data, err = s.handleBackupList(req.Args)
+	case "export":
+		data, err = s.handleExport(req.Args)
+	case "import":
+		err = s.handleImport(req.Args)
 	case "update":
 		err = s.handleUpdate(req.Args)
 	case "upgrade":
@@ -650,6 +654,37 @@ func (s *Server) handleRestore(args map[string]string) error {
 	return s.bkp.Restore(appID, args["backup"])
 }
 
+// handleExport crée une archive d'export auto-suffisante (données + config +
+// définition + images). withImages par défaut = true (restore hors-ligne).
+func (s *Server) handleExport(args map[string]string) (interface{}, error) {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	withImages := args["no_images"] != "true"
+	path, err := s.bkp.Export(appID, args["dest"], withImages)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"path":    path,
+		"message": fmt.Sprintf("Export de '%s' créé : %s", appID, path),
+	}, nil
+}
+
+// handleImport recrée une app depuis une archive d'export (mode legacy|migrate).
+func (s *Server) handleImport(args map[string]string) error {
+	archive := args["archive"]
+	if archive == "" {
+		return fmt.Errorf("argument 'archive' manquant")
+	}
+	mode := args["mode"]
+	if mode == "" {
+		mode = "legacy"
+	}
+	return s.bkp.Import(archive, mode)
+}
+
 func (s *Server) handleBackupList(args map[string]string) (interface{}, error) {
 	appID, ok := args["app"]
 	if !ok || appID == "" {
@@ -744,12 +779,13 @@ func (s *Server) setConfigKeys(keys map[string]string) error {
 
 // SetRegistry écrit la config du registre dans caleope.conf et tente un docker
 // login (best-effort). Un mot de passe vide conserve celui déjà enregistré.
-func (s *Server) SetRegistry(registry, user, pass string) error {
+func (s *Server) SetRegistry(registry, user, pass, mode string) error {
 	registry = strings.TrimSpace(registry)
 	user = strings.TrimSpace(user)
 	keys := map[string]string{
 		"CALEOPE_REGISTRY":      registry,
 		"CALEOPE_REGISTRY_USER": user,
+		"CALEOPE_REGISTRY_MODE": strings.TrimSpace(mode),
 	}
 	if pass != "" {
 		keys["CALEOPE_REGISTRY_PASS"] = pass
@@ -775,6 +811,7 @@ func (s *Server) RegistryStatus() map[string]interface{} {
 		res["registry"] = cfg.Registry
 		res["user"] = cfg.RegistryUser
 		res["has_pass"] = cfg.RegistryPass != ""
+		res["mode"] = cfg.RegistryMode
 	}
 	return res
 }

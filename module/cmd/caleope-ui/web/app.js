@@ -882,6 +882,10 @@ function appCard(app) {
             <i class="ti ti-device-floppy"></i>
             <span class="btn-label">BACKUP</span>
           </button>
+          <button class="action-btn" onclick="exportApp('${app.id}')" title="Exporter — archive auto-suffisante (données + définition + images), restaurable hors-ligne même sans le store">
+            <i class="ti ti-package-export"></i>
+            <span class="btn-label">EXPORT</span>
+          </button>
           ${HARDCODED_PARAMS[app.id] ? `
           <button class="action-btn" onclick="openReconfigureModal('${app.id}')" title="Reconfigurer">
             <i class="ti ti-settings"></i>
@@ -1119,6 +1123,46 @@ async function triggerAppBackup(id) {
   }
 }
 
+// Export auto-suffisant : archive données + définition + images, restaurable
+// hors-ligne (caleope import) même si l'app disparaît du store.
+async function exportApp(id) {
+  if (!confirm(`Exporter ${id} ?\n\nCrée une archive AUTO-SUFFISANTE (données + définition + images Docker) restaurable des mois plus tard, même hors-ligne ou si l'app quitte le store.\n\nPeut être long (docker save des images).`)) return;
+  notify(`Export de ${id} en cours (images incluses)...`, 'info');
+  const r = await api.post(`/api/v1/apps/${id}/export`);
+  if (r && r.success !== false) {
+    const p = (r.data && r.data.path) || r.path || '';
+    notify(`${id} exporté`, 'ok');
+    if (p) alert(`✅ Archive créée sur le serveur :\n\n${p}\n\nRécupère-la en SSH :\n  scp <user>@<serveur>:${p} .\n\nRestauration : caleope import <archive> [--legacy|--migrate]`);
+  } else {
+    notify(r?.error || 'Erreur export', 'err');
+  }
+}
+
+// Import : recrée une app depuis une archive d'export (chemin serveur).
+async function importApp() {
+  const path = (document.getElementById('import-path').value || '').trim();
+  const mode = (document.getElementById('import-mode') || {}).value || 'legacy';
+  const msg = document.getElementById('import-msg');
+  if (!path) { if (msg) { msg.style.color = 'var(--err)'; msg.textContent = "Indique le chemin de l'archive."; } return; }
+  if (!confirm(`Importer l'app depuis :\n${path}\n(mode ${mode}) ?\n\nL'app sera recréée (docker load + démarrage).`)) return;
+  if (msg) { msg.style.color = 'var(--text3)'; msg.textContent = 'Import en cours (chargement des images + démarrage)…'; }
+  try {
+    const r = await fetch('/api/v1/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ archive: path, mode }),
+    });
+    if (r.ok) {
+      if (msg) { msg.style.color = 'var(--ok)'; msg.textContent = '✓ App importée et démarrée.'; }
+      setTimeout(loadApps, 1500);
+    } else {
+      const e = await r.json().catch(() => ({}));
+      if (msg) { msg.style.color = 'var(--err)'; msg.textContent = (e.error || e.data?.error || 'Erreur import'); }
+    }
+  } catch (e) {
+    if (msg) { msg.style.color = 'var(--err)'; msg.textContent = 'Erreur réseau'; }
+  }
+}
+
 async function openReconfigureModal(appId) {
   S.installTarget = appId;
   const app = S.apps.find(a => a.id === appId);
@@ -1147,14 +1191,21 @@ async function openInstallModal(appId) {
   S.installTarget = appId;
   const info = S.catalog.find(a => a.id === appId) || {};
 
-  // Charger les params depuis le store (endpoint individuel)
+  // Charger les params depuis le store (endpoint individuel) PUIS fusionner avec
+  // les HARDCODED_PARAMS de l'UI. Sans ça, une app sans params.json (ex: immich)
+  // renvoyait une liste vide et le champ de stockage (type 'location') n'apparaissait
+  // jamais. On garde les params du store et on ajoute ceux hardcodés absents (par id).
+  let storeParams = [];
   try {
     const paramsData = await api.get(`/api/v1/store/${appId}`);
-    S.installParams = Array.isArray(paramsData?.data) ? paramsData.data : [];
+    storeParams = Array.isArray(paramsData?.data) ? paramsData.data
+      : (info.params || info.parameters || info.install_params || []);
   } catch (_) {
-    S.installParams = info.params || info.parameters || info.install_params
-      || HARDCODED_PARAMS[appId] || [];
+    storeParams = info.params || info.parameters || info.install_params || [];
   }
+  const hardcoded = HARDCODED_PARAMS[appId] || [];
+  const seenIds = new Set(storeParams.map(p => p.id));
+  S.installParams = [...storeParams, ...hardcoded.filter(p => !seenIds.has(p.id))];
 
   // Précharger les emplacements pour le type 'location'
   if (S.installParams.some(p => p.type === 'location') && S.locations.length === 0) {
@@ -2434,6 +2485,11 @@ async function loadSettings() {
           <button class="btn-sm" onclick="setRegistryPreset('registry-1.docker.io')">Docker Hub</button>
           <button class="btn-sm danger" onclick="setRegistryPreset('')">Aucun</button>
         </div>
+        <select id="registry-mode" class="param-input" title="Comment le miroir est utilisé">
+          <option value="fallback">Fallback — upstream d'abord, miroir en secours (recommandé)</option>
+          <option value="mirror">Confiance Caleope — tout depuis le miroir</option>
+          <option value="upstream">Upstream seul — registres d'origine</option>
+        </select>
         <input type="text" id="registry-url" placeholder="URL du registre (ex: caleope-registry.gaiver-it.fr)" class="param-input">
         <input type="text" id="registry-user" placeholder="Utilisateur (optionnel)" class="param-input" autocomplete="off">
         <input type="password" id="registry-pass" placeholder="Mot de passe (vide = garder l'actuel)" class="param-input" autocomplete="new-password">
@@ -2441,6 +2497,21 @@ async function loadSettings() {
         <div style="display:flex;gap:8px;margin-top:2px">
           <button class="btn" onclick="saveRegistrySettings()"><i class="ti ti-device-floppy"></i> ENREGISTRER</button>
         </div>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">IMPORTER UNE APP</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:8px">
+        Recrée une app depuis une archive d'export (données + définition + images), même hors-ligne. Indique le chemin de l'archive <b>sur le serveur</b>.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <input type="text" id="import-path" placeholder="/opt/gaiver-it/caleope/exports/caleope-export-….tar.gz" class="param-input">
+        <select id="import-mode" class="param-input">
+          <option value="legacy">Legacy — à l'identique (recommandé)</option>
+          <option value="migrate">Migrate — standard courant si dispo, sinon legacy</option>
+        </select>
+        <div id="import-msg" style="font-size:9px;color:var(--text3);min-height:12px"></div>
+        <button class="btn" onclick="importApp()"><i class="ti ti-package-import"></i> IMPORTER</button>
       </div>
     </div>
     <div class="settings-card">
@@ -2521,6 +2592,8 @@ async function loadRegistrySettings() {
     if (url) url.value = d.registry || '';
     if (user) user.value = d.user || '';
     if (pass) pass.placeholder = d.has_pass ? "Mot de passe enregistré (vide = garder)" : "Mot de passe (optionnel)";
+    const modeEl = document.getElementById('registry-mode');
+    if (modeEl) modeEl.value = d.mode || 'fallback';
   } catch(e) {}
 }
 function setRegistryPreset(url) {
@@ -2533,6 +2606,7 @@ async function saveRegistrySettings() {
     registry: (document.getElementById('registry-url').value || '').trim(),
     user: (document.getElementById('registry-user').value || '').trim(),
     pass: document.getElementById('registry-pass').value || '',
+    mode: (document.getElementById('registry-mode') || {}).value || 'fallback',
   };
   if (msg) { msg.style.color = 'var(--text3)'; msg.textContent = 'Enregistrement...'; }
   try {
