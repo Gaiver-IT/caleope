@@ -5,8 +5,9 @@ componentName: caleope
 welcomeStyleCalamares: true
 welcomeExpandingLogo: true
 
-windowExpanding: normal
-windowSize: 920px,600px
+# Plein écran : expérience installeur immersive (façon assistant OS).
+windowExpanding: fullscreen
+windowSize: 100%,100%
 windowPlacement: center
 
 # Barre latérale d'étapes (façon assistant Windows 11) + navigation en bas.

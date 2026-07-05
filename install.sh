@@ -404,7 +404,12 @@ check_debian_codename() {
 
 check_user() {
     log_debug "Vérification de l'utilisateur ${CALEOPE_USER}..."
-    id "${CALEOPE_USER}" &>/dev/null || log_error "L'utilisateur '${CALEOPE_USER}' n'existe pas. Crée-le avant de lancer ce script : useradd -m -s /bin/bash ${CALEOPE_USER}"
+    if ! id "${CALEOPE_USER}" &>/dev/null; then
+        log_step "Utilisateur '${CALEOPE_USER}' absent — création automatique (appliance/ISO)."
+        /usr/sbin/useradd -m -s /bin/bash "${CALEOPE_USER}" \
+            || log_error "Impossible de créer l'utilisateur '${CALEOPE_USER}'."
+        log_success "Utilisateur '${CALEOPE_USER}' créé."
+    fi
     log_debug "Utilisateur ${CALEOPE_USER} OK"
 }
 
