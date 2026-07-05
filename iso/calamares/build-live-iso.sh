@@ -106,38 +106,47 @@ cp "$HERE/bootsplash/splash-1024.png" "config/bootloaders/grub-pc/splash.png"
 # Fond d'écran de la session live (posé par openbox avant Calamares → jamais noir)
 mkdir -p "$INCL/usr/share/caleope"
 cp "$HERE/bootsplash/splash-1024.png" "$INCL/usr/share/caleope/wallpaper.png"
+# Garantit que la session live (utilisateur du groupe sudo) peut élever Calamares
+# sans mot de passe (l'autostart fait `sudo -E calamares`). ISO éphémère → OK.
+mkdir -p "$INCL/etc/sudoers.d"
+printf '%%sudo ALL=(ALL) NOPASSWD: ALL\n' > "$INCL/etc/sudoers.d/caleope-live"
+chmod 440 "$INCL/etc/sudoers.d/caleope-live"
 
 # ── 4. Autostart : lancer Calamares plein écran au démarrage de la session ──
 cat > "$INCL/etc/xdg/openbox/autostart" <<'AUTO'
-# Session live Caleope : fond d'écran + installeur, robuste sur VM sans GPU.
+# Session live Caleope : fond d'écran + installeur.
+# Robuste : session root OU user (live-config), et VM sans OpenGL.
 xset -dpms 2>/dev/null; xset s off 2>/dev/null
 xsetroot -solid "#0c0c0e" 2>/dev/null
 feh --bg-fill /usr/share/caleope/wallpaper.png 2>/dev/null &
+xhost +local: 2>/dev/null   # autorise root (sudo) à joindre le serveur X de la session
 
-# RENDU LOGICIEL : les VM (Proxmox/QEMU) n'ont pas d'OpenGL exploitable. Le
-# slideshow QML (QtQuick) de Calamares exige OpenGL → sinon crash au démarrage,
-# fenêtre invisible (« souris + fond mais pas d'interface »). On force le backend
-# software de Qt/QtQuick, qui n'a besoin d'aucun GL.
+# RENDU LOGICIEL : une VM (Proxmox/QEMU) n'a pas d'OpenGL exploitable ; le
+# slideshow QtQuick de Calamares exige GL → sinon crash au démarrage.
 export QT_QUICK_BACKEND=software
 export QT_XCB_GL_INTEGRATION=none
 export LIBGL_ALWAYS_SOFTWARE=1
 export QT_QPA_PLATFORM=xcb
 
-# Lance Calamares après stabilisation de X. Si retour en <8 s = crash → on
-# affiche les logs à l'écran (diagnostic direct sur vrai matériel).
+# Calamares DOIT être root (il installe le système). La session live est souvent
+# « user » (live-config) → dans ce cas /var/log n'est pas inscriptible et un
+# lancement direct échoue silencieusement. On journalise dans /tmp (toujours
+# inscriptible) et on élève via sudo -E (NOPASSWD en live). Si Calamares se
+# ferme en <8 s, un xterm affiche le diagnostic complet.
+LOG=/tmp/caleope-calamares.log
 ( sleep 2
+  { echo "id: $(id)"; echo "calamares: $(command -v calamares)"; echo "DISPLAY=$DISPLAY"; echo "----"; } > "$LOG" 2>&1
   t0=$(date +%s)
-  calamares > /var/log/calamares-session.log 2>&1
+  if [ "$(id -u)" = 0 ]; then
+    calamares >> "$LOG" 2>&1
+  else
+    sudo -E calamares >> "$LOG" 2>&1
+  fi
   t1=$(date +%s)
   if [ $((t1 - t0)) -lt 8 ]; then
-    xterm -fa Monospace -fs 10 -geometry 128x44 +sb -e sh -c '
-      echo "=== Calamares s est fermé/a crashé en moins de 8 s ==="; echo
-      echo "--- stdout/stderr (/var/log/calamares-session.log) ---"
-      tail -40 /var/log/calamares-session.log
-      echo; echo "--- session.log (~/.cache/calamares/session.log) ---"
-      tail -70 "$HOME/.cache/calamares/session.log" 2>/dev/null || echo "(pas de session.log)"
-      echo; echo ">>> Fais une capture de cette fenêtre puis ferme-la. <<<"
-      sleep 100000'
+    { echo; echo "=== ~/.cache/calamares/session.log ==="; tail -60 "$HOME/.cache/calamares/session.log" 2>/dev/null
+      echo; echo "=== /root/.cache/calamares/session.log ==="; tail -60 /root/.cache/calamares/session.log 2>/dev/null; } >> "$LOG" 2>&1
+    xterm -fa Monospace -fs 10 -geometry 140x50 +sb -e sh -c "cat $LOG; echo; echo '>>> Capture cette fenetre puis ferme-la. <<<'; sleep 100000"
   fi
 ) &
 AUTO
