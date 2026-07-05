@@ -64,8 +64,8 @@ for b in caleoped caleope caleope-ui; do
   wget -qO "$INCL/caleope/binaries/$b" "$BASE/${b}-linux-amd64"
 done
 chmod +x "$INCL/caleope/binaries/"*
-# install.sh + service : depuis le dépôt local (branche, contient --iso)
-cp "$HERE/../install.sh"                 "$INCL/caleope/install.sh"
+# install.sh (racine du dépôt) + service (iso/) : local (branche, contient --iso)
+cp "$HERE/../../install.sh"              "$INCL/caleope/install.sh"
 cp "$HERE/../caleope-install.service"    "$INCL/caleope/caleope-install.service"
 chmod +x "$INCL/caleope/install.sh"
 # store
