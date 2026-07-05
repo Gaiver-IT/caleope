@@ -37,10 +37,19 @@ OFFLINE_IMAGES_DIR="${OFFLINE_IMAGES_DIR:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="${WORK:-$HERE/build}"
 CACHE="${CACHE:-$HERE/cache}"
-NETINST="$CACHE/debian-${DEBIAN_VER}-${ARCH}-netinst.iso"
-NETINST_URL="https://cdimage.debian.org/debian-cd/${DEBIAN_VER}/${ARCH}/iso-cd/debian-${DEBIAN_VER}-${ARCH}-netinst.iso"
 EXTRACT="$WORK/iso-extract"
 OUT="${OUT:-$WORK/caleope-installer-${CALEOPE_VERSION}.iso}"
+
+# ── Netinst Debian : auto-détection de la version courante ───────────────────
+# Les point-releases changent (13.0.0 → 13.5.0…) et Debian ne garde que `current`.
+# On lit le dossier et on prend le nom réel du fichier netinst.
+NETINST_BASE="https://cdimage.debian.org/debian-cd/current/${ARCH}/iso-cd"
+if [[ -z "${DEBIAN_NETINST_FILE:-}" ]]; then
+  DEBIAN_NETINST_FILE="$(wget -qO- "${NETINST_BASE}/" | grep -oE "debian-[0-9.]+-${ARCH}-netinst\.iso" | head -1)"
+fi
+[[ -n "${DEBIAN_NETINST_FILE:-}" ]] || { echo "❌ netinst Debian courante introuvable sur cdimage"; exit 1; }
+NETINST="$CACHE/${DEBIAN_NETINST_FILE}"
+NETINST_URL="${NETINST_BASE}/${DEBIAN_NETINST_FILE}"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "❌ manquant: $1 (apt install $2)"; exit 1; }; }
 need xorriso xorriso; need wget wget; need cpio cpio; need gzip gzip
