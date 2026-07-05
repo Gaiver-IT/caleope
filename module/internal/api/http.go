@@ -305,12 +305,13 @@ func (s *Server) StartHTTP(port int) error {
 				Registry string `json:"registry"`
 				User     string `json:"user"`
 				Pass     string `json:"pass"`
+				Mode     string `json:"mode"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				s.httpError(w, "JSON invalide", http.StatusBadRequest)
 				return
 			}
-			if err := s.SetRegistry(body.Registry, body.User, body.Pass); err != nil {
+			if err := s.SetRegistry(body.Registry, body.User, body.Pass, body.Mode); err != nil {
 				s.httpError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -318,6 +319,27 @@ func (s *Server) StartHTTP(port int) error {
 		default:
 			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
 		}
+	})))
+
+	// POST /api/v1/import — recréer une app depuis une archive d'export (chemin serveur)
+	mux.Handle("/api/v1/import", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Archive string `json:"archive"`
+			Mode    string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			s.httpError(w, "JSON invalide", http.StatusBadRequest)
+			return
+		}
+		if err := s.handleImport(map[string]string{"archive": body.Archive, "mode": body.Mode}); err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "imported", "archive": body.Archive})
 	})))
 
 	// GET/POST/DELETE /api/v1/repos — gérer les dépôts du store

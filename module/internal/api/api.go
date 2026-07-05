@@ -779,12 +779,13 @@ func (s *Server) setConfigKeys(keys map[string]string) error {
 
 // SetRegistry écrit la config du registre dans caleope.conf et tente un docker
 // login (best-effort). Un mot de passe vide conserve celui déjà enregistré.
-func (s *Server) SetRegistry(registry, user, pass string) error {
+func (s *Server) SetRegistry(registry, user, pass, mode string) error {
 	registry = strings.TrimSpace(registry)
 	user = strings.TrimSpace(user)
 	keys := map[string]string{
 		"CALEOPE_REGISTRY":      registry,
 		"CALEOPE_REGISTRY_USER": user,
+		"CALEOPE_REGISTRY_MODE": strings.TrimSpace(mode),
 	}
 	if pass != "" {
 		keys["CALEOPE_REGISTRY_PASS"] = pass
@@ -810,6 +811,7 @@ func (s *Server) RegistryStatus() map[string]interface{} {
 		res["registry"] = cfg.Registry
 		res["user"] = cfg.RegistryUser
 		res["has_pass"] = cfg.RegistryPass != ""
+		res["mode"] = cfg.RegistryMode
 	}
 	return res
 }
