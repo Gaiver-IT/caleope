@@ -147,16 +147,50 @@ cat > "$PAYLOAD/pack-info.json" << JSON
 JSON
 
 # ── 5. Patcher les bootloaders pour l'install auto (BIOS + UEFI) ────────────
-echo "⚙️  Patch des bootloaders (auto-install)..."
-BOOT_ARGS="auto=true priority=critical"
-# isolinux (BIOS)
-if [[ -f "$EXTRACT/isolinux/txt.cfg" ]]; then
-  sed -i "s#\(append.*vmlinuz.*\)#\1 ${BOOT_ARGS}#" "$EXTRACT/isolinux/txt.cfg" || true
+echo "⚙️  Menu de boot Caleope (auto-install BIOS + UEFI)..."
+# Args communs : auto-install (preseed) + clavier FR forcé dès le boot (sinon
+# qwerty par défaut) + pas de détection interactive du clavier.
+COMMON_ARGS="auto=true priority=critical vga=788 keyboard-configuration/xkb-keymap=fr console-setup/ask_detect=false"
+
+# ── isolinux (BIOS) : on REMPLACE le menu Debian par un menu Caleope minimal ──
+# (le sed d'avant ne matchait pas : sur Debian le noyau est sur la ligne `kernel`,
+#  pas `append` → les args auto n'étaient jamais ajoutés → install interactive.)
+if [[ -d "$EXTRACT/isolinux" ]]; then
+  cat > "$EXTRACT/isolinux/isolinux.cfg" <<CFG
+ui vesamenu.c32
+default caleope-auto
+timeout 50
+menu title CALEOPE — Installateur
+menu background splash.png
+include txt.cfg
+CFG
+  cat > "$EXTRACT/isolinux/txt.cfg" <<CFG
+label caleope-auto
+  menu label ^Installation Caleope (recommande)
+  menu default
+  kernel /install.amd/vmlinuz
+  append initrd=/install.amd/initrd.gz ${COMMON_ARGS} --- quiet
+label caleope-text
+  menu label Installation ^legacy (mode texte -- vieux materiel)
+  kernel /install.amd/vmlinuz
+  append initrd=/install.amd/initrd.gz DEBIAN_FRONTEND=text ${COMMON_ARGS} --- quiet
+CFG
 fi
-# grub (UEFI) — booter direct sur l'install auto
+
+# ── grub (UEFI) : menu Caleope, default + timeout ──
 if [[ -f "$EXTRACT/boot/grub/grub.cfg" ]]; then
-  sed -i "s#\(linux.*vmlinuz.*\)#\1 ${BOOT_ARGS}#" "$EXTRACT/boot/grub/grub.cfg" || true
-  sed -i 's/set default=.*/set default=0/; s/set timeout=.*/set timeout=3/' "$EXTRACT/boot/grub/grub.cfg" || true
+  cat > "$EXTRACT/boot/grub/grub.cfg" <<CFG
+set default=0
+set timeout=5
+menuentry 'Installation Caleope (recommande)' {
+    linux    /install.amd/vmlinuz ${COMMON_ARGS} --- quiet
+    initrd   /install.amd/initrd.gz
+}
+menuentry 'Installation legacy (mode texte -- vieux materiel)' {
+    linux    /install.amd/vmlinuz DEBIAN_FRONTEND=text ${COMMON_ARGS} --- quiet
+    initrd   /install.amd/initrd.gz
+}
+CFG
 fi
 
 # ── 6. Recalculer md5 + repack ISO hybride (BIOS+UEFI) ──────────────────────
