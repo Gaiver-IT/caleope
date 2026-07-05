@@ -35,7 +35,7 @@ lb config \
   --archive-areas "main contrib non-free-firmware" \
   --debian-installer none \
   --binary-images iso-hybrid \
-  --bootappend-live "boot=live components locales=fr_FR.UTF-8 keyboard-layouts=fr quiet splash" \
+  --bootappend-live "boot=live components locales=fr_FR.UTF-8 keyboard-layouts=fr" \
   --iso-application "Caleope Installer" \
   --iso-volume "CALEOPE-LIVE"
 
@@ -45,8 +45,8 @@ cat > config/package-lists/caleope.list.chroot <<'PKLIST'
 xserver-xorg
 xinit
 openbox
-plymouth
-plymouth-themes
+feh
+x11-xserver-utils
 calamares
 calamares-settings-debian
 network-manager
@@ -84,27 +84,26 @@ cp    "$HERE/config/settings.conf"    "$INCL/etc/calamares/settings.conf"
 mkdir -p "$INCL/etc/calamares/modules"
 cp -a "$HERE/config/modules/."        "$INCL/etc/calamares/modules/"
 
-# ── 3b. Branding du BOOT : splash Caleope (remplace le défaut Debian « chantier »)
-#         + thème Plymouth (écran de démarrage propre au lieu du texte défilant) ──
-echo "🎨 Branding du boot (splash + Plymouth)..."
-# Splash des menus d'amorçage (BIOS isolinux + UEFI grub) — écrase les défauts live-build
+# ── 3b. Branding du BOOT : splash des menus d'amorçage + fond d'écran Caleope ──
+# NB : PAS de Plymouth ici. Sur une image live sans display-manager (getty autologin
+# → startx), la bascule Plymouth→X laisse un écran noir. On se contente du splash des
+# menus (BIOS/UEFI) + d'un fond d'écran Caleope posé par openbox → jamais d'écran noir.
+echo "🎨 Branding du boot (splash menus + fond d'écran)..."
 for BL in isolinux grub-pc; do
   mkdir -p "config/bootloaders/$BL"
 done
 cp "$HERE/bootsplash/splash-640.png"  "config/bootloaders/isolinux/splash.png"
 cp "$HERE/bootsplash/splash-1024.png" "config/bootloaders/grub-pc/splash.png"
-# Thème Plymouth Caleope dans le système live
-mkdir -p "$INCL/usr/share/plymouth/themes/caleope"
-cp -a "$HERE/plymouth/caleope/." "$INCL/usr/share/plymouth/themes/caleope/"
-# Hook chroot : active le thème + regénère l'initramfs
-mkdir -p config/hooks/live
-cp "$HERE/hooks/0030-caleope-plymouth.hook.chroot" config/hooks/live/
-chmod +x config/hooks/live/0030-caleope-plymouth.hook.chroot
+# Fond d'écran de la session live (posé par openbox avant Calamares → jamais noir)
+mkdir -p "$INCL/usr/share/caleope"
+cp "$HERE/bootsplash/splash-1024.png" "$INCL/usr/share/caleope/wallpaper.png"
 
 # ── 4. Autostart : lancer Calamares plein écran au démarrage de la session ──
 cat > "$INCL/etc/xdg/openbox/autostart" <<'AUTO'
-# Session live : lancer directement l'installeur Caleope (plein écran, propre).
-xset -dpms; xset s off
+# Session live : fond d'écran Caleope puis installeur (jamais d'écran noir).
+xset -dpms 2>/dev/null; xset s off 2>/dev/null
+xsetroot -solid "#0c0c0e" 2>/dev/null
+feh --bg-fill /usr/share/caleope/wallpaper.png 2>/dev/null &
 # Log de session conservé pour diagnostic sur vrai matériel.
 calamares > /var/log/calamares-session.log 2>&1 &
 AUTO

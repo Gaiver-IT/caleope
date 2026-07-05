@@ -1,8 +1,0 @@
-[Plymouth Theme]
-Name=Caleope
-Description=Écran de démarrage Caleope (sombre, accent violet)
-ModuleName=script
-
-[script]
-ImageDir=/usr/share/plymouth/themes/caleope
-ScriptFile=/usr/share/plymouth/themes/caleope/caleope.script
