@@ -148,9 +148,10 @@ JSON
 
 # ── 5. Patcher les bootloaders pour l'install auto (BIOS + UEFI) ────────────
 echo "⚙️  Menu de boot Caleope (auto-install BIOS + UEFI)..."
-# Args communs : auto-install (preseed) + clavier FR forcé dès le boot (sinon
-# qwerty par défaut) + pas de détection interactive du clavier.
-COMMON_ARGS="auto=true priority=critical vga=788 keyboard-configuration/xkb-keymap=fr console-setup/ask_detect=false"
+# Args communs : TUI minimal (priority=medium → d-i ne demande QUE l'essentiel
+# non préseedé : réseau, disque, mot de passe). locale+clavier FR fixés dès le
+# tout début (sinon questions de langue / qwerty). Le reste vient du preseed.
+COMMON_ARGS="priority=medium locale=fr_FR.UTF-8 keymap=fr vga=788 keyboard-configuration/xkb-keymap=fr console-setup/ask_detect=false"
 
 # ── isolinux (BIOS) : on REMPLACE le menu Debian par un menu Caleope minimal ──
 # (le sed d'avant ne matchait pas : sur Debian le noyau est sur la ligne `kernel`,
