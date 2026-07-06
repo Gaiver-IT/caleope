@@ -164,8 +164,8 @@ check_offline_bundle() {
     # Lire et afficher les métadonnées du bundle
     if [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]]; then
         local pack_version pack_date
-        pack_version=$(jq -r '.caleope_version // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
-        pack_date=$(jq -r '.packed_at // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        pack_version=$(jq -r '.caleope_version // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null || echo "?")
+        pack_date=$(jq -r '.packed_at // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null || echo "?")
         log_success "Bundle valide — version ${pack_version} (empaqueté le ${pack_date})"
     else
         log_warning "pack-info.json absent — bundle non versionné"
