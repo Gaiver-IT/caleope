@@ -461,7 +461,10 @@ install_docker() {
         return 0
     fi
 
-    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+    # Submarine PUR (--offline air-gap) : Docker doit être préinstallé. Mais en
+    # mode --iso, on a le réseau au 1er boot → on installe Docker normalement
+    # (les IMAGES, elles, sont chargées depuis le bundle → pas de pull fragile).
+    if [[ "${OFFLINE_MODE}" == "true" && "${ISO_MODE}" != "true" ]]; then
         log_error "Mode submarine : Docker n'est pas installé. Installe Docker avant de lancer l'installation offline (apt-get install docker-ce depuis un dépôt local ou via dpkg)."
     fi
 
