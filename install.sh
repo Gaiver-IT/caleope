@@ -512,6 +512,10 @@ setup_security() {
     ufw allow 22/tcp comment "SSH"
     ufw allow 80/tcp comment "HTTP Traefik"
     ufw allow 443/tcp comment "HTTPS Traefik"
+    # caleope-ui accessible en IP directe (setup web du 1er boot + accès UI sans
+    # domaine). Sinon la page de config :8766 est injoignable depuis le LAN
+    # (le daemon ne l'ouvrait qu'au bridge Docker 172.18.0.0/16).
+    ufw allow "${PORT_UI}/tcp" comment "Caleope UI (accès IP direct / setup web)"
     ufw --force enable
     log_success "UFW actif (SSH + HTTP/HTTPS autorisés)"
 
