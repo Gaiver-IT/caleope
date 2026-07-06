@@ -148,10 +148,11 @@ JSON
 
 # ── 5. Patcher les bootloaders pour l'install auto (BIOS + UEFI) ────────────
 echo "⚙️  Menu de boot Caleope (auto-install BIOS + UEFI)..."
-# Args communs : TUI minimal (priority=medium → d-i ne demande QUE l'essentiel
-# non préseedé : réseau, disque, mot de passe). locale+clavier FR fixés dès le
-# tout début (sinon questions de langue / qwerty). Le reste vient du preseed.
-COMMON_ARGS="priority=medium locale=fr_FR.UTF-8 keymap=fr vga=788 keyboard-configuration/xkb-keymap=fr console-setup/ask_detect=false"
+# Args communs : TUI FLUIDE (priority=high → d-i enchaîne les étapes SANS menu
+# principal ; il ne s'arrête que sur les questions high non préseedées : hostname,
+# choix/confirmation disque, mot de passe). À medium/low il affichait son menu
+# « choisir la prochaine étape » (pas instinctif). locale+clavier FR dès le début.
+COMMON_ARGS="priority=high locale=fr_FR.UTF-8 keymap=fr vga=788 keyboard-configuration/xkb-keymap=fr console-setup/ask_detect=false"
 
 # ── isolinux (BIOS) : on REMPLACE le menu Debian par un menu Caleope minimal ──
 # (le sed d'avant ne matchait pas : sur Debian le noyau est sur la ligne `kernel`,
