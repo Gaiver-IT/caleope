@@ -59,6 +59,10 @@ type AppPort struct {
 type AppVolume struct {
 	Source string `json:"source"` // chemin relatif sur l'hôte (ex: app-data/jellyfin)
 	Target string `json:"target"` // chemin dans le container (ex: /config)
+	// Nas : si true ET qu'un stockage NAS est choisi à l'install, CE volume est
+	// déporté sur le NAS (symlink par volume). Les volumes non marqués restent en
+	// local — utile pour garder une base (ex: Postgres d'Immich) hors NFS.
+	Nas bool `json:"nas,omitempty"`
 }
 
 type AppBackup struct {

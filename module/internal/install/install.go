@@ -352,15 +352,36 @@ func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string, o
 		filepath.Join(composeDir, "backups"),
 	}
 
-	// Créer les dossiers de volumes (bind mounts)
-	// Si stockage NAS : app-data/<app> sera un symlink, pas un dossier réel
+	useNAS := opts.StorageLocation != "" && opts.StorageDataDir != ""
+
+	// Routage NAS granulaire : si au moins un volume porte "nas": true, seuls ces
+	// volumes sont déportés sur le NAS (un symlink par volume) ; tous les autres
+	// (ex: la base Postgres d'Immich, à ne PAS mettre sur NFS) restent en local.
+	// Rétro-compat : si un stockage NAS est choisi mais qu'AUCUN volume n'est
+	// marqué, on garde l'ancien comportement (symlink de tout app-data/<app>).
+	granular := false
+	if useNAS {
+		for _, vol := range manifest.Volumes {
+			if vol.Nas {
+				granular = true
+				break
+			}
+		}
+	}
+
+	// Créer les dossiers de volumes (bind mounts).
+	// Les volumes déportés sur le NAS sont ignorés ici : ils seront créés via symlink.
+	appDataPrefix := filepath.Join(i.baseDir, "app-data", manifest.ID)
 	for _, vol := range manifest.Volumes {
-		// Ignorer les volumes sous app-data/<app> si on utilise le NAS
-		// (ils seront créés sur le NAS via symlink)
 		volPath := filepath.Join(i.baseDir, vol.Source)
-		appDataPrefix := filepath.Join(i.baseDir, "app-data", manifest.ID)
-		if opts.StorageLocation != "" && strings.HasPrefix(volPath, appDataPrefix) {
-			continue // sera géré par le symlink NAS
+		if useNAS {
+			if granular {
+				if vol.Nas {
+					continue // déporté sur le NAS (symlink créé plus bas)
+				}
+			} else if strings.HasPrefix(volPath, appDataPrefix) {
+				continue // ancien mode : tout app-data/<app> devient un symlink
+			}
 		}
 		dirs = append(dirs, volPath)
 	}
@@ -371,26 +392,54 @@ func (i *Installer) createDirs(manifest *types.AppManifest, composeDir string, o
 		}
 	}
 
-	// ── Stockage NAS : créer dossier sur NAS + symlink local ──
-	if opts.StorageLocation != "" && opts.StorageDataDir != "" {
-		// Créer le dossier sur le NAS
-		if err := os.MkdirAll(opts.StorageDataDir, 0755); err != nil {
-			return fmt.Errorf("impossible de créer le dossier NAS: %w", err)
-		}
-		// Créer le dossier parent local (app-data/) si besoin
-		localParent := filepath.Join(i.baseDir, "app-data")
-		if err := os.MkdirAll(localParent, 0755); err != nil {
-			return err
-		}
-		// Créer le symlink : app-data/<app> → <nas>/caleope/app-data/<app>
-		localLink := filepath.Join(i.baseDir, "app-data", manifest.ID)
-		// Supprimer le symlink/dossier existant si présent
-		_ = os.Remove(localLink)
-		if err := os.Symlink(opts.StorageDataDir, localLink); err != nil {
-			return fmt.Errorf("impossible de créer le symlink NAS: %w", err)
-		}
-		fmt.Printf("         ✓ Données liées au NAS : %s → %s\n", localLink, opts.StorageDataDir)
+	if !useNAS {
+		return nil
 	}
+
+	// ── Stockage NAS ──
+	if err := os.MkdirAll(opts.StorageDataDir, 0755); err != nil {
+		return fmt.Errorf("impossible de créer le dossier NAS: %w", err)
+	}
+
+	if granular {
+		// Un symlink par volume marqué : app-data/<app>/<sub> → <nas>/caleope/app-data/<app>/<sub>
+		for _, vol := range manifest.Volumes {
+			if !vol.Nas {
+				continue
+			}
+			localLink := filepath.Join(i.baseDir, vol.Source)
+			rel, err := filepath.Rel(appDataPrefix, localLink)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				// Volume hors de app-data/<app> : on le déporte sous son nom de base
+				rel = filepath.Base(vol.Source)
+			}
+			nasDir := filepath.Join(opts.StorageDataDir, rel)
+			if err := os.MkdirAll(nasDir, 0755); err != nil {
+				return fmt.Errorf("impossible de créer le dossier NAS %s: %w", nasDir, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(localLink), 0755); err != nil {
+				return err
+			}
+			_ = os.Remove(localLink)
+			if err := os.Symlink(nasDir, localLink); err != nil {
+				return fmt.Errorf("impossible de créer le symlink NAS: %w", err)
+			}
+			fmt.Printf("         ✓ Volume '%s' lié au NAS : %s → %s\n", vol.Target, localLink, nasDir)
+		}
+		return nil
+	}
+
+	// Ancien comportement : symlink de tout app-data/<app> → <nas>/caleope/app-data/<app>.
+	localParent := filepath.Join(i.baseDir, "app-data")
+	if err := os.MkdirAll(localParent, 0755); err != nil {
+		return err
+	}
+	localLink := filepath.Join(i.baseDir, "app-data", manifest.ID)
+	_ = os.Remove(localLink)
+	if err := os.Symlink(opts.StorageDataDir, localLink); err != nil {
+		return fmt.Errorf("impossible de créer le symlink NAS: %w", err)
+	}
+	fmt.Printf("         ✓ Données liées au NAS : %s → %s\n", localLink, opts.StorageDataDir)
 
 	return nil
 }
