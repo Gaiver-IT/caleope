@@ -413,6 +413,23 @@ check_user() {
     log_debug "Utilisateur ${CALEOPE_USER} OK"
 }
 
+# Clavier console FR (AZERTY) sur le système installé. Fait ici (bash complet,
+# données keymap présentes sur le système) plutôt que dans le preseed d-i (qui
+# ne les embarque pas en mode minimal). Idempotent.
+configure_keyboard() {
+    log_step "Configuration du clavier (AZERTY / fr)..."
+    cat > /etc/default/keyboard <<'EOF_KBD'
+XKBMODEL="pc105"
+XKBLAYOUT="fr"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"
+EOF_KBD
+    setupcon --save 2>/dev/null || true
+    loadkeys fr 2>/dev/null || true
+    log_success "Clavier configuré en AZERTY (fr)"
+}
+
 # =============================================================================
 # PRÉREQUIS SYSTÈME
 # =============================================================================
@@ -1508,6 +1525,7 @@ main() {
     check_debian
     check_debian_codename
     check_user
+    configure_keyboard         # Clavier console AZERTY sur le système installé
     check_offline_bundle       # Valide le bundle si --offline / --iso
 
     # Configuration interactive (domaine, mode proxy, email) — placeholders en ISO
