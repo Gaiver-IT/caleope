@@ -152,7 +152,7 @@ echo "⚙️  Menu de boot Caleope (auto-install BIOS + UEFI)..."
 # principal ; il ne s'arrête que sur les questions high non préseedées : hostname,
 # choix/confirmation disque, mot de passe). À medium/low il affichait son menu
 # « choisir la prochaine étape » (pas instinctif). locale+clavier FR dès le début.
-COMMON_ARGS="priority=high locale=fr_FR.UTF-8 keymap=fr vga=788 keyboard-configuration/xkb-keymap=fr console-setup/ask_detect=false"
+COMMON_ARGS="priority=high locale=fr_FR.UTF-8 vga=788 keyboard-configuration/xkb-keymap=fr keyboard-configuration/layoutcode=fr console-setup/ask_detect=false"
 
 # ── isolinux (BIOS) : on REMPLACE le menu Debian par un menu Caleope minimal ──
 # (le sed d'avant ne matchait pas : sur Debian le noyau est sur la ligne `kernel`,
