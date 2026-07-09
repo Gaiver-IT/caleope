@@ -1365,20 +1365,36 @@ func main() {
 			jsonErr(w, http.StatusBadRequest, "domaine, mode proxy et mot de passe UI requis")
 			return
 		}
+		// Canal figé par l'ISO au build (pas un choix utilisateur) : lu depuis le
+		// pack-info.json du payload, avec repli "stable".
 		if b.Channel == "" {
 			b.Channel = "stable"
+			if data, err := os.ReadFile("/opt/caleope-install/pack-info.json"); err == nil {
+				var pi struct {
+					Channel string `json:"channel"`
+				}
+				if json.Unmarshal(data, &pi) == nil && pi.Channel != "" {
+					b.Channel = pi.Channel
+				}
+			}
 		}
-		// Lancer le finalize en tâche de fond (déploie Traefik + apps, retire le marqueur).
+		// Lancer le finalize DÉTACHÉ via systemd-run. CRITIQUE : install.sh
+		// --iso-finalize redémarre caleope-ui.service ; s'il tournait comme enfant
+		// de caleope-ui, le restart le tuerait (kill du cgroup) → finalize avortée,
+		// apps jamais déployées, UI inaccessible. systemd-run = cgroup indépendant
+		// (unité caleope-finalize) qui survit au redémarrage de caleope-ui.
 		go func() {
-			cmd := exec.Command("/bin/bash", filepath.Join(*baseDir, "bin", "install.sh"), "--iso-finalize")
-			cmd.Env = append(os.Environ(),
-				"CALEOPE_DOMAIN="+b.Domain,
-				"CALEOPE_PROXY_MODE="+b.ProxyMode,
-				"CALEOPE_CHANNEL="+b.Channel,
-				"CALEOPE_EMAIL="+b.Email,
-				"CALEOPE_UI_PASSWORD="+b.UIPassword,
-				"CALEOPE_SECRETS_PASSWORD="+b.SecretsPassword,
-			)
+			args := []string{
+				"--unit=caleope-finalize", "--collect",
+				"--setenv=CALEOPE_DOMAIN=" + b.Domain,
+				"--setenv=CALEOPE_PROXY_MODE=" + b.ProxyMode,
+				"--setenv=CALEOPE_CHANNEL=" + b.Channel,
+				"--setenv=CALEOPE_EMAIL=" + b.Email,
+				"--setenv=CALEOPE_UI_PASSWORD=" + b.UIPassword,
+				"--setenv=CALEOPE_SECRETS_PASSWORD=" + b.SecretsPassword,
+				"/bin/bash", filepath.Join(*baseDir, "bin", "install.sh"), "--iso-finalize",
+			}
+			cmd := exec.Command("systemd-run", args...)
 			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 			_ = cmd.Run()
 		}()

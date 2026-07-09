@@ -91,9 +91,16 @@ done
 echo "📦 Assemblage du payload Caleope (${CALEOPE_VERSION}, canal ${CHANNEL})..."
 PAYLOAD="$EXTRACT/caleope"; rm -rf "$PAYLOAD"; mkdir -p "$PAYLOAD/binaries"
 BASE="https://github.com/${REPO}/releases/download/${CALEOPE_VERSION}"
+# Binaires : override local prioritaire (CALEOPE_LOCAL_BIN=<dir> avec caleoped/
+# caleope/caleope-ui) tant que la branche ISO n'est pas releasée, sinon release.
 for b in caleoped caleope caleope-ui; do
-  echo "   ⬇️  $b"
-  wget -qO "$PAYLOAD/binaries/$b" "$BASE/${b}-linux-amd64"
+  if [[ -n "${CALEOPE_LOCAL_BIN:-}" && -f "${CALEOPE_LOCAL_BIN}/$b" ]]; then
+    echo "   📎 $b local (${CALEOPE_LOCAL_BIN})"
+    cp "${CALEOPE_LOCAL_BIN}/$b" "$PAYLOAD/binaries/$b"
+  else
+    echo "   ⬇️  $b"
+    wget -qO "$PAYLOAD/binaries/$b" "$BASE/${b}-linux-amd64"
+  fi
 done
 chmod +x "$PAYLOAD/binaries/"*
 

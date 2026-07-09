@@ -45,11 +45,7 @@
         <input id="email" placeholder="admin@mondomaine.fr" autocomplete="off">
       </div>
 
-      <label>Canal de mises à jour</label>
-      <select id="channel">
-        <option value="stable">Stable (recommandé)</option>
-        <option value="alpha">Alpha (dernières fonctionnalités)</option>
-      </select>
+      <!-- Canal (stable/alpha) : figé par l'ISO au build (pack-info.json) — pas un choix ici. -->
 
       <div class="row2">
         <div>
@@ -84,7 +80,7 @@ async function submitSetup(){
   try{
     const r = await fetch('/setup', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ domain:v('domain'), proxy_mode:v('proxy_mode'), email:v('email'),
-        channel:v('channel'), ui_password:v('ui_password'), secrets_password:v('secrets_password') }) });
+        ui_password:v('ui_password'), secrets_password:v('secrets_password') }) });
     if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.error||'Erreur'); }
     poll();
   }catch(e){ msg.style.color='var(--err)'; msg.textContent=e.message; btn.disabled=false; }
