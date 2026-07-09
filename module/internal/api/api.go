@@ -195,7 +195,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	case "license.status":
 		data, err = s.handleLicenseStatus()
 	case "install":
-		if !s.lic.IsActivated() {
+		// Les composants core (crowdsec, authentik) font partie de
+		// l'infrastructure Caleope et se déploient sans licence — comme
+		// ensureCoreApps qui passe par l'installateur interne. Seules les
+		// apps du catalogue sont soumises à la licence.
+		if !s.lic.IsActivated() && !isCoreApp(req.Args["app"]) {
 			err = fmt.Errorf("licence non activée — activez d'abord avec : caleope license activate <clé>")
 			break
 		}
@@ -1880,6 +1884,17 @@ var coreApps = []struct {
 }{
 	{"crowdsec", ""},
 	{"authentik", ""},
+}
+
+// isCoreApp indique si l'app fait partie de l'infrastructure core Caleope
+// (déployable sans licence, cf. ensureCoreApps).
+func isCoreApp(id string) bool {
+	for _, app := range coreApps {
+		if app.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureCoreApps installe silencieusement les composants core manquants.

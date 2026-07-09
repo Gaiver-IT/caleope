@@ -417,7 +417,7 @@ check_user() {
 # données keymap présentes sur le système) plutôt que dans le preseed d-i (qui
 # ne les embarque pas en mode minimal). Idempotent.
 configure_keyboard() {
-    log_step "Configuration du clavier (AZERTY / fr)..."
+    log_step "Configuration du clavier console (AZERTY / fr)..."
     cat > /etc/default/keyboard <<'EOF_KBD'
 XKBMODEL="pc105"
 XKBLAYOUT="fr"
@@ -425,9 +425,39 @@ XKBVARIANT=""
 XKBOPTIONS=""
 BACKSPACE="guess"
 EOF_KBD
-    setupcon --save 2>/dev/null || true
-    loadkeys fr 2>/dev/null || true
-    log_success "Clavier configuré en AZERTY (fr)"
+    # ⚠️ `loadkeys fr` ÉCHOUE sur un netinst minimal : aucun keymap console nommé
+    # "fr" (pas de /usr/share/keymaps/**/fr*). Il FAUT compiler le keymap depuis
+    # les données XKB avec ckbcomp, puis charger le fichier généré. Sans ça la
+    # console reste en QWERTY (VC Keymap non défini) → login impossible en azerty.
+    if command -v ckbcomp >/dev/null 2>&1; then
+        ckbcomp fr > /etc/console-setup/caleope-fr.kmap 2>/dev/null || true
+        loadkeys /etc/console-setup/caleope-fr.kmap 2>/dev/null || true
+    else
+        loadkeys fr 2>/dev/null || true
+    fi
+    # --force : régénère et applique le cache console-setup (sinon --save seul
+    # peut ne rien produire). Les services l'appliquent à chaque boot.
+    setupcon --force --save 2>/dev/null || true
+    systemctl enable console-setup.service keyboard-setup.service 2>/dev/null || true
+    log_success "Clavier console configuré en AZERTY (fr)"
+}
+
+# Console épurée façon Proxmox : réduit le bruit noyau au boot + neutralise le
+# générateur SSH-over-VSOCK (Debian 13) qui spamme « Failed to query local
+# AF_VSOCK CID » sur la console (inutile en VM/bare-metal LAN).
+configure_clean_console() {
+    log_step "Console épurée (boot silencieux)..."
+    if [[ -f /etc/default/grub ]]; then
+        if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
+            sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3"/' /etc/default/grub
+        else
+            echo 'GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3"' >> /etc/default/grub
+        fi
+        update-grub 2>/dev/null || update-grub2 2>/dev/null || true
+    fi
+    mkdir -p /etc/systemd/system-generators
+    ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator
+    log_success "Console épurée"
 }
 
 # =============================================================================
@@ -1067,16 +1097,13 @@ install_default_apps() {
         fi
     done
 
-    # CrowdSec — IDS/IPS réseau (pas de params requis, disponible sur canal alpha)
-    if caleope store 2>/dev/null | grep -q "crowdsec"; then
-        log_step "Installation de CrowdSec (IDS/IPS)..."
-        if caleope install crowdsec 2>/dev/null; then
-            log_success "CrowdSec installé"
-        else
-            log_warning "CrowdSec non installé (sera disponible via 'caleope install crowdsec')"
-        fi
+    # CrowdSec — IDS/IPS réseau. Composant core : masqué de 'caleope store'
+    # (ne pas tester sa présence via le listing) et déployable sans licence.
+    log_step "Installation de CrowdSec (IDS/IPS)..."
+    if caleope install crowdsec 2>/dev/null; then
+        log_success "CrowdSec installé"
     else
-        log_warning "CrowdSec non disponible dans ce canal — à installer via 'caleope install crowdsec' (canal alpha)"
+        log_warning "CrowdSec non installé (réessayer via 'caleope install crowdsec')"
     fi
 
     # Authentik — Identity Provider SSO (secrets générés automatiquement)
@@ -1380,12 +1407,82 @@ FIRSTBOOT_MARKER="${CALEOPE_ROOT}/.firstboot-needed"
 FIRSTBOOT_INSTALLER="${CALEOPE_ROOT}/bin/install.sh"
 FIRSTBOOT_UNIT="/etc/systemd/system/caleope-firstboot.service"
 
-# Installe le service systemd qui lance le wizard interactif au 1er démarrage.
-# Appelé uniquement en mode --iso (install de base).
-setup_firstboot() {
-    log_section "Wizard de premier démarrage"
+# Bannière console façon Proxmox : logo Caleope + URL d'administration
+# (http://<IP>:8766). Écrite dans /etc/issue par un petit générateur relancé
+# à chaque boot (l'IP DHCP peut changer). Remplace l'ancien wizard interactif.
+install_console_banner() {
+    local gen="${CALEOPE_ROOT}/bin/caleope-banner.sh"
+    mkdir -p "${CALEOPE_ROOT}/bin"
 
-    # Copier ce script à un emplacement stable (le payload ISO peut disparaître)
+    # Heredoc QUOTÉ 'BANNER' → contenu écrit littéralement (les \\ et ${IP}
+    # survivent intacts jusqu'au fichier généré).
+    cat > "${gen}" << 'BANNER'
+#!/usr/bin/env bash
+# Génère /etc/issue façon Proxmox : logo Caleope + URL d'administration.
+set -u
+ROOT="/opt/gaiver-it/caleope"
+# IP LAN : première IP globale hors ponts docker/veth. On BOUCLE jusqu'à ~40s
+# car au boot le bail DHCP peut ne pas être encore acquis (sinon <ip-du-serveur>).
+IP=""
+for _try in $(seq 1 20); do
+  IP=$(ip -4 -o addr show scope global 2>/dev/null | grep -vE 'docker|br-|veth|cali|flannel' | awk '{print $4}' | cut -d/ -f1 | head -1)
+  [ -z "${IP:-}" ] && IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^(127\.|172\.1[7-9]\.|172\.2[0-9]\.|172\.3[01]\.)' | head -1)
+  [ -n "${IP:-}" ] && break
+  sleep 2
+done
+[ -z "${IP:-}" ] && IP="<ip-du-serveur>"
+if [ -f "${ROOT}/.firstboot-needed" ]; then
+  LINE1="Configuration initiale (domaine, proxy, mots de passe) :"
+else
+  LINE1="Console d'administration Caleope :"
+fi
+# Art : heredoc quoté + backslashes DOUBLÉS (agetty interprète \x dans /etc/issue ; \\ -> \).
+cat > /etc/issue << 'ART'
+
+   ___    _    _     ___   ___   ___   ___
+  / __|  /_\\  | |   | __| / _ \\ | _ \\ | __|
+ | (__  / _ \\ | |__ | _| | (_) ||  _/ | _|
+  \\___|/_/ \\_\\|____||___| \\___/ |_|   |___|
+
+ART
+{
+  echo "  ${LINE1}"
+  echo "     http://${IP}:8766"
+  echo ""
+} >> /etc/issue
+BANNER
+    chmod 755 "${gen}"
+
+    # Before=getty : la bannière (avec la vraie IP) est écrite AVANT que getty
+    # n'affiche le prompt, sinon la console montre l'ancienne issue.
+    cat > /etc/systemd/system/caleope-banner.service << EOF
+[Unit]
+Description=Caleope — bannière console (URL d'administration)
+After=network-online.target caleoped.service
+Wants=network-online.target
+Before=getty@tty1.service getty.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash ${gen}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable caleope-banner.service 2>/dev/null || true
+    bash "${gen}" 2>/dev/null || true   # génère tout de suite
+}
+
+# Prépare le 1er démarrage en mode --iso : la configuration se fait 100% via
+# l'interface web (caleope-ui → /setup). Plus de wizard console interactif :
+# une simple bannière indique l'URL d'admin. Appelé uniquement en mode --iso.
+setup_firstboot() {
+    log_section "Premier démarrage (configuration web)"
+
+    # install.sh à un emplacement stable : le wizard WEB lance
+    # « bin/install.sh --iso-finalize » (non-interactif, variables fournies).
     mkdir -p "${CALEOPE_ROOT}/bin"
     if cp "${BASH_SOURCE[0]}" "${FIRSTBOOT_INSTALLER}" 2>/dev/null; then
         chmod 755 "${FIRSTBOOT_INSTALLER}"
@@ -1394,37 +1491,18 @@ setup_firstboot() {
         FIRSTBOOT_INSTALLER="${SCRIPT_DIR}/install.sh"
     fi
 
-    # Marqueur : le wizard ne s'exécute que s'il est présent (idempotence)
+    # Marqueur : caleope-ui sert la page /setup tant qu'il est présent.
     touch "${FIRSTBOOT_MARKER}"
 
-    # Unité systemd : s'exécute sur tty1, prend la main sur getty le temps du wizard
-    cat > "${FIRSTBOOT_UNIT}" << EOF
-[Unit]
-Description=Caleope — Assistant de premier démarrage
-After=network-online.target docker.service caleoped.service
-Wants=network-online.target
-Conflicts=getty@tty1.service
-Before=getty.target
-ConditionPathExists=${FIRSTBOOT_MARKER}
+    # Neutralise tout ancien wizard interactif tty1 (ré-install / vieille ISO).
+    rm -f "${FIRSTBOOT_UNIT}"
+    systemctl disable caleope-firstboot.service 2>/dev/null || true
 
-[Service]
-Type=oneshot
-ExecStart=/bin/bash ${FIRSTBOOT_INSTALLER} --iso-finalize
-StandardInput=tty-force
-StandardOutput=tty
-StandardError=tty
-TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
-RemainAfterExit=no
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    # Bannière console (remplace le wizard) : URL d'administration.
+    install_console_banner
 
     systemctl daemon-reload 2>/dev/null || true
-    systemctl enable caleope-firstboot.service 2>/dev/null || true
-    log_success "Wizard de 1er démarrage activé (s'exécutera au prochain boot sur la console)"
+    log_success "1er démarrage = interface web — bannière console http://<IP>:${PORT_UI} activée"
 }
 
 # Flux interactif exécuté au 1er démarrage (via caleope-firstboot.service).
@@ -1472,6 +1550,8 @@ run_iso_finalize() {
     # Terminé : retirer le marqueur et désactiver le service
     rm -f "${FIRSTBOOT_MARKER}"
     systemctl disable caleope-firstboot.service 2>/dev/null || true
+    # Rafraîchir la bannière console (état « prêt » au lieu de « à configurer »)
+    bash "${CALEOPE_ROOT}/bin/caleope-banner.sh" 2>/dev/null || true
     # Rendre la main à getty (session de login normale)
     systemctl start getty@tty1.service 2>/dev/null || true
 
@@ -1526,6 +1606,7 @@ main() {
     check_debian_codename
     check_user
     configure_keyboard         # Clavier console AZERTY sur le système installé
+    configure_clean_console    # Boot silencieux façon Proxmox (moins de bruit console)
     check_offline_bundle       # Valide le bundle si --offline / --iso
 
     # Configuration interactive (domaine, mode proxy, email) — placeholders en ISO
