@@ -46,15 +46,15 @@ apt install -y curl
 curl -fsSL https://raw.githubusercontent.com/Gaiver-IT/caleope/main/install.sh | bash
 ```
 
-→ [Guide d'installation complet](/installation)
+→ [Guide d'installation complet](/docs/installation)
 
 ---
 
 ## Navigation
 
-- [Installation](/installation) — Prérequis, installation, première vérification
-- [Guide utilisateur](/guide) — Toutes les commandes avec exemples
-- [Canal Alpha](/alpha) — Fonctionnalités Brownberry, GPU, Restic, mode standalone
-- [Mode submarine](/submarine) — Installation hors-ligne depuis un support amovible
-- [API REST](/api) — Référence complète des routes
-- [Applications disponibles](/apps) — Le catalogue du store (19 apps)
+- [Installation](/docs/installation) — Prérequis, installation, première vérification
+- [Guide utilisateur](/docs/guide) — Toutes les commandes avec exemples
+- [Canal Alpha](/docs/alpha) — Fonctionnalités Brownberry, GPU, Restic, mode standalone
+- [Mode submarine](/docs/submarine) — Installation hors-ligne depuis un support amovible
+- [API REST](/docs/api) — Référence complète des routes
+- [Applications disponibles](/docs/apps) — Le catalogue complet du store

@@ -248,7 +248,7 @@ Un fichier `compose.override.yml` est généré dans le répertoire de l'app. Il
 
 > L'option `--gpu` n'a effet que si l'app déclare `"gpu": true` dans son `app.json`. Consulter la page de chaque app pour vérifier.
 
-Apps avec support GPU : [Jellyfin](/apps/jellyfin)
+Apps avec support GPU : [Jellyfin](/docs/apps/jellyfin)
 
 ---
 
@@ -263,7 +263,7 @@ caleope list             # apparaît dans la liste avec port "-"
 
 Ces apps sont visibles dans `caleope list` mais `caleope start/stop` ne s'applique pas.
 
-→ [Restic](/apps/restic)
+→ [Restic](/docs/apps/restic)
 
 ---
 
@@ -290,7 +290,7 @@ sudo systemctl restart caleoped caleope-ui
 | `caleope offline-pack <dest>` | Créer un bundle d'installation offline |
 | `caleope offline-update <bundle>` | Appliquer un bundle sur une installation existante |
 
-→ [Documentation complète du mode submarine](/submarine)
+→ [Documentation complète du mode submarine](/docs/submarine)
 
 ---
 
@@ -309,4 +309,4 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8765/api/v1/apps
 
 > **Rate limiting** : 60 requêtes par minute par adresse IP. Au-delà, l'API répond `429 Too Many Requests` avec le header `Retry-After: 60`.
 
-→ [Référence complète de l'API](/api)
+→ [Référence complète de l'API](/docs/api)

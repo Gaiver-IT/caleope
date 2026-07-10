@@ -32,7 +32,7 @@ Après installation du Panel :
 3. **Générer le token** de connexion
 4. Installer Wings : `caleope install pterodactyl-wings --param NODE_FQDN=<ip-du-serveur>`
 
-→ Voir [Pterodactyl Wings](/apps/pterodactyl-wings)
+→ Voir [Pterodactyl Wings](/docs/apps/pterodactyl-wings)
 
 ## Créer un serveur de jeu
 
