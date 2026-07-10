@@ -33,6 +33,7 @@ type AppManifest struct {
 	SecureHeaders bool            `json:"secure_headers,omitempty"`   // Traefik secure headers opt-in
 	AuthMiddleware bool           `json:"auth_middleware,omitempty"`  // Authentik forward auth opt-in
 	NoContainer   bool            `json:"no_container,omitempty"`     // true = outil système, pas de container Docker
+	Priority      string          `json:"priority,omitempty"`         // critical | normal | background — priorité ressources (cpu_shares + oom_score_adj) des containers de l'app. Override par service via label compose "caleope.priority".
 }
 
 type AppCapabilities struct {
@@ -158,6 +159,7 @@ type RuntimeApp struct {
 	Ports           []AppPort  `json:"ports"`                      // avec les ports hôtes alloués
 	ComposeDir      string     `json:"compose_dir"`                 // chemin vers apps-installed/<id>/
 	StorageLocation string     `json:"storage_location,omitempty"` // nom de la location NAS (vide = stockage local)
+	Priority        string     `json:"priority,omitempty"`          // tier de priorité ressources (critical|normal|background) — ré-appliqué à chaque start/restart
 	Error           string     `json:"error,omitempty"`
 }
 

@@ -546,6 +546,9 @@ func (s *Server) handleStart(args map[string]string) error {
 	if err := s.dc.Start(app.ComposeDir); err != nil {
 		return err
 	}
+	// Ré-appliquer la priorité ressources : oom_score_adj est posé sur /proc/<pid> et
+	// perdu à chaque (re)démarrage de container → on le repose après le start.
+	s.dc.ApplyPriorities(appID, app.Priority)
 	app.Status = types.StatusRunning
 	_ = s.emitter.AppStarted(appID)
 	return s.rt.SaveApp(app)
@@ -577,6 +580,8 @@ func (s *Server) handleRestart(args map[string]string) error {
 	if err := s.dc.Up(app.ComposeDir); err != nil {
 		return err
 	}
+	// Ré-appliquer la priorité ressources (oom_score_adj perdu à la recréation du container).
+	s.dc.ApplyPriorities(appID, app.Priority)
 	app.Status = types.StatusRunning
 	_ = s.emitter.AppStarted(appID)
 	return s.rt.SaveApp(app)
@@ -1874,6 +1879,22 @@ func (s *Server) EnsureSecurityHeaders() {
           Server: ""
 `
 	_ = os.WriteFile(filepath.Join(traefikDir, "security-headers.yml"), []byte(content), 0644)
+}
+
+// EnsureAppPriorities ré-applique la priorité ressources (cpu_shares + oom_score_adj) à
+// toutes les apps installées, au démarrage du daemon. Indispensable après un reboot hôte :
+// les containers redémarrent via la restart-policy Docker sans passer par caleope, donc
+// l'oom_score_adj posé sur /proc/<pid> est perdu et doit être reposé. Appelée pour chaque
+// app (ApplyPriorities lit aussi les labels "caleope.priority" par service) ; no-op quand
+// tout est en tier "normal".
+func (s *Server) EnsureAppPriorities() {
+	apps, err := s.rt.ListApps()
+	if err != nil {
+		return
+	}
+	for _, app := range apps {
+		s.dc.ApplyPriorities(app.ID, app.Priority)
+	}
 }
 
 // coreApps liste les composants essentiels installés automatiquement sur toute instance Caleope.

@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -273,6 +274,129 @@ func (c *Client) ForceRemoveProjectContainers(project string) {
 	rmCmd.Stdout = os.Stdout
 	rmCmd.Stderr = os.Stderr
 	_ = rmCmd.Run()
+}
+
+// PruneStaleProjectContainers supprime les containers NON-DÉMARRÉS (created / exited
+// / dead) d'un projet Compose, SANS toucher aux containers en cours d'exécution.
+//
+// Appelé avant `up` lors d'un (ré)install : un container du projet resté d'un run
+// précédent (ex: un `up` interrompu qui laisse les containers en état "created")
+// bloque le prochain `up` par conflit de nom (`container_name` fixe → "name already
+// in use"). On lève ce conflit sans jamais couper un service VIVANT — typiquement un
+// AzuraCast externe encore Up, qui diffuse le flux, ne doit pas être arrêté.
+func (c *Client) PruneStaleProjectContainers(project string) {
+	// Filtres status répétés = OR (created OU exited OU dead) ; le label projet = AND.
+	// Les containers "running"/"restarting"/"paused" sont donc épargnés.
+	listCmd := exec.Command("docker", "ps", "-aq",
+		"--filter", "label=com.docker.compose.project="+project,
+		"--filter", "status=created",
+		"--filter", "status=exited",
+		"--filter", "status=dead",
+	)
+	out, err := listCmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		return // rien à nettoyer
+	}
+	ids := strings.Fields(strings.TrimSpace(string(out)))
+	rmArgs := append([]string{"rm", "-f"}, ids...)
+	rmCmd := exec.Command("docker", rmArgs...)
+	rmCmd.Stdout = os.Stdout
+	rmCmd.Stderr = os.Stderr
+	_ = rmCmd.Run()
+}
+
+// ─────────────────────────────────────────────
+// PRIORITÉ RESSOURCES — « apps prioritaires »
+// ─────────────────────────────────────────────
+//
+// Sur un serveur partagé (RAM/CPU limités), toutes les apps ne se valent pas :
+// l'antenne radio ne doit JAMAIS souffrir d'un batch d'analyse. Caleope traduit un
+// tier de priorité en deux réglages Docker/kernel appliqués aux containers de l'app :
+//   - cpu_shares    : poids CPU relatif (défaut Docker 1024) — qui passe devant sous charge CPU ;
+//   - oom_score_adj : priorité de sacrifice sous pression RAM (-1000 = jamais tué → +1000 = tué en premier).
+//
+// Deux niveaux, du plus spécifique au plus général :
+//   1. label compose "caleope.priority" sur un service → override fin (un seul container) ;
+//   2. sinon, le champ "priority" du manifeste de l'app  → défaut pour toute l'app.
+// Le tier "normal" (ou absent/inconnu) = on ne touche à rien (défauts Docker préservés,
+// y compris un cpu_shares posé explicitement dans le compose).
+
+// priorityTier traduit un nom de tier en réglages concrets.
+// Le bool = false pour "normal"/absent/inconnu (= ne rien appliquer).
+func priorityTier(name string) (cpuShares, oomAdj int, apply bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "critical":
+		return 2048, -800, true // antenne / vital : CPU prioritaire, protégé de l'OOM-killer
+	case "background":
+		return 256, 600, true // batch sacrifiable : peu de CPU, tué en premier si la RAM manque
+	default:
+		return 0, 0, false // "normal", "" ou inconnu : défauts Docker
+	}
+}
+
+// ApplyPriorities applique la priorité ressources aux containers d'un projet Compose,
+// à appeler APRÈS le `up`. appPriority = tier du manifeste ; un label "caleope.priority"
+// sur un service prime dessus. Idempotent, best-effort : toute erreur est loggée sur
+// stderr et n'interrompt jamais l'install.
+func (c *Client) ApplyPriorities(project, appPriority string) {
+	listCmd := exec.Command("docker", "ps", "-q",
+		"--filter", "label=com.docker.compose.project="+project,
+	)
+	out, err := listCmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		return // aucun container en cours : rien à prioriser
+	}
+	for _, id := range strings.Fields(strings.TrimSpace(string(out))) {
+		// Tier effectif : label du service > priorité de l'app.
+		tierName := appPriority
+		if lbl := c.containerLabel(id, "caleope.priority"); lbl != "" {
+			tierName = lbl
+		}
+		cpuShares, oomAdj, apply := priorityTier(tierName)
+		if !apply {
+			continue // "normal" : on laisse les défauts Docker (et un cpu_shares compose éventuel)
+		}
+		// 1. cpu_shares — modifiable à chaud via docker update.
+		upd := exec.Command("docker", "update", "--cpu-shares", strconv.Itoa(cpuShares), id)
+		if o, e := upd.CombinedOutput(); e != nil {
+			fmt.Fprintf(os.Stderr, "[priority] cpu_shares %s (%s): %v — %s\n", id, tierName, e, strings.TrimSpace(string(o)))
+		}
+		// 2. oom_score_adj — non modifiable par docker update ni exprimable en compose ;
+		//    on l'écrit directement dans /proc/<pid>/oom_score_adj (le daemon tourne en root).
+		if pid := c.containerPID(id); pid > 0 {
+			p := "/proc/" + strconv.Itoa(pid) + "/oom_score_adj"
+			if e := os.WriteFile(p, []byte(strconv.Itoa(oomAdj)), 0644); e != nil {
+				fmt.Fprintf(os.Stderr, "[priority] oom_score_adj %s (%s): %v\n", id, tierName, e)
+			}
+		}
+	}
+}
+
+// containerLabel renvoie la valeur d'un label d'un container ("" si absent).
+func (c *Client) containerLabel(id, label string) string {
+	out, err := exec.Command("docker", "inspect", "-f",
+		fmt.Sprintf("{{ index .Config.Labels %q }}", label), id).Output()
+	if err != nil {
+		return ""
+	}
+	v := strings.TrimSpace(string(out))
+	if v == "<no value>" {
+		return ""
+	}
+	return v
+}
+
+// containerPID renvoie le PID hôte du process principal d'un container (0 si introuvable).
+func (c *Client) containerPID(id string) int {
+	out, err := exec.Command("docker", "inspect", "-f", "{{ .State.Pid }}", id).Output()
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return pid
 }
 
 // ─────────────────────────────────────────────

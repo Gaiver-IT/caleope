@@ -130,6 +130,8 @@ func main() {
 	// pas l'ancien daemon qui se remplaçait lui-même.
 	server.EnsureUISetup()
 	server.EnsureSecurityHeaders()
+	// Ré-appliquer la priorité ressources des apps (oom_score_adj perdu après un reboot hôte).
+	go server.EnsureAppPriorities()
 
 	// Planificateur de tâches (backup auto, upgrade, update store)
 	sched := scheduler.New(*baseDir, server)

@@ -129,6 +129,7 @@ func (i *Installer) Install(opts InstallOptions) error {
 		InstalledAt: time.Now(),
 		Channel:     manifest.Channel,
 		Repository:  manifest.Repository,
+		Priority:    manifest.Priority,
 	}
 	_ = i.rt.SaveApp(runtimeApp)
 
@@ -206,6 +207,13 @@ func (i *Installer) Install(opts InstallOptions) error {
 		// ── Étape 8.5 : Pré-pull avec fallback miroir (mode registre "fallback") ──
 		i.pullImagesWithFallback(composeDir)
 
+		// ── Étape 8.9 : nettoyage des orphelins en conflit ──
+		// Un container du projet resté d'un run précédent en état created/exited/dead
+		// (ex: un `up` interrompu) bloque le `up` suivant par conflit de container_name
+		// ("name already in use"). On le supprime AVANT le up, sans jamais toucher aux
+		// containers VIVANTS (un AzuraCast externe encore Up ne doit pas être coupé).
+		i.docker.PruneStaleProjectContainers(opts.AppID)
+
 		// ── Étape 9 : docker compose up ──
 		fmt.Println("  [9/12] Démarrage des containers...")
 		if err := i.docker.Up(composeDir); err != nil {
@@ -217,6 +225,12 @@ func (i *Installer) Install(opts InstallOptions) error {
 		if err := i.waitForStart(ctx, composeDir); err != nil {
 			return err
 		}
+
+		// ── Étape 10.5 : priorité ressources (« apps prioritaires ») ──
+		// Applique cpu_shares + oom_score_adj selon le tier du manifeste (champ
+		// "priority"), avec override par service via le label compose "caleope.priority".
+		// Après le start pour que les containers aient un PID. No-op si tout est "normal".
+		i.docker.ApplyPriorities(opts.AppID, manifest.Priority)
 	}
 
 	// ── Étape 11 : Enregistrement runtime ──
