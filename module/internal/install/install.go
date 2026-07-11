@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,6 +153,14 @@ func (i *Installer) Install(opts InstallOptions) error {
 
 	// ── Étape 4 : Allocation port dynamique ──
 	fmt.Println("  [4/12] Allocation des ports...")
+	// Ports FIXES (dynamic:false, ex :53 DNS) : docker binde host=container en
+	// dur → si déjà pris, « docker compose up » plante avec un message cryptique
+	// (« Bind for 0.0.0.0:53 failed: port is already allocated »). On vérifie
+	// AVANT pour refuser proprement en nommant l'app fautive.
+	if err := i.checkStaticPorts(manifest); err != nil {
+		audit.Log(audit.ActionInstall, opts.AppID, "DENIED:port_conflict")
+		return err
+	}
 	hostPort, err = i.allocatePorts(manifest)
 	if err != nil {
 		return err
@@ -334,6 +343,81 @@ func (i *Installer) checkSecurity(manifest *types.AppManifest, trust types.Trust
 	fmt.Scanln(&resp)
 	if strings.ToLower(resp) != "o" {
 		return fmt.Errorf("installation annulée")
+	}
+	return nil
+}
+
+// portProtos traduit le champ Protocol du manifest en protocoles à vérifier.
+func portProtos(p string) []string {
+	switch strings.ToLower(p) {
+	case "udp":
+		return []string{"udp"}
+	case "any":
+		return []string{"tcp", "udp"}
+	default:
+		return []string{"tcp"}
+	}
+}
+
+// portFree teste si un port hôte est libre (tcp via net.Listen, udp via
+// net.ListenPacket) — même approche que l'allocation dynamique.
+func portFree(proto string, port int) bool {
+	addr := fmt.Sprintf(":%d", port)
+	if proto == "udp" {
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return false
+		}
+		_ = pc.Close()
+		return true
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
+}
+
+// checkStaticPorts refuse l'install si un port FIXE (dynamic:false) de l'app est
+// déjà occupé — soit par une autre app Caleope (nommée), soit par un service
+// tiers. Ignore le cas où l'app se réinstalle sur son propre port.
+func (i *Installer) checkStaticPorts(manifest *types.AppManifest) error {
+	if manifest.NoContainer {
+		return nil // outil système sans conteneur → pas de bind de port hôte
+	}
+	installed, _ := i.rt.ListApps()
+	for _, p := range manifest.Ports {
+		if p.Dynamic || p.Container == 0 {
+			continue
+		}
+		port := p.Container // port fixe : host = container (compose « 53:53 »)
+		for _, proto := range portProtos(p.Protocol) {
+			if portFree(proto, port) {
+				continue
+			}
+			// Occupé : est-ce nous-mêmes (réinstall) ou une autre app ?
+			var culprit string
+			for _, app := range installed {
+				for _, ap := range app.Ports {
+					if ap.Dynamic || ap.Container != port {
+						continue
+					}
+					if app.ID == manifest.ID {
+						culprit = "" // c'est notre propre app → on n'empêche pas
+						goto ownPort
+					}
+					culprit = app.ID
+				}
+			}
+			if culprit != "" {
+				return fmt.Errorf("port %d/%s déjà utilisé par l'app « %s » — désinstalle-la (ou change son port) avant d'installer « %s »",
+					port, proto, culprit, manifest.ID)
+			}
+			return fmt.Errorf("port %d/%s déjà utilisé sur cet hôte (service tiers) — libère-le avant d'installer « %s »",
+				port, proto, manifest.ID)
+		ownPort:
+		}
 	}
 	return nil
 }
