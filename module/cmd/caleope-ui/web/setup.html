@@ -65,11 +65,27 @@
       <div id="disksWrap" class="hide">
         <label>Stockage détecté</label>
         <div class="hint" style="margin-bottom:6px">
-          Disques vierges détectés. Cochés : ils seront <b>formatés (ext4)</b> et utilisés
-          automatiquement — le plus grand pour les <b>données des apps</b>, le suivant pour
-          les <b>sauvegardes</b>.
+          Disques vierges détectés — cochés : ils seront <b>formatés</b> et utilisés pour tes données.
         </div>
-        <div id="disksList"></div>
+        <div id="disksList" style="margin-bottom:10px"></div>
+        <div class="row2">
+          <div>
+            <label>Système de fichiers</label>
+            <select id="data_fs">
+              <option value="ext4">ext4 — éprouvé (recommandé)</option>
+              <option value="btrfs">btrfs — snapshots, RAID natif</option>
+              <option value="xfs">xfs — perf gros fichiers / médias</option>
+            </select>
+          </div>
+          <div>
+            <label>Organisation</label>
+            <select id="data_mode" onchange="updateDiskHint()">
+              <option value="separate">Disques séparés (données + sauvegardes)</option>
+              <option value="raid1">RAID1 — miroir (redondance)</option>
+            </select>
+          </div>
+        </div>
+        <div class="hint" id="diskHint" style="margin-top:6px"></div>
       </div>
 
       <button id="btn" onclick="submitSetup()">CONFIGURER &amp; DÉMARRER</button>
@@ -94,15 +110,35 @@ async function loadDisks(){
     if(!disks.length) return;
     document.getElementById('disksList').innerHTML = disks.map(x=>`
       <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);margin-bottom:5px;cursor:pointer;font-weight:400">
-        <input type="checkbox" class="disk-cb" value="${x.path}" checked style="accent-color:var(--vio)">
+        <input type="checkbox" class="disk-cb" value="${x.path}" checked onchange="updateDiskHint()" style="accent-color:var(--vio)">
         <span style="font-family:var(--mono);font-size:12px">${x.path}</span>
         <span style="color:var(--text2);font-size:12px">${fmtSize(x.size)} ${x.rota?'HDD':'SSD'}</span>
         <span style="color:var(--text3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.model||''}</span>
       </label>`).join('');
     document.getElementById('disksWrap').classList.remove('hide');
+    updateDiskHint();
   }catch(_){}
 }
 loadDisks();
+
+// Explique ce qui va se passer selon le nombre de disques cochés + le mode.
+// RAID1 exige ≥ 2 disques ; sinon on retombe (visuellement) sur « séparés ».
+function updateDiskHint(){
+  const n = document.querySelectorAll('.disk-cb:checked').length;
+  const mode = v('data_mode'), fs = v('data_fs'), hint = document.getElementById('diskHint');
+  const raidOpt = document.querySelector('#data_mode option[value="raid1"]');
+  if (raidOpt) raidOpt.disabled = (n < 2);
+  if (!hint) return;
+  if (n === 0){ hint.textContent = 'Aucun disque coché — les données resteront sur le disque système.'; return; }
+  if (mode === 'raid1'){
+    if (n < 2){ hint.innerHTML = '⚠️ RAID1 nécessite <b>au moins 2 disques</b> cochés.'; return; }
+    hint.innerHTML = `RAID1 : les <b>${n} disques</b> forment <b>un miroir ${fs}</b> pour les données des apps — si un disque meurt, rien n'est perdu.`;
+  } else {
+    hint.innerHTML = n === 1
+      ? `1 disque en <b>${fs}</b> → données des apps.`
+      : `${n} disques en <b>${fs}</b> : le plus grand → <b>données des apps</b>, le suivant → <b>sauvegardes</b>.`;
+  }
+}
 
 async function submitSetup(){
   const msg = document.getElementById('msg'), btn = document.getElementById('btn');
@@ -110,13 +146,17 @@ async function submitSetup(){
     msg.style.color='var(--err)'; msg.textContent='Domaine et les 2 mots de passe sont requis.'; return;
   }
   const dataDisks = Array.from(document.querySelectorAll('.disk-cb:checked')).map(c=>c.value);
+  const dataMode = v('data_mode') || 'separate';
+  if (dataMode === 'raid1' && dataDisks.length < 2){
+    msg.style.color='var(--err)'; msg.textContent='RAID1 nécessite au moins 2 disques cochés.'; return;
+  }
   btn.disabled = true;
   msg.style.color='var(--text3)'; msg.textContent='Configuration en cours (déploiement de Traefik + apps)…';
   try{
     const r = await fetch('/setup', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ domain:v('domain'), proxy_mode:v('proxy_mode'), email:v('email'),
         ui_password:v('ui_password'), secrets_password:v('secrets_password'),
-        data_disks:dataDisks }) });
+        data_disks:dataDisks, data_mode:dataMode, data_fs:(v('data_fs')||'ext4') }) });
     if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.error||'Erreur'); }
     poll();
   }catch(e){ msg.style.color='var(--err)'; msg.textContent=e.message; btn.disabled=false; }

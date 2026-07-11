@@ -1415,64 +1415,136 @@ FIRSTBOOT_UNIT="/etc/systemd/system/caleope-firstboot.service"
 # Bannière console façon Proxmox : logo Caleope + URL d'administration
 # (http://<IP>:8766). Écrite dans /etc/issue par un petit générateur relancé
 # à chaque boot (l'IP DHCP peut changer). Remplace l'ancien wizard interactif.
-# Disques de données du setup web (CALEOPE_DATA_DISKS="/dev/sdb,/dev/sdc").
-# Cas type : 1 SSD système + 2 HDD → le PLUS GROS devient app-data (les données
-# des apps), le 2e devient backups (sauvegardes hors disque de données), les
-# suivants sont montés en data-disks/diskN. Chaque disque est reformaté ext4 —
-# UNIQUEMENT s'il est encore vierge (aucune partition / signature), en plus du
-# filtrage déjà fait par caleope-ui (listEmptyDisks).
+# ─────────────────────────────────────────────────────────────────────────────
+# Disques de données (setup web) — CALEOPE_DATA_DISKS="/dev/sdb,/dev/sdc"
+#   CALEOPE_DATA_MODE = separate (défaut) | raid1
+#   CALEOPE_DATA_FS   = ext4 (défaut) | btrfs | xfs
+# SÉPARÉ : chaque disque un usage — le plus GROS → app-data, le 2e → backups,
+#          les suivants → data-disks/diskN. FS au choix.
+# RAID1  : tous les disques cochés forment UN miroir → app-data (redondance).
+#          btrfs = RAID1 natif (mkfs.btrfs -d raid1) ; ext4/xfs = via mdadm.
+# Chaque disque doit être VIERGE (double filtre : caleope-ui + ici).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Formate un périphérique dans le FS demandé (label optionnel). Écho rien.
+_mkfs_dev() {
+    local fs="$1" dev="$2" label="${3:-}"
+    case "$fs" in
+        ext4)  mkfs.ext4  -F -q ${label:+-L "$label"} "$dev" ;;
+        xfs)   mkfs.xfs   -f ${label:+-L "$label"} "$dev" >/dev/null ;;  # pas d'option -q
+        btrfs) mkfs.btrfs -f ${label:+-L "$label"} "$dev" >/dev/null ;;
+        *) return 1 ;;
+    esac
+}
+
+# Ajoute une entrée fstab (UUID) + monte, en préservant le contenu existant du
+# point de montage (app-data créé à l'install de base). $1=source $2=target $3=fs
+_mount_persist() {
+    local src="$1" target="$2" fs="$3" uuid tmp=""
+    uuid=$(blkid -s UUID -o value "$src" 2>/dev/null)
+    [[ -z "$uuid" ]] && { log_warning "UUID introuvable pour $src"; return 1; }
+    mkdir -p "$target"
+    if [[ -n "$(ls -A "$target" 2>/dev/null)" ]]; then
+        tmp=$(mktemp -d) && cp -a "$target/." "$tmp/" 2>/dev/null || tmp=""
+    fi
+    echo "UUID=$uuid $target $fs defaults,nofail 0 2" >> /etc/fstab
+    systemctl daemon-reload 2>/dev/null || true
+    if ! mount "$target" 2>/dev/null; then
+        log_warning "montage de $target impossible — entrée fstab laissée (nofail)"
+        [[ -n "$tmp" ]] && rm -rf "$tmp"
+        return 1
+    fi
+    [[ -n "$tmp" ]] && { cp -a "$tmp/." "$target/" 2>/dev/null || true; rm -rf "$tmp"; }
+    chown "${CALEOPE_USER}:${CALEOPE_GROUP}" "$target" 2>/dev/null || true
+    return 0
+}
+
+# Vrai si le disque est VIERGE (aucune partition, aucun système de fichiers).
+_disk_is_blank() {
+    [[ $(lsblk -n "$1" 2>/dev/null | wc -l) -le 1 ]] && \
+    [[ -z "$(lsblk -no FSTYPE "$1" 2>/dev/null | tr -d '[:space:]')" ]]
+}
+
 setup_data_disks() {
     [[ -z "${CALEOPE_DATA_DISKS:-}" ]] && return 0
-    log_section "Disques de données"
+    local mode="${CALEOPE_DATA_MODE:-separate}" fs="${CALEOPE_DATA_FS:-ext4}"
+    log_section "Disques de données (${mode}, ${fs})"
+
+    # Outils requis (normalement posés par le preseed) — garantie best-effort.
+    local need=()
+    [[ "$fs" == "btrfs" ]] && ! command -v mkfs.btrfs >/dev/null 2>&1 && need+=(btrfs-progs)
+    [[ "$fs" == "xfs"   ]] && ! command -v mkfs.xfs   >/dev/null 2>&1 && need+=(xfsprogs)
+    [[ "$mode" == "raid1" && "$fs" != "btrfs" ]] && ! command -v mdadm >/dev/null 2>&1 && need+=(mdadm)
+    if [[ ${#need[@]} -gt 0 ]]; then
+        apt-get install -y "${need[@]}" >/dev/null 2>&1 || \
+            log_warning "Paquets stockage manquants (${need[*]}) et non installables — repli possible sur ext4/séparé"
+    fi
+    # Repli si l'outil reste indisponible
+    [[ "$fs" == "btrfs" ]] && ! command -v mkfs.btrfs >/dev/null 2>&1 && { fs=ext4; log_warning "btrfs indisponible → ext4"; }
+    [[ "$fs" == "xfs"   ]] && ! command -v mkfs.xfs   >/dev/null 2>&1 && { fs=ext4; log_warning "xfs indisponible → ext4"; }
+    [[ "$mode" == "raid1" && "$fs" != "btrfs" ]] && ! command -v mdadm >/dev/null 2>&1 && { mode=separate; log_warning "mdadm indisponible → disques séparés"; }
 
     local disks=() d
     IFS=',' read -ra disks <<< "${CALEOPE_DATA_DISKS}"
 
-    # Tri par taille décroissante : le plus gros porte app-data.
-    local sorted
-    sorted=$(for d in "${disks[@]}"; do
-        [[ -b "$d" ]] && echo "$(blockdev --getsize64 "$d" 2>/dev/null || echo 0) $d"
-    done | sort -rn | awk '{print $2}')
+    # Ne garder que les blocs vierges, triés par taille décroissante.
+    local ok=()
+    while read -r d; do [[ -n "$d" ]] && ok+=("$d"); done < <(
+        for d in "${disks[@]}"; do
+            [[ -b "$d" ]] || continue
+            _disk_is_blank "$d" || { log_warning "$d n'est pas vierge — ignoré"; continue; }
+            echo "$(blockdev --getsize64 "$d" 2>/dev/null || echo 0) $d"
+        done | sort -rn | awk '{print $2}')
 
-    local i=0 target uuid tmp
-    for d in $sorted; do
-        # Garde-fou : disque VIERGE uniquement (aucune partition, aucun FS)
-        if [[ $(lsblk -n "$d" 2>/dev/null | wc -l) -gt 1 ]] || \
-           [[ -n "$(lsblk -no FSTYPE "$d" 2>/dev/null | tr -d '[:space:]')" ]]; then
-            log_warning "$d n'est pas vierge — ignoré (aucun formatage)"
-            continue
+    if [[ ${#ok[@]} -eq 0 ]]; then log_warning "Aucun disque de données utilisable"; return 0; fi
+
+    # ── RAID1 : un miroir → app-data ────────────────────────────────────────
+    if [[ "$mode" == "raid1" && ${#ok[@]} -ge 2 ]]; then
+        local target="${CALEOPE_ROOT}/app-data"
+        if [[ "$fs" == "btrfs" ]]; then
+            log_step "RAID1 btrfs natif sur ${ok[*]} → $target"
+            if mkfs.btrfs -f -m raid1 -d raid1 -L caleope-app "${ok[@]}" >/dev/null 2>&1; then
+                _mount_persist "${ok[0]}" "$target" btrfs && \
+                    log_success "Miroir btrfs (${#ok[@]} disques) monté sur $target"
+            else
+                log_warning "mkfs.btrfs RAID1 a échoué"
+            fi
+        else
+            log_step "RAID1 mdadm ($fs) sur ${ok[*]} → $target"
+            local md=/dev/md0; [[ -e $md ]] && md=/dev/md/caleope
+            # --assume-clean : array NEUF, on formate juste après → inutile de
+            # resynchroniser un miroir vide (évite un long rebuild bloquant).
+            if mdadm --create "$md" --level=1 --raid-devices="${#ok[@]}" --metadata=1.2 --assume-clean --run "${ok[@]}" >/dev/null 2>&1; then
+                _mkfs_dev "$fs" "$md" caleope-app >/dev/null 2>&1
+                mkdir -p /etc/mdadm 2>/dev/null || true
+                mdadm --detail --scan >> /etc/mdadm/mdadm.conf 2>/dev/null || true
+                update-initramfs -u >/dev/null 2>&1 || true
+                _mount_persist "$md" "$target" "$fs" && \
+                    log_success "Miroir mdadm $fs (${#ok[@]} disques) monté sur $target"
+            else
+                log_warning "mdadm --create a échoué"
+            fi
         fi
+        return 0
+    fi
+
+    # ── SÉPARÉ : un disque = un usage ────────────────────────────────────────
+    # ⚠️ label ≤ 12 caractères (limite XFS) → « caleope-app », pas « caleope-data1 ».
+    local i=0 target label
+    for d in "${ok[@]}"; do
         i=$((i+1))
         case $i in
-            1) target="${CALEOPE_ROOT}/app-data" ;;
-            2) target="${CALEOPE_ROOT}/backups" ;;
-            *) target="${CALEOPE_ROOT}/data-disks/disk$i" ;;
+            1) target="${CALEOPE_ROOT}/app-data"; label="caleope-app" ;;
+            2) target="${CALEOPE_ROOT}/backups";  label="caleope-bak" ;;
+            *) target="${CALEOPE_ROOT}/data-disks/disk$i"; label="caleope-d$i" ;;
         esac
-        log_step "Formatage de $d (ext4) → $target"
-        if ! mkfs.ext4 -F -q -L "caleope-data$i" "$d" 2>/dev/null; then
-            log_warning "mkfs.ext4 $d a échoué — disque ignoré"
-            continue
+        log_step "Formatage de $d ($fs) → $target"
+        if ! _mkfs_dev "$fs" "$d" "$label" >/dev/null 2>&1; then
+            log_warning "mkfs.$fs $d a échoué — disque ignoré"; continue
         fi
-        uuid=$(blkid -s UUID -o value "$d" 2>/dev/null)
-        [[ -z "$uuid" ]] && { log_warning "UUID introuvable pour $d — ignoré"; continue; }
-        mkdir -p "$target"
-        # Préserver le contenu déjà présent (app-data créé à l'install de base)
-        tmp=""
-        if [[ -n "$(ls -A "$target" 2>/dev/null)" ]]; then
-            tmp=$(mktemp -d) && cp -a "$target/." "$tmp/" 2>/dev/null || tmp=""
-        fi
-        echo "UUID=$uuid $target ext4 defaults,nofail 0 2" >> /etc/fstab
-        systemctl daemon-reload 2>/dev/null || true
-        if ! mount "$target" 2>/dev/null; then
-            log_warning "montage de $target impossible — entrée fstab laissée (nofail)"
-            [[ -n "$tmp" ]] && rm -rf "$tmp"
-            continue
-        fi
-        if [[ -n "$tmp" ]]; then cp -a "$tmp/." "$target/" 2>/dev/null || true; rm -rf "$tmp"; fi
-        chown "${CALEOPE_USER}:${CALEOPE_GROUP}" "$target" 2>/dev/null || true
-        log_success "$d ($(lsblk -dno SIZE "$d" 2>/dev/null | tr -d ' ')) monté sur $target"
+        _mount_persist "$d" "$target" "$fs" && \
+            log_success "$d ($(lsblk -dno SIZE "$d" 2>/dev/null | tr -d ' ')) → $target"
     done
-    [[ $i -eq 0 ]] && log_warning "Aucun disque de données utilisable"
     return 0
 }
 

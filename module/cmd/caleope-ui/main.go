@@ -1435,6 +1435,8 @@ func main() {
 			UIPassword      string   `json:"ui_password"`
 			SecretsPassword string   `json:"secrets_password"`
 			DataDisks       []string `json:"data_disks"`
+			DataMode        string   `json:"data_mode"` // separate | raid1
+			DataFS          string   `json:"data_fs"`   // ext4 | btrfs | xfs
 		}
 		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 			jsonErr(w, http.StatusBadRequest, "JSON invalide")
@@ -1443,6 +1445,15 @@ func main() {
 		if b.Domain == "" || b.ProxyMode == "" || b.UIPassword == "" {
 			jsonErr(w, http.StatusBadRequest, "domaine, mode proxy et mot de passe UI requis")
 			return
+		}
+		// Stockage : valeurs sur liste blanche (finissent dans un script root).
+		if b.DataMode != "raid1" {
+			b.DataMode = "separate"
+		}
+		switch b.DataFS {
+		case "ext4", "btrfs", "xfs":
+		default:
+			b.DataFS = "ext4"
 		}
 		// Canal figé par l'ISO au build (pas un choix utilisateur) : lu depuis le
 		// pack-info.json du payload, avec repli "stable".
@@ -1477,6 +1488,10 @@ func main() {
 				}
 			}
 		}
+		// RAID1 exige au moins 2 disques → sinon on retombe sur « séparés ».
+		if b.DataMode == "raid1" && len(dataDisks) < 2 {
+			b.DataMode = "separate"
+		}
 		go func() {
 			args := []string{
 				"--unit=caleope-finalize", "--collect",
@@ -1487,6 +1502,8 @@ func main() {
 				"--setenv=CALEOPE_UI_PASSWORD=" + b.UIPassword,
 				"--setenv=CALEOPE_SECRETS_PASSWORD=" + b.SecretsPassword,
 				"--setenv=CALEOPE_DATA_DISKS=" + strings.Join(dataDisks, ","),
+				"--setenv=CALEOPE_DATA_MODE=" + b.DataMode,
+				"--setenv=CALEOPE_DATA_FS=" + b.DataFS,
 				"/bin/bash", filepath.Join(*baseDir, "bin", "install.sh"), "--iso-finalize",
 			}
 			cmd := exec.Command("systemd-run", args...)
