@@ -669,6 +669,40 @@ func (i *Installer) rollback(appID, composeDir string, hostPort int) {
 // REMOVE
 // ─────────────────────────────────────────────
 
+// backupBeforeRemove archive app-data + app-config d'une app dans <baseDir>/backups/
+// AVANT une suppression destructive. Retourne le chemin de l'archive (ou "" si rien à
+// sauvegarder). Les containers doivent être arrêtés au préalable (dump cohérent).
+// L'archive contient des secrets (env) → chmod 600.
+func (i *Installer) backupBeforeRemove(appID string) (string, error) {
+	var rels []string
+	for _, rel := range []string{
+		filepath.Join("app-data", appID),
+		filepath.Join("app-config", appID),
+	} {
+		if _, err := os.Stat(filepath.Join(i.baseDir, rel)); err == nil {
+			rels = append(rels, rel)
+		}
+	}
+	if len(rels) == 0 {
+		return "", nil // rien à sauvegarder
+	}
+
+	backupDir := filepath.Join(i.baseDir, "backups")
+	if err := os.MkdirAll(backupDir, 0700); err != nil {
+		return "", err
+	}
+	out := filepath.Join(backupDir,
+		fmt.Sprintf("%s-pre-remove-%s.tar.gz", appID, time.Now().Format("20060102-150405")))
+
+	args := append([]string{"czf", out, "-C", i.baseDir}, rels...)
+	if err := exec.Command("tar", args...).Run(); err != nil {
+		_ = os.Remove(out)
+		return "", err
+	}
+	_ = os.Chmod(out, 0600)
+	return out, nil
+}
+
 // Remove désinstalle une application.
 func (i *Installer) Remove(appID string, keepData bool) error {
 	fmt.Printf("\n🗑️  Suppression de %s...\n", appID)
@@ -694,6 +728,16 @@ func (i *Installer) Remove(appID string, keepData bool) error {
 
 	// Supprimer les données si demandé
 	if !keepData {
+		// 🛟 FILET DE SÉCURITÉ : sauvegarde app-data + app-config AVANT suppression.
+		// Les containers sont déjà arrêtés (Down ci-dessus) → archive cohérente.
+		// Si le backup échoue, on ANNULE la suppression : mieux vaut un remove raté
+		// qu'une perte de données irrécupérable (cf incident du 10/07).
+		if bkp, err := i.backupBeforeRemove(appID); err != nil {
+			return fmt.Errorf("backup pré-suppression échoué, suppression ANNULÉE par sécurité "+
+				"(utilisez --keep-data pour désinstaller sans supprimer les données): %w", err)
+		} else if bkp != "" {
+			fmt.Printf("  🛟 Backup pré-suppression : %s\n", bkp)
+		}
 		fmt.Println("  [3/4] Suppression des données...")
 		_ = os.RemoveAll(filepath.Join(i.baseDir, "app-data", appID))
 		_ = os.RemoveAll(filepath.Join(i.baseDir, "app-config", appID))
