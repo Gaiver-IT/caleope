@@ -1410,6 +1410,67 @@ FIRSTBOOT_UNIT="/etc/systemd/system/caleope-firstboot.service"
 # Bannière console façon Proxmox : logo Caleope + URL d'administration
 # (http://<IP>:8766). Écrite dans /etc/issue par un petit générateur relancé
 # à chaque boot (l'IP DHCP peut changer). Remplace l'ancien wizard interactif.
+# Disques de données du setup web (CALEOPE_DATA_DISKS="/dev/sdb,/dev/sdc").
+# Cas type : 1 SSD système + 2 HDD → le PLUS GROS devient app-data (les données
+# des apps), le 2e devient backups (sauvegardes hors disque de données), les
+# suivants sont montés en data-disks/diskN. Chaque disque est reformaté ext4 —
+# UNIQUEMENT s'il est encore vierge (aucune partition / signature), en plus du
+# filtrage déjà fait par caleope-ui (listEmptyDisks).
+setup_data_disks() {
+    [[ -z "${CALEOPE_DATA_DISKS:-}" ]] && return 0
+    log_section "Disques de données"
+
+    local disks=() d
+    IFS=',' read -ra disks <<< "${CALEOPE_DATA_DISKS}"
+
+    # Tri par taille décroissante : le plus gros porte app-data.
+    local sorted
+    sorted=$(for d in "${disks[@]}"; do
+        [[ -b "$d" ]] && echo "$(blockdev --getsize64 "$d" 2>/dev/null || echo 0) $d"
+    done | sort -rn | awk '{print $2}')
+
+    local i=0 target uuid tmp
+    for d in $sorted; do
+        # Garde-fou : disque VIERGE uniquement (aucune partition, aucun FS)
+        if [[ $(lsblk -n "$d" 2>/dev/null | wc -l) -gt 1 ]] || \
+           [[ -n "$(lsblk -no FSTYPE "$d" 2>/dev/null | tr -d '[:space:]')" ]]; then
+            log_warning "$d n'est pas vierge — ignoré (aucun formatage)"
+            continue
+        fi
+        i=$((i+1))
+        case $i in
+            1) target="${CALEOPE_ROOT}/app-data" ;;
+            2) target="${CALEOPE_ROOT}/backups" ;;
+            *) target="${CALEOPE_ROOT}/data-disks/disk$i" ;;
+        esac
+        log_step "Formatage de $d (ext4) → $target"
+        if ! mkfs.ext4 -F -q -L "caleope-data$i" "$d" 2>/dev/null; then
+            log_warning "mkfs.ext4 $d a échoué — disque ignoré"
+            continue
+        fi
+        uuid=$(blkid -s UUID -o value "$d" 2>/dev/null)
+        [[ -z "$uuid" ]] && { log_warning "UUID introuvable pour $d — ignoré"; continue; }
+        mkdir -p "$target"
+        # Préserver le contenu déjà présent (app-data créé à l'install de base)
+        tmp=""
+        if [[ -n "$(ls -A "$target" 2>/dev/null)" ]]; then
+            tmp=$(mktemp -d) && cp -a "$target/." "$tmp/" 2>/dev/null || tmp=""
+        fi
+        echo "UUID=$uuid $target ext4 defaults,nofail 0 2" >> /etc/fstab
+        systemctl daemon-reload 2>/dev/null || true
+        if ! mount "$target" 2>/dev/null; then
+            log_warning "montage de $target impossible — entrée fstab laissée (nofail)"
+            [[ -n "$tmp" ]] && rm -rf "$tmp"
+            continue
+        fi
+        if [[ -n "$tmp" ]]; then cp -a "$tmp/." "$target/" 2>/dev/null || true; rm -rf "$tmp"; fi
+        chown "${CALEOPE_USER}:${CALEOPE_GROUP}" "$target" 2>/dev/null || true
+        log_success "$d ($(lsblk -dno SIZE "$d" 2>/dev/null | tr -d ' ')) monté sur $target"
+    done
+    [[ $i -eq 0 ]] && log_warning "Aucun disque de données utilisable"
+    return 0
+}
+
 install_console_banner() {
     local gen="${CALEOPE_ROOT}/bin/caleope-banner.sh"
     mkdir -p "${CALEOPE_ROOT}/bin"
@@ -1433,23 +1494,33 @@ done
 [ -z "${IP:-}" ] && IP="<ip-du-serveur>"
 if [ -f "${ROOT}/.firstboot-needed" ]; then
   LINE1="Configuration initiale (domaine, proxy, mots de passe) :"
+  LOGIN_HINT="Connexion console : user-caleope / caleope (temporaire — remplacé au setup web)"
 else
   LINE1="Console d'administration Caleope :"
+  LOGIN_HINT="Connexion console : user-caleope (mot de passe defini au setup web)"
 fi
-# Art : heredoc quoté + backslashes DOUBLÉS (agetty interprète \x dans /etc/issue ; \\ -> \).
-cat > /etc/issue << 'ART'
-
-   ___    _    _     ___   ___   ___   ___
-  / __|  /_\\  | |   | __| / _ \\ | _ \\ | __|
- | (__  / _ \\ | |__ | _| | (_) ||  _/ | _|
-  \\___|/_/ \\_\\|____||___| \\___/ |_|   |___|
-
-ART
+# Couleurs ANSI : agetty imprime /etc/issue tel quel → on écrit les octets ESC
+# littéraux. VT Linux = 16 couleurs sûres (1;35 = magenta vif, 0;36 = cyan).
+E=$(printf '\033')
+V="${E}[1;35m"; C2="${E}[0;36m"; G="${E}[0;90m"; R="${E}[0m"
+# Art « ANSI Shadow » : aucun backslash → aucun échappement agetty à gérer.
 {
-  echo "  ${LINE1}"
-  echo "     http://${IP}:8766"
-  echo ""
-} >> /etc/issue
+  printf '\n'
+  printf '%s\n' \
+"${V} ██████╗ █████╗ ██╗     ███████╗ ██████╗ ██████╗ ███████╗${R}" \
+"${V}██╔════╝██╔══██╗██║     ██╔════╝██╔═══██╗██╔══██╗██╔════╝${R}" \
+"${V}██║     ███████║██║     █████╗  ██║   ██║██████╔╝█████╗${R}" \
+"${V}██║     ██╔══██║██║     ██╔══╝  ██║   ██║██╔═══╝ ██╔══╝${R}" \
+"${V}╚██████╗██║  ██║███████╗███████╗╚██████╔╝██║     ███████╗${R}" \
+"${V} ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝${R}" \
+"${G}        self-hosting  •  souverain  •  by Gaiver-IT${R}" \
+"" \
+"  ${LINE1}" \
+"     ${C2}http://${IP}:8766${R}" \
+"" \
+"  ${G}${LOGIN_HINT}${R}" \
+""
+} > /etc/issue
 BANNER
     chmod 755 "${gen}"
 
@@ -1532,6 +1603,24 @@ run_iso_finalize() {
 
     # Poser les vraies questions (domaine, proxy, email, SMTP, mots de passe)
     ask_config
+
+    # Mot de passe SYSTÈME : l'installeur ISO ne demande jamais de mot de passe
+    # Linux (compte laissé sur le mdp temporaire « caleope » → pas d'accès
+    # console/SSH connu de l'utilisateur). Le mot de passe interface devient
+    # AUSSI celui du compte ${CALEOPE_USER} — une seule clé pour la box,
+    # choisie par l'utilisateur au setup web. (Avant save_config, qui efface
+    # CALEOPE_UI_PASSWORD après l'avoir transmis au daemon.)
+    if [[ -n "${CALEOPE_UI_PASSWORD:-}" ]]; then
+        if echo "${CALEOPE_USER}:${CALEOPE_UI_PASSWORD}" | chpasswd 2>/dev/null; then
+            log_success "Mot de passe système (${CALEOPE_USER}) aligné sur le mot de passe interface"
+        else
+            log_warning "Impossible de définir le mot de passe système — console : ${CALEOPE_USER}/caleope"
+        fi
+    fi
+
+    # Disques de données choisis au setup web (AVANT le daemon et les apps :
+    # app-data doit être monté avant que quoi que ce soit y écrive).
+    setup_data_disks
 
     # Écrire la config réelle + transmettre les secrets au daemon
     save_config

@@ -2319,6 +2319,7 @@ async function loadSettings() {
   const c = document.getElementById('content-settings');
   if (!c) return;
   c.innerHTML = `
+    <div class="settings-group-label">// SYSTÈME</div>
     <div class="settings-card">
       <div class="settings-title">SERVEUR</div>
       <div class="setting-row"><span>DOMAINE</span><span class="setting-val">${data?.domain || '—'}</span></div>
@@ -2338,28 +2339,20 @@ async function loadSettings() {
       </div>
       <div id="upgrade-log" style="display:none;margin-top:10px;background:var(--bg1);border:1px solid var(--border1);padding:8px 10px;font-size:10px;font-family:monospace;color:var(--text2);max-height:160px;overflow-y:auto;line-height:1.7"></div>
     </div>
-    <div class="settings-card">
-      <div class="settings-title">LOGO DE L'INTERFACE</div>
-      <div style="display:flex;align-items:center;gap:16px">
-        <div style="width:56px;height:56px;border:1px solid var(--border2);background:var(--bg3);flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center">
-          <img src="/ui/logo?${Date.now()}" class="logo-img" style="width:100%;height:100%;object-fit:cover" onerror="this.style.opacity=0" alt="">
-        </div>
-        <div style="flex:1">
-          <div style="font-size:10px;color:var(--text2);margin-bottom:8px">PNG, SVG, JPG ou WebP — max 5 Mo</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            <label class="btn" style="cursor:pointer;flex:0">
-              <i class="ti ti-upload"></i>IMPORTER UN LOGO
-              <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" style="display:none" onchange="uploadLogo(this)">
-            </label>
-            <button class="btn-sm danger" onclick="resetLogo()"><i class="ti ti-trash"></i>RÉINITIALISER</button>
-          </div>
+    <div class="settings-card" id="maintenance-card">
+      <div class="settings-title">MAINTENANCE</div>
+      <div id="maintenance-content">
+        <div style="display:flex;align-items:center;gap:8px;color:var(--text3);font-size:9px">
+          <span class="spinner"></span> Analyse en cours...
         </div>
       </div>
     </div>
-    <div class="settings-card" id="license-settings-card">
-      <div class="settings-title">LICENCE</div>
-      <div id="license-settings-content"><div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement…</div></div>
+    <div class="settings-card">
+      <div class="settings-title">EXPORT SYSTÈME</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:10px">Télécharger un snapshot JSON de l'état courant (apps, tâches, événements)</div>
+      <button id="snapshot-btn" class="btn" onclick="exportSystemSnapshot()"><i class="ti ti-download"></i> SNAPSHOT</button>
     </div>
+    <div class="settings-group-label">// COMPTE & SÉCURITÉ</div>
     <div class="settings-card">
       <div class="settings-title">MOT DE PASSE</div>
       <div style="display:flex;flex-direction:column;gap:8px">
@@ -2374,65 +2367,6 @@ async function loadSettings() {
     <div class="settings-card" id="totp-settings-card">
       <div class="settings-title">DOUBLE AUTHENTIFICATION (2FA TOTP)</div>
       <div id="totp-settings-content"><div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement…</div></div>
-    </div>
-    <div class="settings-card">
-      <div class="settings-title">APPARENCE</div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <div>
-          <div style="font-size:10px;font-weight:600;color:var(--text2)">MODE SOMBRE / CLAIR</div>
-          <div style="font-size:9px;color:var(--text3);margin-top:2px">Basculer entre le thème sombre et le thème clair</div>
-        </div>
-        <button id="mode-toggle-btn" class="btn" onclick="toggleMode()" style="flex-shrink:0">
-          ${(localStorage.getItem('caleope-mode')||'dark') === 'light' ? '<i class="ti ti-moon"></i> MODE SOMBRE' : '<i class="ti ti-sun"></i> MODE CLAIR'}
-        </button>
-      </div>
-    </div>
-    <div class="settings-card">
-      <div class="settings-title">THÈME DE COULEUR</div>
-      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">Couleur d'accentuation de l'interface</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        ${[
-          {name:'Violet', vio:'#7C3AED', vioB:'#A78BFA', vioDim:'#4C1D95', vioG:'#7C3AED14', accent:'#A78BFA'},
-          {name:'Bleu',   vio:'#1D6FDB', vioB:'#60A5FA', vioDim:'#1E3A6E', vioG:'#1D6FDB14', accent:'#60A5FA'},
-          {name:'Cyan',   vio:'#0E7490', vioB:'#22D3EE', vioDim:'#164E63', vioG:'#0E749014', accent:'#22D3EE'},
-          {name:'Vert',   vio:'#059669', vioB:'#34D399', vioDim:'#064E3B', vioG:'#05966914', accent:'#34D399'},
-          {name:'Rose',   vio:'#BE185D', vioB:'#F472B6', vioDim:'#831843', vioG:'#BE185D14', accent:'#F472B6'},
-          {name:'Orange', vio:'#C2410C', vioB:'#FB923C', vioDim:'#7C2D12', vioG:'#C2410C14', accent:'#FB923C'},
-        ].map(t => `
-          <button class="btn-sm" onclick="applyTheme(${JSON.stringify(t).replace(/"/g,"'")})"
-            style="display:flex;align-items:center;gap:5px;font-size:9px">
-            <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${t.vioB}"></span>
-            ${t.name}
-          </button>`).join('')}
-        <button class="btn-sm" onclick="resetTheme()" style="font-size:9px;color:var(--text3)">DÉFAUT</button>
-      </div>
-    </div>
-    <div class="settings-card" id="settings-certs-card">
-      <div class="settings-title">CERTIFICATS SSL <span style="font-size:8px;color:var(--text3);font-weight:400;letter-spacing:0">Chargement…</span></div>
-    </div>
-    <div class="settings-card">
-      <div class="settings-title">EXPORT SYSTÈME</div>
-      <div style="font-size:10px;color:var(--text3);margin-bottom:10px">Télécharger un snapshot JSON de l'état courant (apps, tâches, événements)</div>
-      <button id="snapshot-btn" class="btn" onclick="exportSystemSnapshot()"><i class="ti ti-download"></i> SNAPSHOT</button>
-    </div>
-    <div class="settings-card">
-      <div class="settings-title">ACTUALISATION AUTOMATIQUE</div>
-      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">Intervalle de rafraîchissement du tableau de bord et des stats</div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap">
-        ${[15,30,60,120,0].map(v => {
-          const cur = parseInt(localStorage.getItem('caleope-refresh-interval') || '30');
-          const label = v === 0 ? 'OFF' : v < 60 ? `${v}s` : `${v/60}m`;
-          return `<button class="btn-sm${cur===v?' active':''}" onclick="setRefreshInterval(${v})" style="font-size:9px">${label}</button>`;
-        }).join('')}
-      </div>
-    </div>
-    <div class="settings-card" id="maintenance-card">
-      <div class="settings-title">MAINTENANCE</div>
-      <div id="maintenance-content">
-        <div style="display:flex;align-items:center;gap:8px;color:var(--text3);font-size:9px">
-          <span class="spinner"></span> Analyse en cours...
-        </div>
-      </div>
     </div>
     <div class="settings-card">
       <div class="settings-title">SSO / OIDC</div>
@@ -2456,6 +2390,22 @@ async function loadSettings() {
         </div>
       </div>
     </div>
+    <div class="settings-card">
+      <div class="settings-title">SESSION</div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
+        <button class="btn btn-sm danger" onclick="logout()"><i class="ti ti-logout"></i>SE DÉCONNECTER</button>
+      </div>
+    </div>
+    <div class="settings-group-label">// LICENCE & CERTIFICATS</div>
+    <div class="settings-card" id="license-settings-card">
+      <div class="settings-title">LICENCE</div>
+      <div id="license-settings-content"><div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement…</div></div>
+    </div>
+    <div class="settings-card" id="settings-certs-card">
+      <div class="settings-title">CERTIFICATS SSL <span style="font-size:8px;color:var(--text3);font-weight:400;letter-spacing:0">Chargement…</span></div>
+    </div>
+    <div class="settings-group-label">// STORE & IMAGES</div>
     <div class="settings-card">
       <div class="settings-title">DÉPÔTS DE MISE À JOUR</div>
       <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
@@ -2514,11 +2464,66 @@ async function loadSettings() {
         <button class="btn" onclick="importApp()"><i class="ti ti-package-import"></i> IMPORTER</button>
       </div>
     </div>
+    <div class="settings-group-label">// INTERFACE</div>
     <div class="settings-card">
-      <div class="settings-title">SESSION</div>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
-        <button class="btn btn-sm danger" onclick="logout()"><i class="ti ti-logout"></i>SE DÉCONNECTER</button>
+      <div class="settings-title">APPARENCE</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div>
+          <div style="font-size:10px;font-weight:600;color:var(--text2)">MODE SOMBRE / CLAIR</div>
+          <div style="font-size:9px;color:var(--text3);margin-top:2px">Basculer entre le thème sombre et le thème clair</div>
+        </div>
+        <button id="mode-toggle-btn" class="btn" onclick="toggleMode()" style="flex-shrink:0">
+          ${(localStorage.getItem('caleope-mode')||'dark') === 'light' ? '<i class="ti ti-moon"></i> MODE SOMBRE' : '<i class="ti ti-sun"></i> MODE CLAIR'}
+        </button>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">THÈME DE COULEUR</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">Couleur d'accentuation de l'interface</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        ${[
+          {name:'Violet', vio:'#7C3AED', vioB:'#A78BFA', vioDim:'#4C1D95', vioG:'#7C3AED14', accent:'#A78BFA'},
+          {name:'Bleu',   vio:'#1D6FDB', vioB:'#60A5FA', vioDim:'#1E3A6E', vioG:'#1D6FDB14', accent:'#60A5FA'},
+          {name:'Cyan',   vio:'#0E7490', vioB:'#22D3EE', vioDim:'#164E63', vioG:'#0E749014', accent:'#22D3EE'},
+          {name:'Vert',   vio:'#059669', vioB:'#34D399', vioDim:'#064E3B', vioG:'#05966914', accent:'#34D399'},
+          {name:'Rose',   vio:'#BE185D', vioB:'#F472B6', vioDim:'#831843', vioG:'#BE185D14', accent:'#F472B6'},
+          {name:'Orange', vio:'#C2410C', vioB:'#FB923C', vioDim:'#7C2D12', vioG:'#C2410C14', accent:'#FB923C'},
+        ].map(t => `
+          <button class="btn-sm" onclick="applyTheme(${JSON.stringify(t).replace(/"/g,"'")})"
+            style="display:flex;align-items:center;gap:5px;font-size:9px">
+            <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${t.vioB}"></span>
+            ${t.name}
+          </button>`).join('')}
+        <button class="btn-sm" onclick="resetTheme()" style="font-size:9px;color:var(--text3)">DÉFAUT</button>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">LOGO DE L'INTERFACE</div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="width:56px;height:56px;border:1px solid var(--border2);background:var(--bg3);flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center">
+          <img src="/ui/logo?${Date.now()}" class="logo-img" style="width:100%;height:100%;object-fit:cover" onerror="this.style.opacity=0" alt="">
+        </div>
+        <div style="flex:1">
+          <div style="font-size:10px;color:var(--text2);margin-bottom:8px">PNG, SVG, JPG ou WebP — max 5 Mo</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <label class="btn" style="cursor:pointer;flex:0">
+              <i class="ti ti-upload"></i>IMPORTER UN LOGO
+              <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" style="display:none" onchange="uploadLogo(this)">
+            </label>
+            <button class="btn-sm danger" onclick="resetLogo()"><i class="ti ti-trash"></i>RÉINITIALISER</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">ACTUALISATION AUTOMATIQUE</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">Intervalle de rafraîchissement du tableau de bord et des stats</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        ${[15,30,60,120,0].map(v => {
+          const cur = parseInt(localStorage.getItem('caleope-refresh-interval') || '30');
+          const label = v === 0 ? 'OFF' : v < 60 ? `${v}s` : `${v/60}m`;
+          return `<button class="btn-sm${cur===v?' active':''}" onclick="setRefreshInterval(${v})" style="font-size:9px">${label}</button>`;
+        }).join('')}
       </div>
     </div>
   `;

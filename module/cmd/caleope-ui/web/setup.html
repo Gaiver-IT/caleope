@@ -51,12 +51,25 @@
         <div>
           <label>Mot de passe interface</label>
           <input id="ui_password" type="password" autocomplete="new-password">
+          <div class="hint">Sert aussi pour la console / SSH (compte user-caleope).</div>
         </div>
         <div>
           <label>Mot de passe secrets</label>
           <input id="secrets_password" type="password" autocomplete="new-password">
           <div class="hint">Protège les secrets des apps. À noter — irrécupérable.</div>
         </div>
+      </div>
+
+      <!-- Disques de données détectés (vierges) : proposés au formatage.
+           La section n'apparaît que si /setup/disks en trouve. -->
+      <div id="disksWrap" class="hide">
+        <label>Stockage détecté</label>
+        <div class="hint" style="margin-bottom:6px">
+          Disques vierges détectés. Cochés : ils seront <b>formatés (ext4)</b> et utilisés
+          automatiquement — le plus grand pour les <b>données des apps</b>, le suivant pour
+          les <b>sauvegardes</b>.
+        </div>
+        <div id="disksList"></div>
       </div>
 
       <button id="btn" onclick="submitSetup()">CONFIGURER &amp; DÉMARRER</button>
@@ -70,17 +83,40 @@ function toggleEmail(){
     document.getElementById('proxy_mode').value !== 'traefik');
 }
 function v(id){ return (document.getElementById(id).value||'').trim(); }
+
+// Disques vierges détectés par le serveur → cases à cocher (cochées par défaut :
+// seuls des disques SANS partition ni système de fichiers sont proposés).
+function fmtSize(b){ const u=['o','Ko','Mo','Go','To']; let i=0; while(b>=1024&&i<4){b/=1024;i++;} return b.toFixed(b>=100?0:1)+' '+u[i]; }
+async function loadDisks(){
+  try{
+    const r = await fetch('/setup/disks'); if(!r.ok) return;
+    const d = await r.json(); const disks = d.disks||[];
+    if(!disks.length) return;
+    document.getElementById('disksList').innerHTML = disks.map(x=>`
+      <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);margin-bottom:5px;cursor:pointer;font-weight:400">
+        <input type="checkbox" class="disk-cb" value="${x.path}" checked style="accent-color:var(--vio)">
+        <span style="font-family:var(--mono);font-size:12px">${x.path}</span>
+        <span style="color:var(--text2);font-size:12px">${fmtSize(x.size)} ${x.rota?'HDD':'SSD'}</span>
+        <span style="color:var(--text3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.model||''}</span>
+      </label>`).join('');
+    document.getElementById('disksWrap').classList.remove('hide');
+  }catch(_){}
+}
+loadDisks();
+
 async function submitSetup(){
   const msg = document.getElementById('msg'), btn = document.getElementById('btn');
   if(!v('domain') || !v('ui_password') || !v('secrets_password')){
     msg.style.color='var(--err)'; msg.textContent='Domaine et les 2 mots de passe sont requis.'; return;
   }
+  const dataDisks = Array.from(document.querySelectorAll('.disk-cb:checked')).map(c=>c.value);
   btn.disabled = true;
   msg.style.color='var(--text3)'; msg.textContent='Configuration en cours (déploiement de Traefik + apps)…';
   try{
     const r = await fetch('/setup', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ domain:v('domain'), proxy_mode:v('proxy_mode'), email:v('email'),
-        ui_password:v('ui_password'), secrets_password:v('secrets_password') }) });
+        ui_password:v('ui_password'), secrets_password:v('secrets_password'),
+        data_disks:dataDisks }) });
     if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.error||'Erreur'); }
     poll();
   }catch(e){ msg.style.color='var(--err)'; msg.textContent=e.message; btn.disabled=false; }

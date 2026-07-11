@@ -828,6 +828,17 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
 .secret-mask { font-size: 11px; color: var(--text3); letter-spacing: 3px; }
 
 /* ── SETTINGS ─────────────────────────────────────────────────────────────── */
+/* Étiquette de section : regroupe les cartes par thème (// SYSTÈME, // COMPTE…) */
+.settings-group-label {
+  font-size: 10px;
+  color: var(--vio-b);
+  letter-spacing: 2.5px;
+  font-weight: 700;
+  margin: 22px 0 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-group-label:first-child { margin-top: 4px; }
 .settings-card { background: var(--bg2); border: 1px solid var(--border); padding: 14px; margin-bottom: 10px; }
 .settings-title {
   font-size: 9px;

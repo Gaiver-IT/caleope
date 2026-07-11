@@ -230,6 +230,56 @@ func readEnvKey(path, key string) string {
 	return ""
 }
 
+// ── Disques de données (setup 1er démarrage) ────────────────────────────────
+
+// emptyDiskInfo décrit un disque candidat au stockage de données.
+type emptyDiskInfo struct {
+	Path  string `json:"path"`  // ex: /dev/sdb
+	Size  int64  `json:"size"`  // octets
+	Model string `json:"model"` // ex: WDC WD40EFRX
+	Rota  bool   `json:"rota"`  // true = disque rotatif (HDD)
+}
+
+// listEmptyDisks liste les disques ENTIERS et VIERGES : type "disk", aucune
+// partition (pas d'enfants lsblk), aucun système de fichiers, > 2 Go. Le
+// disque système porte des partitions → jamais listé. Base du choix « utiliser
+// ce disque pour les données » du setup web.
+func listEmptyDisks() []emptyDiskInfo {
+	out, err := exec.Command("lsblk", "-J", "-b", "-o", "PATH,TYPE,SIZE,FSTYPE,MODEL,ROTA").Output()
+	if err != nil {
+		return nil
+	}
+	var tree struct {
+		Blockdevices []struct {
+			Path     string          `json:"path"`
+			Type     string          `json:"type"`
+			Size     int64           `json:"size"`
+			Fstype   *string         `json:"fstype"`
+			Model    *string         `json:"model"`
+			Rota     bool            `json:"rota"`
+			Children json.RawMessage `json:"children"`
+		} `json:"blockdevices"`
+	}
+	if json.Unmarshal(out, &tree) != nil {
+		return nil
+	}
+	disks := []emptyDiskInfo{}
+	for _, d := range tree.Blockdevices {
+		if d.Type != "disk" || len(d.Children) > 0 || d.Size < 2<<30 {
+			continue
+		}
+		if d.Fstype != nil && *d.Fstype != "" {
+			continue
+		}
+		model := ""
+		if d.Model != nil {
+			model = strings.TrimSpace(*d.Model)
+		}
+		disks = append(disks, emptyDiskInfo{Path: d.Path, Size: d.Size, Model: model, Rota: d.Rota})
+	}
+	return disks
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
@@ -1340,6 +1390,19 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"firstboot": firstbootActive()})
 	})
 
+	// Disques de données éligibles au 1er démarrage : disques ENTIERS et VIERGES
+	// (aucune partition, aucun système de fichiers) — le disque système, qui
+	// porte des partitions, est exclu de fait. Servi sans login pendant le
+	// firstboot uniquement (comme /setup).
+	mux.HandleFunc("/setup/disks", func(w http.ResponseWriter, r *http.Request) {
+		if !firstbootActive() {
+			jsonErr(w, http.StatusForbidden, "configuration déjà effectuée")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"disks": listEmptyDisks()})
+	})
+
 	mux.HandleFunc("/setup", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "méthode non autorisée", http.StatusMethodNotAllowed)
@@ -1350,12 +1413,13 @@ func main() {
 			return
 		}
 		var b struct {
-			Domain          string `json:"domain"`
-			ProxyMode       string `json:"proxy_mode"`
-			Email           string `json:"email"`
-			Channel         string `json:"channel"`
-			UIPassword      string `json:"ui_password"`
-			SecretsPassword string `json:"secrets_password"`
+			Domain          string   `json:"domain"`
+			ProxyMode       string   `json:"proxy_mode"`
+			Email           string   `json:"email"`
+			Channel         string   `json:"channel"`
+			UIPassword      string   `json:"ui_password"`
+			SecretsPassword string   `json:"secrets_password"`
+			DataDisks       []string `json:"data_disks"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 			jsonErr(w, http.StatusBadRequest, "JSON invalide")
@@ -1383,6 +1447,21 @@ func main() {
 		// de caleope-ui, le restart le tuerait (kill du cgroup) → finalize avortée,
 		// apps jamais déployées, UI inaccessible. systemd-run = cgroup indépendant
 		// (unité caleope-finalize) qui survit au redémarrage de caleope-ui.
+		// Disques de données : STRICTEMENT restreints à la liste des disques
+		// vierges détectés (ces chemins finissent dans un script root — aucune
+		// valeur libre de l'utilisateur ne doit passer).
+		var dataDisks []string
+		if len(b.DataDisks) > 0 {
+			eligible := map[string]bool{}
+			for _, d := range listEmptyDisks() {
+				eligible[d.Path] = true
+			}
+			for _, p := range b.DataDisks {
+				if eligible[p] {
+					dataDisks = append(dataDisks, p)
+				}
+			}
+		}
 		go func() {
 			args := []string{
 				"--unit=caleope-finalize", "--collect",
@@ -1392,6 +1471,7 @@ func main() {
 				"--setenv=CALEOPE_EMAIL=" + b.Email,
 				"--setenv=CALEOPE_UI_PASSWORD=" + b.UIPassword,
 				"--setenv=CALEOPE_SECRETS_PASSWORD=" + b.SecretsPassword,
+				"--setenv=CALEOPE_DATA_DISKS=" + strings.Join(dataDisks, ","),
 				"/bin/bash", filepath.Join(*baseDir, "bin", "install.sh"), "--iso-finalize",
 			}
 			cmd := exec.Command("systemd-run", args...)
