@@ -241,35 +241,50 @@ type emptyDiskInfo struct {
 }
 
 // listEmptyDisks liste les disques ENTIERS et VIERGES : type "disk", aucune
-// partition (pas d'enfants lsblk), aucun système de fichiers, > 2 Go. Le
-// disque système porte des partitions → jamais listé. Base du choix « utiliser
-// ce disque pour les données » du setup web.
+// partition, aucun système de fichiers, > 2 Go. Le disque système porte des
+// partitions → jamais listé. Base du choix « utiliser ce disque pour les
+// données » du setup web.
+// ⚠️ Sans NAME dans les colonnes, lsblk -J rend une liste PLATE (pas d'arbre
+// children) — on identifie donc les disques partitionnés via PKNAME : toute
+// ligne (partition/LVM) désigne son parent par PKNAME ; un disque référencé
+// comme parent n'est pas vierge. (Bug attrapé en test : /dev/sda système
+// listé comme éligible avec l'ancien filtre "children".)
 func listEmptyDisks() []emptyDiskInfo {
-	out, err := exec.Command("lsblk", "-J", "-b", "-o", "PATH,TYPE,SIZE,FSTYPE,MODEL,ROTA").Output()
+	out, err := exec.Command("lsblk", "-J", "-b", "-o", "PATH,PKNAME,TYPE,SIZE,FSTYPE,MODEL,ROTA").Output()
 	if err != nil {
 		return nil
 	}
 	var tree struct {
 		Blockdevices []struct {
-			Path     string          `json:"path"`
-			Type     string          `json:"type"`
-			Size     int64           `json:"size"`
-			Fstype   *string         `json:"fstype"`
-			Model    *string         `json:"model"`
-			Rota     bool            `json:"rota"`
-			Children json.RawMessage `json:"children"`
+			Path   string  `json:"path"`
+			Pkname *string `json:"pkname"`
+			Type   string  `json:"type"`
+			Size   int64   `json:"size"`
+			Fstype *string `json:"fstype"`
+			Model  *string `json:"model"`
+			Rota   bool    `json:"rota"`
 		} `json:"blockdevices"`
 	}
 	if json.Unmarshal(out, &tree) != nil {
 		return nil
 	}
+	// Noms noyau (ex: "sda") référencés comme parent par au moins une ligne.
+	hasChildren := map[string]bool{}
+	for _, d := range tree.Blockdevices {
+		if d.Pkname != nil && *d.Pkname != "" {
+			hasChildren[*d.Pkname] = true
+		}
+	}
 	disks := []emptyDiskInfo{}
 	for _, d := range tree.Blockdevices {
-		if d.Type != "disk" || len(d.Children) > 0 || d.Size < 2<<30 {
+		if d.Type != "disk" || d.Size < 2<<30 {
 			continue
 		}
+		if hasChildren[strings.TrimPrefix(d.Path, "/dev/")] {
+			continue // porte des partitions (disque système ou déjà utilisé)
+		}
 		if d.Fstype != nil && *d.Fstype != "" {
-			continue
+			continue // déjà formaté
 		}
 		model := ""
 		if d.Model != nil {

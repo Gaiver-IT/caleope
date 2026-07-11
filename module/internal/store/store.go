@@ -152,14 +152,20 @@ func (s *Store) gitPull(repoDir, branch string) error {
 	// fetch la branche explicitement : sur un clone --depth=1, "git fetch origin"
 	// sans argument ne crée pas les remote-tracking refs des autres branches.
 	// On utilise FETCH_HEAD après le fetch pour éviter ce problème.
-	fetch := exec.Command("git", "-C", repoDir, "fetch", "origin", branch)
+	//
+	// -c safe.directory=<dir> : le cache store appartient à user-caleope mais le
+	// daemon tourne en root → git refuse (« dubious ownership », exit 128) et le
+	// store ne se synchronise JAMAIS sur les installs ISO (leur sync_store
+	// n'ajoute pas de safe.directory global). L'option par-commande est robuste
+	// quel que soit l'utilisateur/HOME du process.
+	fetch := exec.Command("git", "-c", "safe.directory="+repoDir, "-C", repoDir, "fetch", "origin", branch)
 	fetch.Stdout = os.Stdout
 	fetch.Stderr = os.Stderr
 	if err := fetch.Run(); err != nil {
 		return fmt.Errorf("git fetch dans %s: %w", repoDir, err)
 	}
 
-	reset := exec.Command("git", "-C", repoDir, "reset", "--hard", "FETCH_HEAD")
+	reset := exec.Command("git", "-c", "safe.directory="+repoDir, "-C", repoDir, "reset", "--hard", "FETCH_HEAD")
 	reset.Stdout = os.Stdout
 	reset.Stderr = os.Stderr
 	if err := reset.Run(); err != nil {

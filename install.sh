@@ -1261,6 +1261,11 @@ sync_store() {
         mkdir -p "${store_dir}"
         tar -xzf "${store_archive}" -C "${store_dir}" --strip-components=1
         chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${store_dir}"
+        # Le tarball embarque .git (clone complet) : le daemon (root) doit pouvoir
+        # fetch dans ce dépôt possédé par user-caleope — sans safe.directory, git
+        # refuse (« dubious ownership ») et le store ne se met JAMAIS à jour.
+        # (Le daemon passe aussi -c safe.directory par commande depuis v0.7.3.)
+        git config --global --add safe.directory "${store_dir}" 2>/dev/null || true
         log_success "Store extrait — $(find "${store_dir}/apps" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l) application(s) disponible(s)"
         return 0
     fi
