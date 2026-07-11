@@ -1570,33 +1570,39 @@ for _try in $(seq 1 20); do
 done
 [ -z "${IP:-}" ] && IP="<ip-du-serveur>"
 if [ -f "${ROOT}/.firstboot-needed" ]; then
-  LINE1="Configuration initiale (domaine, proxy, mots de passe) :"
-  LOGIN_HINT="Connexion console : user-caleope / caleope (temporaire — remplacé au setup web)"
+  LINE1="Configuration initiale (domaine, proxy, mots de passe)"
+  LOGIN_HINT="Console : user-caleope / caleope (temporaire)"
 else
-  LINE1="Console d'administration Caleope :"
-  LOGIN_HINT="Connexion console : user-caleope (mot de passe defini au setup web)"
+  LINE1="Console d'administration Caleope"
+  LOGIN_HINT="Login console : user-caleope"
 fi
-# Couleurs ANSI : agetty imprime /etc/issue tel quel → on écrit les octets ESC
-# littéraux. VT Linux = 16 couleurs sûres (1;35 = magenta vif, 0;36 = cyan).
+# Couleurs ANSI (console VT, 16 couleurs) : 1;35 magenta vif, 0;35 magenta,
+# 1;36 cyan, 0;90 gris, 0;37 blanc. Blocs (█▄▀░▒▓) présents dans la police console.
 E=$(printf '\033')
-V="${E}[1;35m"; C2="${E}[0;36m"; G="${E}[0;90m"; R="${E}[0m"
-# Art « ANSI Shadow » : aucun backslash → aucun échappement agetty à gérer.
+V="${E}[1;35m"; M="${E}[0;35m"; C2="${E}[1;36m"; G="${E}[0;90m"; W="${E}[0;37m"; R="${E}[0m"
+# Wordmark CALEOPE (blocs pleins) dégradé magenta (haut vif → bas sombre), sous-titre
+# centré, bloc infos encadré (flèches magenta, URL cyan), ligne licence. IP variable
+# → seules les lignes du cadre en ASCII sont paddées (%-Ns) pour aligner la bordure.
 {
-  printf '\n'
-  printf '%s\n' \
-"${V} ██████╗ █████╗ ██╗     ███████╗ ██████╗ ██████╗ ███████╗${R}" \
-"${V}██╔════╝██╔══██╗██║     ██╔════╝██╔═══██╗██╔══██╗██╔════╝${R}" \
-"${V}██║     ███████║██║     █████╗  ██║   ██║██████╔╝█████╗${R}" \
-"${V}██║     ██╔══██║██║     ██╔══╝  ██║   ██║██╔═══╝ ██╔══╝${R}" \
-"${V}╚██████╗██║  ██║███████╗███████╗╚██████╔╝██║     ███████╗${R}" \
-"${V} ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝ ╚═╝     ╚══════╝${R}" \
-"${G}        self-hosting  •  souverain  •  by Gaiver-IT${R}" \
-"" \
-"  ${LINE1}" \
-"     ${C2}http://${IP}:8766${R}" \
-"" \
-"  ${G}${LOGIN_HINT}${R}" \
-""
+printf '\n'
+printf '%s%s%s\n' "$G" "════════════════════════════════════════════════════════════════════════════" "$R"
+printf '\n'
+printf '         %s ██████  █████  ██      ███████  ██████  ██████  ███████ %s\n' "$V" "$R"
+printf '         %s██      ██   ██ ██      ██      ██    ██ ██   ██ ██      %s\n' "$V" "$R"
+printf '         %s██      ███████ ██      █████   ██    ██ ██████  █████   %s\n' "$V" "$R"
+printf '         %s██      ██   ██ ██      ██      ██    ██ ██      ██      %s\n' "$M" "$R"
+printf '         %s ██████ ██   ██ ███████ ███████  ██████  ██      ███████ %s\n' "$M" "$R"
+printf '\n'
+printf '%s░▒▓███████████████%s self-hosting · souverain · self-owned %s███████████████▓▒░%s\n' "$M" "$W" "$M" "$R"
+printf '%s%s%s\n' "$G" "════════════════════════════════════════════════════════════════════════════" "$R"
+printf '\n'
+printf '        %s╔══════════════════════════════════════════════════════════╗%s\n' "$G" "$R"
+printf '        %s║%s  %s►%s %s%-54s%s%s║%s\n' "$G" "$R" "$V" "$R" "$W" "$LINE1" "$R" "$G" "$R"
+printf '        %s║%s%s%-58s%s%s║%s\n' "$G" "$R" "$C2" "      http://${IP}:8766" "$R" "$G" "$R"
+printf '        %s║%s  %s►%s %s%-54s%s%s║%s\n' "$G" "$R" "$V" "$R" "$W" "$LOGIN_HINT" "$R" "$G" "$R"
+printf '        %s╚══════════════════════════════════════════════════════════╝%s\n' "$G" "$R"
+printf '\n'
+printf '                                           %sGaiver-IT · logiciel libre AGPLv3%s\n' "$G" "$R"
 } > /etc/issue
 BANNER
     chmod 755 "${gen}"
