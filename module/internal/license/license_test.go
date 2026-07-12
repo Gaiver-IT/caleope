@@ -9,6 +9,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,6 +149,63 @@ func TestManagerRejectsInvalidStoredToken(t *testing.T) {
 	}
 	if m.IsActivated() {
 		t.Error("IsActivated=true avec un token non signé par la clé de prod")
+	}
+}
+
+// ─────────────────────────────────────────────
+// Activate : réseau (mock httptest) + erreur actionnable
+// ─────────────────────────────────────────────
+
+// realServerToken = token pro réel émis par caleope-pay (même fixture que
+// TestVerifiesRealServerToken), réutilisé pour simuler la réponse du serveur.
+const realServerToken = "eyJlZGl0aW9uIjoicHJvIiwibWFjaGluZV9oYXNoIjoiamxMV21BRHBsSHloSWRIM2IxTzVGalhlMk9yb1kyS1ZTUXNBTWQweXdmOCIsImxpY2Vuc2Vfa2V5IjoiQ0FMUC1aVEFNLUdXRTQtQkhaOCIsImlzc3VlZF9hdCI6MTc4Mjg0Nzk3MywidmFsaWRfdW50aWwiOiJsaWZldGltZSJ9.6budkWEJxOkcpoCZNk1OozBLO3786g7VwKal1BcwlgVXl7khs7fVW29bnq6mvcIeDGprQRkCa9e92bj-S0EuAg"
+
+// Activation réussie : le serveur renvoie un token valide → il est vérifié puis
+// stocké, et le Manager passe activé.
+func TestActivateStoresValidServerToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/activate" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"token":%q,"edition":"pro"}`, realServerToken)
+	}))
+	defer srv.Close()
+	t.Setenv("CALEOPE_LICENSE_SERVER", srv.URL)
+
+	m := NewManager(t.TempDir())
+	if err := m.Activate("CALP-ZTAM-GWE4-BHZ8"); err != nil {
+		t.Fatalf("Activate a échoué sur un serveur joignable: %v", err)
+	}
+	if !m.IsActivated() {
+		t.Fatal("IsActivated=false après une activation réussie")
+	}
+	if e := m.Edition(); e != "pro" {
+		t.Fatalf("Edition=%q après activation, attendu \"pro\"", e)
+	}
+}
+
+// Serveur injoignable : l'erreur doit être ACTIONNABLE (mentionne « injoignable »
+// et l'override CALEOPE_LICENSE_SERVER), pas un « no route to host » brut. C'est
+// le cœur du fix v0.7.7.
+func TestActivateUnreachableGivesActionableError(t *testing.T) {
+	t.Setenv("CALEOPE_LICENSE_SERVER", "http://127.0.0.1:1") // port fermé → refus immédiat
+	m := NewManager(t.TempDir())
+
+	err := m.Activate("CALP-ZTAM-GWE4-BHZ8")
+	if err == nil {
+		t.Fatal("Activate aurait dû échouer avec un serveur injoignable")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "injoignable") {
+		t.Errorf("message d'erreur sans « injoignable »: %q", msg)
+	}
+	if !strings.Contains(msg, "CALEOPE_LICENSE_SERVER") {
+		t.Errorf("message d'erreur ne guide pas vers CALEOPE_LICENSE_SERVER: %q", msg)
+	}
+	if m.IsActivated() {
+		t.Error("IsActivated=true après un échec d'activation")
 	}
 }
 
