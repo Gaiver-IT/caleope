@@ -469,13 +469,24 @@ func (m *Manager) mountNFS(loc types.NetworkLocation) error {
 	export := fmt.Sprintf("%s:%s", loc.Host, "/"+strings.TrimPrefix(loc.Share, "/"))
 
 	// Options de montage NFS
-	// - vers=3 : NFSv3 (compatible avec la majorité des NAS)
-	// - soft   : timeout au lieu de bloquer indéfiniment si le NAS est injoignable
-	// - rw     : lecture/écriture
+	// - vers=3       : NFSv3 (compatible avec la majorité des NAS)
+	// - rw           : lecture/écriture
+	// - soft         : timeout au lieu de bloquer indéfiniment si le NAS est injoignable
+	// - proto=tcp    : transport NFS sur TCP
+	// - mountproto=tcp : requête MOUNT vers mountd sur TCP au lieu d'UDP (défaut).
+	//   Sans ça, un NAS dont le mountd ne répond pas en UDP (pare-feu, backend
+	//   distant lent type storage box / mergerfs) fige le montage indéfiniment.
+	// - timeo=50,retrans=2 : avec soft, échoue en ~10-20s au lieu de bloquer.
+	// - retry=0      : mount.nfs abandonne tout de suite au lieu de reboucler 2 min.
 	options := []string{
 		"vers=3",
 		"rw",
 		"soft",
+		"proto=tcp",
+		"mountproto=tcp",
+		"timeo=50",
+		"retrans=2",
+		"retry=0",
 	}
 	if loc.Options != "" {
 		options = append(options, loc.Options)
