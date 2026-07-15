@@ -1986,6 +1986,124 @@ async function removeLocation(id) {
   }
 }
 
+// ── SECTION: PARTAGES (User Shares) ───────────────────────────────────────────
+let _sharesCache = [];
+
+async function loadShares() {
+  const c = document.getElementById('content-shares');
+  if (!c) return;
+  const data = await api.get('/api/v1/shares');
+  _sharesCache = Array.isArray(data?.data) ? data.data : [];
+  const header = `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <button class="btn-sm" onclick="openNetworkPasswordModal()"><i class="ti ti-key"></i>&nbsp;MON MOT DE PASSE RÉSEAU</button></div>`;
+  if (!_sharesCache.length) {
+    c.innerHTML = header + `<div class="empty-state"><div class="empty-icon"><i class="ti ti-folder-share"></i></div><div class="empty-title">AUCUN PARTAGE</div><div class="empty-sub">Crée un partage réseau (SMB) accessible par groupe Authentik.</div></div>`;
+    return;
+  }
+  c.innerHTML = header + `<div class="loc-list">${_sharesCache.map(shareRow).join('')}</div>`;
+}
+
+function shareRow(s) {
+  const acl = (s.acl || []).map(a => `${escapeHtml(a.group)}:${a.access === 'rw' ? 'RW' : 'RO'}`).join(' · ') || 'aucun groupe';
+  const smb = s.smb_enabled ? '<span class="loc-type-badge">SMB</span>' : '<span class="loc-type-badge" style="opacity:.45">OFF</span>';
+  return `<div class="loc-row">${smb}
+      <div class="loc-info"><div class="loc-name">${escapeHtml(s.name)}</div>
+        <div class="loc-meta">${s.comment ? escapeHtml(s.comment) + ' — ' : ''}${acl}</div></div>
+      <div class="backup-actions">
+        <button class="btn-sm" onclick="openEditShareModal('${escapeHtml(s.name)}')"><i class="ti ti-edit"></i>MODIFIER</button>
+        <button class="btn-sm danger" onclick="removeShare('${escapeHtml(s.name)}')"><i class="ti ti-trash"></i>SUPPRIMER</button>
+      </div></div>`;
+}
+
+function shareAclRow(group = '', access = 'rw') {
+  const id = 'acl-' + Math.random().toString(36).slice(2, 8);
+  return `<div class="acl-row" id="${id}" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+    <input class="field-input" placeholder="groupe Authentik" value="${escapeHtml(group)}" data-acl-group style="flex:1" autocomplete="off"/>
+    <select class="field-input" data-acl-access style="width:150px">
+      <option value="rw"${access === 'rw' ? ' selected' : ''}>Lecture-écriture</option>
+      <option value="ro"${access === 'ro' ? ' selected' : ''}>Lecture seule</option>
+    </select>
+    <button class="btn-sm danger" onclick="document.getElementById('${id}').remove()"><i class="ti ti-x"></i></button>
+  </div>`;
+}
+function addAclRow() { document.getElementById('share-acl-rows').insertAdjacentHTML('beforeend', shareAclRow()); }
+function collectAcl() {
+  return [...document.querySelectorAll('#share-acl-rows .acl-row')].map(r => ({
+    group: r.querySelector('[data-acl-group]').value.trim(),
+    access: r.querySelector('[data-acl-access]').value,
+  })).filter(a => a.group);
+}
+
+function openAddShareModal() {
+  document.getElementById('share-modal-title-text').textContent = 'NOUVEAU PARTAGE';
+  document.getElementById('share-edit-name').value = '';
+  const nameEl = document.getElementById('share-name');
+  nameEl.value = ''; nameEl.disabled = false;
+  document.getElementById('share-comment').value = '';
+  document.getElementById('share-path').value = '';
+  document.getElementById('share-smb').checked = true;
+  document.getElementById('share-acl-rows').innerHTML = shareAclRow();
+  document.getElementById('share-modal').classList.add('open');
+}
+function openEditShareModal(name) {
+  const s = _sharesCache.find(x => x.name === name);
+  if (!s) return;
+  document.getElementById('share-modal-title-text').textContent = 'MODIFIER LE PARTAGE';
+  document.getElementById('share-edit-name').value = s.name;
+  const nameEl = document.getElementById('share-name');
+  nameEl.value = s.name; nameEl.disabled = true;
+  document.getElementById('share-comment').value = s.comment || '';
+  document.getElementById('share-path').value = s.path || '';
+  document.getElementById('share-smb').checked = !!s.smb_enabled;
+  const acls = (s.acl && s.acl.length) ? s.acl : [{ group: '', access: 'rw' }];
+  document.getElementById('share-acl-rows').innerHTML = acls.map(a => shareAclRow(a.group, a.access)).join('');
+  document.getElementById('share-modal').classList.add('open');
+}
+
+async function saveShare() {
+  const editName = document.getElementById('share-edit-name').value;
+  const name = document.getElementById('share-name').value.trim();
+  if (!name) { notify('Nom requis', 'err'); return; }
+  const payload = {
+    name,
+    comment: document.getElementById('share-comment').value.trim(),
+    path: document.getElementById('share-path').value.trim(),
+    smb_enabled: document.getElementById('share-smb').checked,
+    acl: collectAcl(),
+  };
+  const r = editName
+    ? await api.req('PUT', `/api/v1/shares/${encodeURIComponent(editName)}`, payload)
+    : await api.post('/api/v1/shares', payload);
+  if (r && r.success !== false) {
+    document.getElementById('share-modal').classList.remove('open');
+    notify(`Partage "${name}" enregistré`, 'ok');
+    loadShares();
+  } else notify(r?.error || 'Erreur lors de l\'enregistrement du partage', 'err');
+}
+
+async function removeShare(name) {
+  if (!confirm(`Supprimer le partage "${name}" ?\n(les données sur disque sont conservées)`)) return;
+  const r = await api.del(`/api/v1/shares/${encodeURIComponent(name)}`);
+  if (r && r.success !== false) { notify('Partage supprimé', 'ok'); loadShares(); }
+  else notify(r?.error || 'Erreur lors de la suppression', 'err');
+}
+
+function openNetworkPasswordModal() {
+  ['np-username', 'np-password', 'np-groups'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('network-password-modal').classList.add('open');
+}
+async function saveNetworkPassword() {
+  const username = document.getElementById('np-username').value.trim();
+  const password = document.getElementById('np-password').value;
+  const groups = document.getElementById('np-groups').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!username || !password) { notify('Utilisateur et mot de passe requis', 'err'); return; }
+  const r = await api.post('/api/v1/network-password', { username, password, groups });
+  if (r && r.success !== false) {
+    document.getElementById('network-password-modal').classList.remove('open');
+    notify(`Mot de passe réseau défini pour ${username}`, 'ok');
+  } else notify(r?.error || 'Erreur', 'err');
+}
+
 // ── SECTION: STATS (dashboard) ────────────────────────────────────────────────
 async function loadStats() {
   const [statsResp, sysResp, ctResp] = await Promise.all([
@@ -5599,6 +5717,7 @@ const SECTIONS = {
   backups:   { label: 'SAUVEGARDES',     num: '/03', load: loadBackups,    content: 'content-backups',    btn: { icon: 'ti-device-floppy', label: 'SAUVEGARDER',   action: "triggerBackup()" } },
   secrets:   { label: 'SECRETS',         num: '/04', load: loadSecrets,    content: 'content-secrets',    btn: { icon: 'ti-lock-open',     label: 'DÉVERROUILLER', action: "unlockSecrets()" } },
   locations: { label: 'EMPLACEMENTS',    num: '/05', load: loadLocations,  content: 'content-locations',  btn: { icon: 'ti-plus',          label: 'AJOUTER',       action: "openAddLocationModal()" } },
+  shares:    { label: 'PARTAGES',        num: '/16', load: loadShares,     content: 'content-shares',     btn: { icon: 'ti-plus',          label: 'NOUVEAU PARTAGE', action: "openAddShareModal()" } },
   tasks:     { label: 'TÂCHES',           num: '/06', load: loadTasks,      content: 'content-tasks',      btn: { icon: 'ti-plus', label: 'NOUVELLE TÂCHE', action: 'openTaskModal()' } },
   events:    { label: 'ÉVÉNEMENTS',       num: '/07', load: loadEvents,     content: 'content-events',     btn: null },
   audit:     { label: 'AUDIT',           num: '/08', load: loadAudit,      content: 'content-audit',      btn: null },

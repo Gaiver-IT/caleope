@@ -212,6 +212,9 @@
           <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
             <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
           </button>
+          <button class="nav-btn" data-section="shares" onclick="goSection('shares')">
+            <i class="ti ti-folder-share" aria-hidden="true"></i>PARTAGES
+          </button>
           <button class="nav-btn" data-section="events" onclick="goSection('events');clearEventsBadge()">
             <i class="ti ti-history" aria-hidden="true"></i>ÉVÉNEMENTS
             <span id="events-badge" style="display:none;margin-left:auto;background:var(--red-b);color:#fff;
@@ -332,6 +335,7 @@
 
       <!-- LOCATIONS -->
       <div id="content-locations" class="section-content hidden"></div>
+      <div id="content-shares" class="section-content hidden"></div>
 
       <!-- EVENTS -->
       <div id="content-events" class="section-content hidden"></div>
@@ -548,6 +552,73 @@
     <div class="modal-actions">
       <button class="btn" onclick="document.getElementById('location-modal').classList.remove('open')">ANNULER</button>
       <button class="btn btn-vio" onclick="saveLocation()"><i class="ti ti-plus"></i>AJOUTER</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal PARTAGE (créer / modifier) -->
+<div class="modal-overlay" id="share-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-title">
+      <span id="share-modal-title-text">NOUVEAU PARTAGE</span>
+      <button class="modal-close" onclick="document.getElementById('share-modal').classList.remove('open')" aria-label="Fermer"><i class="ti ti-x" aria-hidden="true"></i></button>
+    </div>
+    <input type="hidden" id="share-edit-name" />
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="field full">
+        <div class="field-label">NOM DU PARTAGE *</div>
+        <input class="field-input" id="share-name" placeholder="rushs" autocomplete="off" />
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">Nom du lecteur réseau — a-z, 0-9, tiret et underscore</div>
+      </div>
+      <div class="field full">
+        <div class="field-label">COMMENTAIRE</div>
+        <input class="field-input" id="share-comment" placeholder="Rushs vidéo du montage" autocomplete="off" />
+      </div>
+      <div class="field full">
+        <div class="field-label">DOSSIER (avancé — vide = automatique)</div>
+        <input class="field-input" id="share-path" placeholder="app-data/_shares/&lt;nom&gt;" autocomplete="off" />
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);cursor:pointer">
+        <input type="checkbox" id="share-smb" checked /> Exposer en lecteur réseau (SMB)
+      </label>
+      <div class="field full">
+        <div class="field-label">ACCÈS PAR GROUPE AUTHENTIK</div>
+        <div id="share-acl-rows"></div>
+        <button class="btn-sm" onclick="addAclRow()"><i class="ti ti-plus"></i>AJOUTER UN GROUPE</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('share-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="saveShare()"><i class="ti ti-device-floppy"></i>ENREGISTRER</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal MOT DE PASSE RÉSEAU -->
+<div class="modal-overlay" id="network-password-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-title">
+      MOT DE PASSE RÉSEAU
+      <button class="modal-close" onclick="document.getElementById('network-password-modal').classList.remove('open')" aria-label="Fermer"><i class="ti ti-x" aria-hidden="true"></i></button>
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-bottom:12px">Identifiant dédié aux lecteurs réseau (SMB), distinct du mot de passe web.</div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="field full">
+        <div class="field-label">UTILISATEUR (= identifiant Authentik) *</div>
+        <input class="field-input" id="np-username" placeholder="alice" autocomplete="off" />
+      </div>
+      <div class="field full">
+        <div class="field-label">MOT DE PASSE RÉSEAU *</div>
+        <input class="field-input" id="np-password" type="password" placeholder="••••••" autocomplete="new-password" />
+      </div>
+      <div class="field full">
+        <div class="field-label">GROUPES (séparés par des virgules)</div>
+        <input class="field-input" id="np-groups" placeholder="creators, famille" autocomplete="off" />
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('network-password-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="saveNetworkPassword()"><i class="ti ti-key"></i>DÉFINIR</button>
     </div>
   </div>
 </div>
