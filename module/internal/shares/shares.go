@@ -111,7 +111,7 @@ func (m *Manager) Add(s types.Share) error {
 	if s.Path == "" {
 		s.Path = m.DefaultPath(s.Name)
 	}
-	if err := os.MkdirAll(s.Path, 0o2775); err != nil { // setgid pour ownership cohérent
+	if err := ensureShareDir(s.Path); err != nil {
 		return fmt.Errorf("création du dossier partagé: %w", err)
 	}
 	s.CreatedAt = time.Now().UTC()
@@ -137,11 +137,25 @@ func (m *Manager) Update(s types.Share) error {
 	if s.Path == "" {
 		s.Path = old.Path
 	}
+	if err := ensureShareDir(s.Path); err != nil {
+		return fmt.Errorf("dossier partagé: %w", err)
+	}
 	s.CreatedAt = old.CreatedAt
 	if err := m.writeShare(s); err != nil {
 		return err
 	}
 	return m.applyLocked()
+}
+
+// ensureShareDir crée le dossier de partage et le rend inscriptible.
+// Modèle NAS : le dossier est permissif (0777), le contrôle d'accès réel
+// est assuré par l'ACL SMB (valid users / write list) et par le
+// gestionnaire de fichiers (auth Authentik) — pas par les permissions unix.
+func ensureShareDir(path string) error {
+	if err := os.MkdirAll(path, 0o777); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o777) // MkdirAll est soumis à l'umask → on force
 }
 
 // Remove supprime un partage (les données sur disque sont CONSERVÉES).
