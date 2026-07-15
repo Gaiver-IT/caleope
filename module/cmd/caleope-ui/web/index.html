@@ -215,6 +215,9 @@
           <button class="nav-btn" data-section="shares" onclick="goSection('shares')">
             <i class="ti ti-folder-share" aria-hidden="true"></i>PARTAGES
           </button>
+          <button class="nav-btn" data-section="files" onclick="goSection('files')">
+            <i class="ti ti-files" aria-hidden="true"></i>FICHIERS
+          </button>
           <button class="nav-btn" data-section="events" onclick="goSection('events');clearEventsBadge()">
             <i class="ti ti-history" aria-hidden="true"></i>ÉVÉNEMENTS
             <span id="events-badge" style="display:none;margin-left:auto;background:var(--red-b);color:#fff;
@@ -336,6 +339,7 @@
       <!-- LOCATIONS -->
       <div id="content-locations" class="section-content hidden"></div>
       <div id="content-shares" class="section-content hidden"></div>
+      <div id="content-files" class="section-content hidden"></div>
 
       <!-- EVENTS -->
       <div id="content-events" class="section-content hidden"></div>

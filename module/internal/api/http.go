@@ -218,6 +218,13 @@ func (s *Server) StartHTTP(port int) error {
 	// POST /api/v1/network-password — poser le mot de passe réseau SMB dédié
 	mux.Handle("/api/v1/network-password", s.auth(http.HandlerFunc(s.routeNetworkPassword)))
 
+	// Gestionnaire de fichiers natif (scopé aux Partages)
+	mux.Handle("/api/v1/files", s.auth(http.HandlerFunc(s.routeFiles)))
+	mux.Handle("/api/v1/files/mkdir", s.auth(http.HandlerFunc(s.routeFilesMkdir)))
+	mux.Handle("/api/v1/files/rename", s.auth(http.HandlerFunc(s.routeFilesRename)))
+	mux.Handle("/api/v1/files/download", s.auth(http.HandlerFunc(s.routeFilesDownload)))
+	mux.Handle("/api/v1/files/upload", s.auth(http.HandlerFunc(s.routeFilesUpload)))
+
 	// GET /api/v1/tasks — liste des tâches planifiées
 	// POST /api/v1/tasks — créer une tâche
 	mux.Handle("/api/v1/tasks", s.auth(http.HandlerFunc(s.routeTasks)))

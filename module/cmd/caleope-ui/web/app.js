@@ -2104,6 +2104,113 @@ async function saveNetworkPassword() {
   } else notify(r?.error || 'Erreur', 'err');
 }
 
+// ── SECTION: FICHIERS (gestionnaire natif) ────────────────────────────────────
+let _filesCwd = '';
+
+async function loadFiles() {
+  const c = document.getElementById('content-files');
+  if (!c) return;
+  const data = await api.get('/api/v1/files?path=' + encodeURIComponent(_filesCwd));
+  const entries = Array.isArray(data?.data) ? data.data : [];
+  const toolbar = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      ${filesBreadcrumb()}<div style="flex:1"></div>
+      <button class="btn-sm" onclick="filesMkdir()"><i class="ti ti-folder-plus"></i>NOUVEAU DOSSIER</button>
+      <label class="btn-sm" style="cursor:pointer"><i class="ti ti-upload"></i>&nbsp;ENVOYER<input type="file" multiple style="display:none" onchange="filesUpload(this)"/></label>
+    </div><div id="files-progress"></div>`;
+  if (!entries.length) {
+    c.innerHTML = toolbar + `<div class="empty-state"><div class="empty-icon"><i class="ti ti-folder"></i></div><div class="empty-title">DOSSIER VIDE</div><div class="empty-sub">${_filesCwd ? 'Envoie des fichiers ou crée un dossier.' : 'Aucun partage — crée un partage dans PARTAGES.'}</div></div>`;
+    return;
+  }
+  c.innerHTML = toolbar + `<div class="loc-list">${entries.map(fileEntryRow).join('')}</div>`;
+}
+
+function filesBreadcrumb() {
+  const parts = _filesCwd ? _filesCwd.split('/').filter(Boolean) : [];
+  let acc = '';
+  let html = `<button class="btn-sm" onclick="filesNavigate('')"><i class="ti ti-home"></i></button>`;
+  for (const p of parts) {
+    acc = acc ? acc + '/' + p : p;
+    html += `<span style="color:var(--text3)">/</span><button class="btn-sm" onclick="filesNavigate('${escapeHtml(acc)}')">${escapeHtml(p)}</button>`;
+  }
+  return html;
+}
+function filesNavigate(path) { _filesCwd = path; loadFiles(); }
+
+function fileEntryRow(e) {
+  const p = _filesCwd ? _filesCwd + '/' + e.name : e.name;
+  const icon = e.is_dir ? 'ti-folder' : 'ti-file';
+  const meta = e.is_dir ? 'dossier' : humanFileSize(e.size);
+  const nameCell = e.is_dir
+    ? `<div class="loc-name" style="cursor:pointer" onclick="filesNavigate('${escapeHtml(p)}')"><i class="ti ${icon}"></i> ${escapeHtml(e.name)}</div>`
+    : `<div class="loc-name"><i class="ti ${icon}"></i> ${escapeHtml(e.name)}</div>`;
+  const dl = e.is_dir ? '' : `<button class="btn-sm" onclick="filesDownload('${escapeHtml(p)}')" title="Télécharger"><i class="ti ti-download"></i></button>`;
+  return `<div class="loc-row">
+      <div class="loc-info">${nameCell}<div class="loc-meta">${meta}</div></div>
+      <div class="backup-actions">${dl}
+        <button class="btn-sm" onclick="filesRename('${escapeHtml(p)}','${escapeHtml(e.name)}')" title="Renommer"><i class="ti ti-edit"></i></button>
+        <button class="btn-sm danger" onclick="filesDelete('${escapeHtml(p)}','${escapeHtml(e.name)}')" title="Supprimer"><i class="ti ti-trash"></i></button>
+      </div></div>`;
+}
+
+function humanFileSize(b) {
+  if (b < 1024) return b + ' o';
+  const u = ['Ko', 'Mo', 'Go', 'To']; let i = -1;
+  do { b /= 1024; i++; } while (b >= 1024 && i < u.length - 1);
+  return b.toFixed(1) + ' ' + u[i];
+}
+
+async function filesMkdir() {
+  const name = prompt('Nom du nouveau dossier :');
+  if (!name) return;
+  const r = await api.post('/api/v1/files/mkdir', { path: _filesCwd, name });
+  if (r && r.success !== false) { notify('Dossier créé', 'ok'); loadFiles(); }
+  else notify(r?.error || 'Erreur', 'err');
+}
+async function filesDelete(path, name) {
+  if (!confirm(`Supprimer "${name}" ?`)) return;
+  const r = await api.del('/api/v1/files?path=' + encodeURIComponent(path));
+  if (r && r.success !== false) { notify('Supprimé', 'ok'); loadFiles(); }
+  else notify(r?.error || 'Erreur', 'err');
+}
+async function filesRename(path, name) {
+  const nn = prompt('Nouveau nom :', name);
+  if (!nn || nn === name) return;
+  const to = _filesCwd ? _filesCwd + '/' + nn : nn;
+  const r = await api.post('/api/v1/files/rename', { from: path, to });
+  if (r && r.success !== false) { notify('Renommé', 'ok'); loadFiles(); }
+  else notify(r?.error || 'Erreur', 'err');
+}
+function filesDownload(path) { window.location = '/api/v1/files/download?path=' + encodeURIComponent(path); }
+
+// Upload repris par morceaux (resume sur interruption)
+async function filesUpload(input) {
+  const files = [...input.files];
+  input.value = '';
+  for (const file of files) await uploadOneFile(file);
+  loadFiles();
+}
+async function uploadOneFile(file) {
+  const prog = document.getElementById('files-progress');
+  const id = 'up-' + Math.random().toString(36).slice(2, 8);
+  if (prog) prog.insertAdjacentHTML('beforeend', `<div id="${id}" style="font-size:11px;color:var(--text2);margin-bottom:6px">${escapeHtml(file.name)} — <span class="pct">0%</span></div>`);
+  const setPct = p => { const el = document.querySelector('#' + id + ' .pct'); if (el) el.textContent = p + '%'; };
+  const base = '/api/v1/files/upload?path=' + encodeURIComponent(_filesCwd) + '&name=' + encodeURIComponent(file.name);
+  let offset = 0;
+  try { const st = await api.get(base); offset = (st?.data?.offset) || 0; } catch (e) {}
+  const CHUNK = 8 * 1024 * 1024;
+  while (offset < file.size) {
+    const end = Math.min(offset + CHUNK, file.size);
+    const r = await fetch(base + '&offset=' + offset, { method: 'POST', body: file.slice(offset, end) });
+    if (r.status === 409) { offset = parseInt(r.headers.get('X-Expected-Offset') || '0', 10); continue; }
+    if (!r.ok) { notify(`Échec de l'envoi de ${file.name}`, 'err'); return; }
+    const j = await r.json().catch(() => ({}));
+    offset = (j?.data?.offset) ?? end;
+    setPct(Math.floor(offset * 100 / file.size));
+  }
+  setPct(100);
+  notify(`${file.name} envoyé`, 'ok');
+}
+
 // ── SECTION: STATS (dashboard) ────────────────────────────────────────────────
 async function loadStats() {
   const [statsResp, sysResp, ctResp] = await Promise.all([
@@ -5718,6 +5825,7 @@ const SECTIONS = {
   secrets:   { label: 'SECRETS',         num: '/04', load: loadSecrets,    content: 'content-secrets',    btn: { icon: 'ti-lock-open',     label: 'DÉVERROUILLER', action: "unlockSecrets()" } },
   locations: { label: 'EMPLACEMENTS',    num: '/05', load: loadLocations,  content: 'content-locations',  btn: { icon: 'ti-plus',          label: 'AJOUTER',       action: "openAddLocationModal()" } },
   shares:    { label: 'PARTAGES',        num: '/16', load: loadShares,     content: 'content-shares',     btn: { icon: 'ti-plus',          label: 'NOUVEAU PARTAGE', action: "openAddShareModal()" } },
+  files:     { label: 'FICHIERS',        num: '/17', load: loadFiles,      content: 'content-files',      btn: null },
   tasks:     { label: 'TÂCHES',           num: '/06', load: loadTasks,      content: 'content-tasks',      btn: { icon: 'ti-plus', label: 'NOUVELLE TÂCHE', action: 'openTaskModal()' } },
   events:    { label: 'ÉVÉNEMENTS',       num: '/07', load: loadEvents,     content: 'content-events',     btn: null },
   audit:     { label: 'AUDIT',           num: '/08', load: loadAudit,      content: 'content-audit',      btn: null },
