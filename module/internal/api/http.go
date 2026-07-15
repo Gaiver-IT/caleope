@@ -210,6 +210,14 @@ func (s *Server) StartHTTP(port int) error {
 	// /api/v1/locations/{name}[/action]
 	mux.Handle("/api/v1/locations/", s.auth(http.HandlerFunc(s.routeLocation)))
 
+	// Partages (User Shares)
+	// GET /api/v1/shares — liste ; POST /api/v1/shares — créer
+	mux.Handle("/api/v1/shares", s.auth(http.HandlerFunc(s.routeShares)))
+	// PUT/DELETE /api/v1/shares/{name}
+	mux.Handle("/api/v1/shares/", s.auth(http.HandlerFunc(s.routeShare)))
+	// POST /api/v1/network-password — poser le mot de passe réseau SMB dédié
+	mux.Handle("/api/v1/network-password", s.auth(http.HandlerFunc(s.routeNetworkPassword)))
+
 	// GET /api/v1/tasks — liste des tâches planifiées
 	// POST /api/v1/tasks — créer une tâche
 	mux.Handle("/api/v1/tasks", s.auth(http.HandlerFunc(s.routeTasks)))

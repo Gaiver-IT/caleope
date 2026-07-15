@@ -19,20 +19,20 @@ import "time"
 // Les tags `json:"..."` indiquent comment le champ s'appelle dans le JSON.
 // Ex: "id" dans le JSON → champ Id dans Go.
 type AppManifest struct {
-	ID            string          `json:"id"`
-	Name          string          `json:"name"`
-	Category      string          `json:"category"`
-	Channel       string          `json:"channel"`        // stable, latest, nightly
-	Repository    string          `json:"repository"`     // official, community, untrusted
-	Capabilities  AppCapabilities `json:"capabilities"`
-	Network       AppNetwork      `json:"network"`
-	Ports         []AppPort       `json:"ports"`
-	Volumes       []AppVolume     `json:"volumes"`
-	Backup        AppBackup       `json:"backup"`
-	UseBaseDomain bool            `json:"use_base_domain"`            // true = domaine racine (pas appID.domain)
-	SecureHeaders bool            `json:"secure_headers,omitempty"`   // Traefik secure headers opt-in
-	AuthMiddleware bool           `json:"auth_middleware,omitempty"`  // Authentik forward auth opt-in
-	NoContainer   bool            `json:"no_container,omitempty"`     // true = outil système, pas de container Docker
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Category       string          `json:"category"`
+	Channel        string          `json:"channel"`    // stable, latest, nightly
+	Repository     string          `json:"repository"` // official, community, untrusted
+	Capabilities   AppCapabilities `json:"capabilities"`
+	Network        AppNetwork      `json:"network"`
+	Ports          []AppPort       `json:"ports"`
+	Volumes        []AppVolume     `json:"volumes"`
+	Backup         AppBackup       `json:"backup"`
+	UseBaseDomain  bool            `json:"use_base_domain"`           // true = domaine racine (pas appID.domain)
+	SecureHeaders  bool            `json:"secure_headers,omitempty"`  // Traefik secure headers opt-in
+	AuthMiddleware bool            `json:"auth_middleware,omitempty"` // Authentik forward auth opt-in
+	NoContainer    bool            `json:"no_container,omitempty"`    // true = outil système, pas de container Docker
 }
 
 type AppCapabilities struct {
@@ -49,9 +49,9 @@ type AppNetwork struct {
 
 type AppPort struct {
 	Name      string `json:"name"`
-	Container int    `json:"container"`           // port dans le container
-	Host      int    `json:"host"`                // port alloué dynamiquement sur l'hôte
-	Dynamic   bool   `json:"dynamic"`             // true = Caleope choisit le port hôte
+	Container int    `json:"container"`          // port dans le container
+	Host      int    `json:"host"`               // port alloué dynamiquement sur l'hôte
+	Dynamic   bool   `json:"dynamic"`            // true = Caleope choisit le port hôte
 	Protocol  string `json:"protocol,omitempty"` // "tcp", "udp", "any" — pour UFW
 	Firewall  bool   `json:"firewall,omitempty"` // true = ouvrir dans UFW
 }
@@ -146,19 +146,19 @@ const (
 // RuntimeApp est ce qu'on stocke dans runtime/apps/jellyfin.json
 // C'est l'état vivant de l'application sur le système.
 type RuntimeApp struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Status      AppStatus  `json:"status"`
-	InstalledAt time.Time  `json:"installed_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	Version     string     `json:"version"`
-	Channel     string     `json:"channel"`
-	Repository  string     `json:"repository"`
-	Domain          string     `json:"domain,omitempty"`            // domaine public de l'app (depuis app.env)
-	Ports           []AppPort  `json:"ports"`                      // avec les ports hôtes alloués
-	ComposeDir      string     `json:"compose_dir"`                 // chemin vers apps-installed/<id>/
-	StorageLocation string     `json:"storage_location,omitempty"` // nom de la location NAS (vide = stockage local)
-	Error           string     `json:"error,omitempty"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Status          AppStatus `json:"status"`
+	InstalledAt     time.Time `json:"installed_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	Version         string    `json:"version"`
+	Channel         string    `json:"channel"`
+	Repository      string    `json:"repository"`
+	Domain          string    `json:"domain,omitempty"`           // domaine public de l'app (depuis app.env)
+	Ports           []AppPort `json:"ports"`                      // avec les ports hôtes alloués
+	ComposeDir      string    `json:"compose_dir"`                // chemin vers apps-installed/<id>/
+	StorageLocation string    `json:"storage_location,omitempty"` // nom de la location NAS (vide = stockage local)
+	Error           string    `json:"error,omitempty"`
 }
 
 // ─────────────────────────────────────────────
@@ -170,7 +170,7 @@ type RuntimeApp struct {
 // C'est idéal pour les logs car on n'a jamais besoin de réécrire le fichier.
 type Event struct {
 	Timestamp time.Time         `json:"timestamp"`
-	Type      string            `json:"event"`   // install, update, remove, error...
+	Type      string            `json:"event"` // install, update, remove, error...
 	App       string            `json:"app,omitempty"`
 	Meta      map[string]string `json:"meta,omitempty"` // données additionnelles libres
 }
@@ -185,7 +185,7 @@ type NetworkLocationType string
 
 const (
 	LocationSMB   NetworkLocationType = "smb"
-	LocationCIFS  NetworkLocationType = "cifs"  // alias smb
+	LocationCIFS  NetworkLocationType = "cifs" // alias smb
 	LocationNFS   NetworkLocationType = "nfs"
 	LocationSFTP  NetworkLocationType = "sftp"
 	LocationLocal NetworkLocationType = "local" // disque local (interne ou externe)
@@ -195,13 +195,59 @@ const (
 type NetworkLocation struct {
 	Name       string              `json:"name"`
 	Type       NetworkLocationType `json:"type"`
-	Host       string              `json:"host"`        // hostname ou IP
-	Share      string              `json:"share"`       // chemin du partage (SMB: //host/share, SFTP: /path)
+	Host       string              `json:"host"`  // hostname ou IP
+	Share      string              `json:"share"` // chemin du partage (SMB: //host/share, SFTP: /path)
 	Username   string              `json:"username"`
 	MountPoint string              `json:"mount_point"` // /opt/gaiver-it/caleope/mounts/<name>
 	Mounted    bool                `json:"mounted"`
 	AddedAt    time.Time           `json:"added_at"`
 	Options    string              `json:"options,omitempty"` // options de montage supplémentaires
+}
+
+// ─────────────────────────────────────────────
+// PARTAGES — User Shares (à la Unraid)
+// ─────────────────────────────────────────────
+//
+// Un Partage = un dossier + une politique d'accès (groupes Authentik) +
+// les protocoles exposés dessus. SMB (lecteur réseau) et gestionnaire de
+// fichiers web sont deux façades du même Partage.
+//
+// Identité : Authentik = source de vérité. SMB ne parle pas OIDC/LDAP-NTLM,
+// donc Samba garde une base locale que le daemon PROVISIONNE depuis Authentik
+// (même username, groupes → ACL). Le mot de passe réseau est un identifiant
+// dédié, distinct du mot de passe web (posé par l'utilisateur dans l'UI).
+
+// ShareAccess définit le droit d'un groupe sur un partage.
+type ShareAccess string
+
+const (
+	AccessRead  ShareAccess = "ro" // lecture seule
+	AccessWrite ShareAccess = "rw" // lecture-écriture
+)
+
+// ShareGroupACL lie un groupe Authentik à un droit sur le partage.
+type ShareGroupACL struct {
+	Group  string      `json:"group"`  // nom du groupe Authentik
+	Access ShareAccess `json:"access"` // ro | rw
+}
+
+// Share représente un « User Share » : un dossier partagé, sa politique
+// d'accès par groupe Authentik, et les protocoles activés.
+type Share struct {
+	Name       string          `json:"name"`              // nom du partage (= nom du lecteur réseau)
+	Path       string          `json:"path"`              // dossier sur disque (sous app-data/_shares/<name> par défaut)
+	Comment    string          `json:"comment,omitempty"` // description affichée dans l'explorateur réseau
+	ACL        []ShareGroupACL `json:"acl"`               // groupes Authentik → droits
+	SMBEnabled bool            `json:"smb_enabled"`       // exposer en lecteur réseau (SMB)
+	CreatedAt  time.Time       `json:"created_at"`
+}
+
+// ShareUser = un utilisateur réseau provisionné dans Samba depuis Authentik.
+// Le mot de passe n'est jamais stocké ici (posé via smbpasswd dans le conteneur).
+type ShareUser struct {
+	Username       string   `json:"username"`         // = username Authentik
+	Groups         []string `json:"groups"`           // groupes Authentik mirrorés
+	HasSMBPassword bool     `json:"has_smb_password"` // true une fois le mdp réseau défini
 }
 
 // ─────────────────────────────────────────────
@@ -271,22 +317,22 @@ const (
 
 // Task représente une tâche planifiée persistée dans core/tasks.json
 type Task struct {
-	ID          string      `json:"id"`           // slug unique (ex: "backup-jellyfin-nuit")
-	Type        TaskType    `json:"type"`
-	App         string      `json:"app,omitempty"`   // pour type=backup ; vide = toutes les apps
-	Scope       BackupScope `json:"scope,omitempty"` // pour type=backup
-	Schedule    Schedule    `json:"schedule"`
-	Enabled     bool        `json:"enabled"`
-	LastRun     time.Time   `json:"last_run,omitempty"`
-	LastStatus  string      `json:"last_status,omitempty"` // "ok", "error: ..."
-	CreatedAt   time.Time   `json:"created_at"`
+	ID         string      `json:"id"` // slug unique (ex: "backup-jellyfin-nuit")
+	Type       TaskType    `json:"type"`
+	App        string      `json:"app,omitempty"`   // pour type=backup ; vide = toutes les apps
+	Scope      BackupScope `json:"scope,omitempty"` // pour type=backup
+	Schedule   Schedule    `json:"schedule"`
+	Enabled    bool        `json:"enabled"`
+	LastRun    time.Time   `json:"last_run,omitempty"`
+	LastStatus string      `json:"last_status,omitempty"` // "ok", "error: ..."
+	CreatedAt  time.Time   `json:"created_at"`
 }
 
 // Schedule définit quand une tâche s'exécute.
 // Hour et Minute en heure locale. Days = jours de la semaine (0=dim, 1=lun, …, 6=sam).
 // Si Days est vide, la tâche tourne tous les jours.
 type Schedule struct {
-	Hour   int   `json:"hour"`             // 0–23
-	Minute int   `json:"minute"`           // 0–59
-	Days   []int `json:"days,omitempty"`   // 0=dim … 6=sam ; vide = tous les jours
+	Hour   int   `json:"hour"`           // 0–23
+	Minute int   `json:"minute"`         // 0–59
+	Days   []int `json:"days,omitempty"` // 0=dim … 6=sam ; vide = tous les jours
 }

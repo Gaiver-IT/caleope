@@ -38,6 +38,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/runtime"
 	"github.com/gaiver-it/caleope/internal/scheduler"
 	"github.com/gaiver-it/caleope/internal/secrets"
+	"github.com/gaiver-it/caleope/internal/shares"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
@@ -57,6 +58,7 @@ type Server struct {
 	col        *metrics.Collector
 	emitter    *events.Emitter
 	net        *network.Manager
+	sh         *shares.Manager
 	sched      *scheduler.Scheduler
 	baseDir    string
 	token      string
@@ -73,6 +75,7 @@ func NewServer(
 	col *metrics.Collector,
 	emitter *events.Emitter,
 	net *network.Manager,
+	sh *shares.Manager,
 	baseDir string,
 	lic *license.Manager,
 ) *Server {
@@ -86,6 +89,7 @@ func NewServer(
 		col:        col,
 		emitter:    emitter,
 		net:        net,
+		sh:         sh,
 		baseDir:    baseDir,
 		token:      loadOrCreateToken(baseDir),
 		lic:        lic,
@@ -244,6 +248,18 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleLocationUnmount(req.Args)
 	case "location-storage":
 		data, err = s.handleLocationStorage(req.Args)
+	case "shares-list":
+		data, err = s.handleSharesList()
+	case "shares-add":
+		data, err = s.handleSharesUpsert(req.Args, false)
+	case "shares-update":
+		data, err = s.handleSharesUpsert(req.Args, true)
+	case "shares-remove":
+		err = s.handleSharesRemove(req.Args)
+	case "shares-ensure-user":
+		err = s.handleSharesEnsureUser(req.Args)
+	case "shares-set-password":
+		err = s.handleSharesSetPassword(req.Args)
 	case "task-list":
 		data, err = s.handleTaskList()
 	case "task-add":
@@ -1094,11 +1110,11 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// Si --check seulement, ne pas télécharger
 	if args["check"] == "true" {
 		return map[string]string{
-			"status":   "update_available",
-			"current":  current,
-			"latest":   latest,
-			"url":      release.HTMLURL,
-			"message":  fmt.Sprintf("Mise à jour disponible : %s → %s", current, latest),
+			"status":  "update_available",
+			"current": current,
+			"latest":  latest,
+			"url":     release.HTMLURL,
+			"message": fmt.Sprintf("Mise à jour disponible : %s → %s", current, latest),
 		}, nil
 	}
 
@@ -1235,9 +1251,9 @@ func (s *Server) handleSecretsList() (interface{}, error) {
 		}
 		if count > 0 {
 			result = append(result, appSecretInfo{
-				AppID:    app.ID,
-				AppName:  app.Name,
-				KeyCount: count,
+				AppID:     app.ID,
+				AppName:   app.Name,
+				KeyCount:  count,
 				Encrypted: enc,
 			})
 		}
@@ -1676,21 +1692,21 @@ func (s *Server) handleSystemInfo() (map[string]interface{}, error) {
 	}
 
 	return map[string]interface{}{
-		"hostname":        hostname,
-		"uptime_seconds":  uptimeSec,
-		"uptime":          fmt.Sprintf("%dd %dh %dm", days, hours, mins),
-		"os":              osName,
-		"cpu_count":       cpuCount,
-		"kernel":          kernel,
-		"mem_total":       memTotal,
-		"mem_available":   memAvailable,
-		"mem_used":        memTotal - memAvailable,
-		"disk_total":      diskTotal,
-		"disk_free":       diskFree,
-		"disk_used":       diskTotal - diskFree,
-		"load_avg_1":      load1,
-		"load_avg_5":      load5,
-		"load_avg_15":     load15,
+		"hostname":       hostname,
+		"uptime_seconds": uptimeSec,
+		"uptime":         fmt.Sprintf("%dd %dh %dm", days, hours, mins),
+		"os":             osName,
+		"cpu_count":      cpuCount,
+		"kernel":         kernel,
+		"mem_total":      memTotal,
+		"mem_available":  memAvailable,
+		"mem_used":       memTotal - memAvailable,
+		"disk_total":     diskTotal,
+		"disk_free":      diskFree,
+		"disk_used":      diskTotal - diskFree,
+		"load_avg_1":     load1,
+		"load_avg_5":     load5,
+		"load_avg_15":    load15,
 	}, nil
 }
 
