@@ -40,6 +40,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/shares"
 	"github.com/gaiver-it/caleope/internal/store"
+	"github.com/gaiver-it/caleope/internal/vms"
 )
 
 func main() {
@@ -108,6 +109,7 @@ func main() {
 	col := metrics.NewCollector(rt, *baseDir)
 	net := network.NewManager(*baseDir)
 	sh := shares.NewManager(*baseDir)
+	vmMgr := vms.NewManager(*baseDir)
 
 	// Endpoint Prometheus sur :9100/metrics (pour Grafana)
 	go func() {
@@ -125,7 +127,7 @@ func main() {
 		_ = http.ListenAndServe(":9100", mux)
 	}()
 
-	server := api.NewServer(*socketPath, rt, st, installer, bkp, dc, col, em, net, sh, *baseDir, licMgr)
+	server := api.NewServer(*socketPath, rt, st, installer, bkp, dc, col, em, net, sh, vmMgr, *baseDir, licMgr)
 
 	// Garantir que caleope-ui.service et sa config Traefik sont à jour au démarrage.
 	// Indispensable après un upgrade : c'est le nouvel exécutable qui reécrit la config,

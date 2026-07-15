@@ -218,6 +218,9 @@
           <button class="nav-btn" data-section="files" onclick="goSection('files')">
             <i class="ti ti-files" aria-hidden="true"></i>FICHIERS
           </button>
+          <button class="nav-btn" data-section="vms" onclick="goSection('vms')">
+            <i class="ti ti-device-desktop" aria-hidden="true"></i>MACHINES VIRT.
+          </button>
           <button class="nav-btn" data-section="events" onclick="goSection('events');clearEventsBadge()">
             <i class="ti ti-history" aria-hidden="true"></i>ÉVÉNEMENTS
             <span id="events-badge" style="display:none;margin-left:auto;background:var(--red-b);color:#fff;
@@ -340,6 +343,7 @@
       <div id="content-locations" class="section-content hidden"></div>
       <div id="content-shares" class="section-content hidden"></div>
       <div id="content-files" class="section-content hidden"></div>
+      <div id="content-vms" class="section-content hidden"></div>
 
       <!-- EVENTS -->
       <div id="content-events" class="section-content hidden"></div>
@@ -623,6 +627,43 @@
     <div class="modal-actions">
       <button class="btn" onclick="document.getElementById('network-password-modal').classList.remove('open')">ANNULER</button>
       <button class="btn btn-vio" onclick="saveNetworkPassword()"><i class="ti ti-key"></i>DÉFINIR</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal CRÉER UNE VM -->
+<div class="modal-overlay" id="vm-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-title">
+      NOUVELLE MACHINE VIRTUELLE
+      <button class="modal-close" onclick="document.getElementById('vm-modal').classList.remove('open')" aria-label="Fermer"><i class="ti ti-x" aria-hidden="true"></i></button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="field full">
+        <div class="field-label">NOM *</div>
+        <input class="field-input" id="vm-name" placeholder="windows11" autocomplete="off" />
+      </div>
+      <div class="fields" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="field"><div class="field-label">vCPU</div><input class="field-input" id="vm-vcpus" type="number" value="2" min="1" /></div>
+        <div class="field"><div class="field-label">RAM (Mo)</div><input class="field-input" id="vm-mem" type="number" value="2048" min="512" step="512" /></div>
+        <div class="field"><div class="field-label">DISQUE (Go)</div><input class="field-input" id="vm-disk" type="number" value="20" min="5" /></div>
+      </div>
+      <div class="field full">
+        <div class="field-label">IMAGE ISO (chemin) *</div>
+        <input class="field-input" id="vm-iso" placeholder="app-data/_shares/rushs/debian.iso" autocomplete="off" />
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">Dépose ton ISO dans un Partage puis colle son chemin complet ici</div>
+      </div>
+      <div class="field full">
+        <div class="field-label">RÉSEAU</div>
+        <select class="field-input" id="vm-net">
+          <option value="nat">NAT (simple, accès internet)</option>
+          <option value="bridge">Pont LAN (IP du réseau — avancé)</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('vm-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn btn-vio" onclick="saveVM()"><i class="ti ti-plus"></i>CRÉER</button>
     </div>
   </div>
 </div>

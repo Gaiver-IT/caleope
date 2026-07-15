@@ -40,6 +40,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/shares"
 	"github.com/gaiver-it/caleope/internal/store"
+	"github.com/gaiver-it/caleope/internal/vms"
 	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
 )
@@ -59,6 +60,7 @@ type Server struct {
 	emitter    *events.Emitter
 	net        *network.Manager
 	sh         *shares.Manager
+	vm         *vms.Manager
 	sched      *scheduler.Scheduler
 	baseDir    string
 	token      string
@@ -76,6 +78,7 @@ func NewServer(
 	emitter *events.Emitter,
 	net *network.Manager,
 	sh *shares.Manager,
+	vm *vms.Manager,
 	baseDir string,
 	lic *license.Manager,
 ) *Server {
@@ -90,6 +93,7 @@ func NewServer(
 		emitter:    emitter,
 		net:        net,
 		sh:         sh,
+		vm:         vm,
 		baseDir:    baseDir,
 		token:      loadOrCreateToken(baseDir),
 		lic:        lic,
@@ -260,6 +264,18 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleSharesEnsureUser(req.Args)
 	case "shares-set-password":
 		err = s.handleSharesSetPassword(req.Args)
+	case "vms-list":
+		data, err = s.handleVMsList()
+	case "vm-create":
+		err = s.handleVMCreate(req.Args)
+	case "vm-start":
+		err = s.handleVMAction(req.Args, "start")
+	case "vm-stop":
+		err = s.handleVMAction(req.Args, "stop")
+	case "vm-force-stop":
+		err = s.handleVMAction(req.Args, "force-stop")
+	case "vm-delete":
+		err = s.handleVMAction(req.Args, "delete")
 	case "task-list":
 		data, err = s.handleTaskList()
 	case "task-add":

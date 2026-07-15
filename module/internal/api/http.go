@@ -225,6 +225,10 @@ func (s *Server) StartHTTP(port int) error {
 	mux.Handle("/api/v1/files/download", s.auth(http.HandlerFunc(s.routeFilesDownload)))
 	mux.Handle("/api/v1/files/upload", s.auth(http.HandlerFunc(s.routeFilesUpload)))
 
+	// Machines virtuelles (KVM, Pro)
+	mux.Handle("/api/v1/vms", s.auth(http.HandlerFunc(s.routeVMs)))
+	mux.Handle("/api/v1/vms/", s.auth(http.HandlerFunc(s.routeVM)))
+
 	// GET /api/v1/tasks — liste des tâches planifiées
 	// POST /api/v1/tasks — créer une tâche
 	mux.Handle("/api/v1/tasks", s.auth(http.HandlerFunc(s.routeTasks)))

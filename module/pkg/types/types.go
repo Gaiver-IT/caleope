@@ -251,6 +251,45 @@ type ShareUser struct {
 }
 
 // ─────────────────────────────────────────────
+// VMs — machines virtuelles KVM (à la Unraid, Pro-only)
+// ─────────────────────────────────────────────
+
+// VMState = état d'une machine virtuelle.
+type VMState string
+
+const (
+	VMRunning VMState = "running"
+	VMStopped VMState = "stopped"
+	VMPaused  VMState = "paused"
+)
+
+// VM représente une machine virtuelle gérée par libvirt.
+type VM struct {
+	Name    string  `json:"name"`
+	State   VMState `json:"state"`
+	VCPUs   int     `json:"vcpus"`
+	MemMB   int     `json:"mem_mb"`
+	VNCPort int     `json:"vnc_port,omitempty"`
+}
+
+// VMSpec = paramètres de création d'une VM.
+type VMSpec struct {
+	Name    string `json:"name"`
+	VCPUs   int    `json:"vcpus"`
+	MemMB   int    `json:"mem_mb"`
+	DiskGB  int    `json:"disk_gb"`
+	ISO     string `json:"iso"`     // chemin de l'image ISO (ex: dans un Partage)
+	Network string `json:"network"` // "bridge" (IP du LAN) | "nat"
+}
+
+// VMCapability décrit si l'hôte peut faire tourner des VMs.
+type VMCapability struct {
+	Available  bool   `json:"available"`   // prêt à l'emploi
+	NeedsSetup bool   `json:"needs_setup"` // KVM ok mais libvirt à installer
+	Reason     string `json:"reason"`      // explication si indisponible / à configurer
+}
+
+// ─────────────────────────────────────────────
 // API — messages échangés sur le socket UNIX
 // ─────────────────────────────────────────────
 

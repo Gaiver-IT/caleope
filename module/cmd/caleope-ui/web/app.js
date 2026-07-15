@@ -2211,6 +2211,82 @@ async function uploadOneFile(file) {
   notify(`${file.name} envoyé`, 'ok');
 }
 
+// ── SECTION: VMs (machines virtuelles KVM, Pro) ───────────────────────────────
+async function loadVMs() {
+  const c = document.getElementById('content-vms');
+  if (!c) return;
+  const data = await api.get('/api/v1/vms');
+  const cap = data?.data?.capability || {};
+  const vms = Array.isArray(data?.data?.vms) ? data.data.vms : [];
+  let banner = '';
+  if (!cap.available) {
+    banner = `<div class="loc-row" style="margin-bottom:12px">
+      <div class="loc-info"><div class="loc-name"><i class="ti ti-alert-triangle"></i> VMs ${cap.needs_setup ? 'à configurer' : 'indisponibles'}</div>
+      <div class="loc-meta">${escapeHtml(cap.reason || '')}</div></div></div>`;
+  }
+  const toolbar = `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <button class="btn-sm" onclick="openCreateVMModal()" ${cap.available ? '' : 'disabled'}><i class="ti ti-plus"></i>&nbsp;NOUVELLE VM</button></div>`;
+  if (!vms.length) {
+    c.innerHTML = banner + toolbar + `<div class="empty-state"><div class="empty-icon"><i class="ti ti-device-desktop"></i></div><div class="empty-title">AUCUNE VM</div><div class="empty-sub">Crée une machine virtuelle (Windows, Linux, labo…).</div></div>`;
+    return;
+  }
+  c.innerHTML = banner + toolbar + `<div class="loc-list">${vms.map(vmRow).join('')}</div>`;
+}
+
+function vmRow(v) {
+  const running = v.state === 'running';
+  const badge = `<span class="loc-type-badge" style="opacity:${running ? 1 : 0.5}">${running ? 'ACTIVE' : (v.state || 'arrêtée').toUpperCase()}</span>`;
+  const action = running
+    ? `<button class="btn-sm" onclick="vmAction('${escapeHtml(v.name)}','stop')"><i class="ti ti-player-stop"></i>ARRÊTER</button>`
+    : `<button class="btn-sm" onclick="vmAction('${escapeHtml(v.name)}','start')"><i class="ti ti-player-play"></i>DÉMARRER</button>`;
+  const vnc = (running && v.vnc_port) ? ` · console VNC :${v.vnc_port}` : '';
+  return `<div class="loc-row">${badge}
+    <div class="loc-info"><div class="loc-name">${escapeHtml(v.name)}</div>
+      <div class="loc-meta">${v.vcpus || '?'} vCPU · ${v.mem_mb || '?'} Mo${vnc}</div></div>
+    <div class="backup-actions">${action}
+      <button class="btn-sm danger" onclick="vmDelete('${escapeHtml(v.name)}')"><i class="ti ti-trash"></i></button>
+    </div></div>`;
+}
+
+async function vmAction(name, action) {
+  const r = await api.post(`/api/v1/vms/${encodeURIComponent(name)}/${action}`);
+  if (r && r.success !== false) { notify(`VM ${action === 'start' ? 'démarrée' : 'arrêtée'}`, 'ok'); setTimeout(loadVMs, 800); }
+  else notify(r?.error || 'Erreur', 'err');
+}
+async function vmDelete(name) {
+  if (!confirm(`Supprimer la VM "${name}" et son disque ? (irréversible)`)) return;
+  const r = await api.del(`/api/v1/vms/${encodeURIComponent(name)}`);
+  if (r && r.success !== false) { notify('VM supprimée', 'ok'); loadVMs(); }
+  else notify(r?.error || 'Erreur', 'err');
+}
+function openCreateVMModal() {
+  document.getElementById('vm-name').value = '';
+  document.getElementById('vm-iso').value = '';
+  document.getElementById('vm-vcpus').value = '2';
+  document.getElementById('vm-mem').value = '2048';
+  document.getElementById('vm-disk').value = '20';
+  document.getElementById('vm-modal').classList.add('open');
+}
+async function saveVM() {
+  const spec = {
+    name: document.getElementById('vm-name').value.trim(),
+    vcpus: parseInt(document.getElementById('vm-vcpus').value) || 2,
+    mem_mb: parseInt(document.getElementById('vm-mem').value) || 2048,
+    disk_gb: parseInt(document.getElementById('vm-disk').value) || 20,
+    iso: document.getElementById('vm-iso').value.trim(),
+    network: document.getElementById('vm-net').value,
+  };
+  if (!spec.name || !spec.iso) { notify('Nom et chemin de l\'ISO requis', 'err'); return; }
+  const btn = document.querySelector('#vm-modal .btn-vio');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>&nbsp;CRÉATION...'; }
+  const r = await api.post('/api/v1/vms', spec);
+  if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-plus"></i>CRÉER'; }
+  if (r && r.success !== false) {
+    document.getElementById('vm-modal').classList.remove('open');
+    notify(`VM "${spec.name}" créée`, 'ok'); loadVMs();
+  } else notify(r?.error || 'Erreur lors de la création', 'err');
+}
+
 // ── SECTION: STATS (dashboard) ────────────────────────────────────────────────
 async function loadStats() {
   const [statsResp, sysResp, ctResp] = await Promise.all([
@@ -5826,6 +5902,7 @@ const SECTIONS = {
   locations: { label: 'EMPLACEMENTS',    num: '/05', load: loadLocations,  content: 'content-locations',  btn: { icon: 'ti-plus',          label: 'AJOUTER',       action: "openAddLocationModal()" } },
   shares:    { label: 'PARTAGES',        num: '/16', load: loadShares,     content: 'content-shares',     btn: { icon: 'ti-plus',          label: 'NOUVEAU PARTAGE', action: "openAddShareModal()" } },
   files:     { label: 'FICHIERS',        num: '/17', load: loadFiles,      content: 'content-files',      btn: null },
+  vms:       { label: 'MACHINES VIRT.',  num: '/18', load: loadVMs,        content: 'content-vms',        btn: { icon: 'ti-plus', label: 'NOUVELLE VM', action: "openCreateVMModal()" } },
   tasks:     { label: 'TÂCHES',           num: '/06', load: loadTasks,      content: 'content-tasks',      btn: { icon: 'ti-plus', label: 'NOUVELLE TÂCHE', action: 'openTaskModal()' } },
   events:    { label: 'ÉVÉNEMENTS',       num: '/07', load: loadEvents,     content: 'content-events',     btn: null },
   audit:     { label: 'AUDIT',           num: '/08', load: loadAudit,      content: 'content-audit',      btn: null },
