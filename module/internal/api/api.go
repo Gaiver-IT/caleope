@@ -203,7 +203,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	case "license.status":
 		data, err = s.handleLicenseStatus()
 	case "install":
-		if !s.lic.IsActivated() {
+		// Les composants core (crowdsec, authentik) font partie de
+		// l'infrastructure Caleope et se déploient sans licence — comme
+		// ensureCoreApps qui passe par l'installateur interne. Seules les
+		// apps du catalogue sont soumises à la licence.
+		if !s.lic.IsActivated() && !isCoreApp(req.Args["app"]) {
 			err = fmt.Errorf("licence non activée — activez d'abord avec : caleope license activate <clé>")
 			break
 		}
@@ -234,6 +238,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleRestore(req.Args)
 	case "backup-list":
 		data, err = s.handleBackupList(req.Args)
+	case "export":
+		data, err = s.handleExport(req.Args)
+	case "import":
+		err = s.handleImport(req.Args)
 	case "update":
 		err = s.handleUpdate(req.Args)
 	case "upgrade":
@@ -385,6 +393,14 @@ func (s *Server) handleInstall(args map[string]string) (interface{}, error) {
 	if storageLocation := args["storage"]; storageLocation != "" {
 		opts.StorageLocation = storageLocation
 		opts.StorageDataDir = s.net.AppDataDir(storageLocation, appID)
+	}
+
+	// Synchroniser le store sur la branche du canal demandé AVANT de résoudre l'app.
+	// Sans ça, un `install <app> --alpha` depuis un serveur en canal stable ne trouve
+	// jamais les apps alpha : le cache est resté sur la branche main. Best-effort —
+	// si le fetch échoue, on continue (Resolve renverra "introuvable" si nécessaire).
+	if err := s.handleUpdate(map[string]string{"channel": opts.Channel}); err != nil {
+		fmt.Printf("⚠️  Sync store (canal %s) avant install: %v\n", opts.Channel, err)
 	}
 
 	if err := s.installer.Install(opts); err != nil {
@@ -562,6 +578,9 @@ func (s *Server) handleStart(args map[string]string) error {
 	if err := s.dc.Start(app.ComposeDir); err != nil {
 		return err
 	}
+	// Ré-appliquer la priorité ressources : oom_score_adj est posé sur /proc/<pid> et
+	// perdu à chaque (re)démarrage de container → on le repose après le start.
+	s.dc.ApplyPriorities(appID, app.Priority)
 	app.Status = types.StatusRunning
 	_ = s.emitter.AppStarted(appID)
 	return s.rt.SaveApp(app)
@@ -593,6 +612,8 @@ func (s *Server) handleRestart(args map[string]string) error {
 	if err := s.dc.Up(app.ComposeDir); err != nil {
 		return err
 	}
+	// Ré-appliquer la priorité ressources (oom_score_adj perdu à la recréation du container).
+	s.dc.ApplyPriorities(appID, app.Priority)
 	app.Status = types.StatusRunning
 	_ = s.emitter.AppStarted(appID)
 	return s.rt.SaveApp(app)
@@ -674,6 +695,37 @@ func (s *Server) handleRestore(args map[string]string) error {
 	return s.bkp.Restore(appID, args["backup"])
 }
 
+// handleExport crée une archive d'export auto-suffisante (données + config +
+// définition + images). withImages par défaut = true (restore hors-ligne).
+func (s *Server) handleExport(args map[string]string) (interface{}, error) {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	withImages := args["no_images"] != "true"
+	path, err := s.bkp.Export(appID, args["dest"], withImages)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"path":    path,
+		"message": fmt.Sprintf("Export de '%s' créé : %s", appID, path),
+	}, nil
+}
+
+// handleImport recrée une app depuis une archive d'export (mode legacy|migrate).
+func (s *Server) handleImport(args map[string]string) error {
+	archive := args["archive"]
+	if archive == "" {
+		return fmt.Errorf("argument 'archive' manquant")
+	}
+	mode := args["mode"]
+	if mode == "" {
+		mode = "legacy"
+	}
+	return s.bkp.Import(archive, mode)
+}
+
 func (s *Server) handleBackupList(args map[string]string) (interface{}, error) {
 	appID, ok := args["app"]
 	if !ok || appID == "" {
@@ -736,6 +788,73 @@ func (s *Server) handleUpdate(args map[string]string) error {
 		}
 	}
 	return syncErr
+}
+
+// ─────────────────────────────────────────────
+// REGISTRE MIROIR (config UI)
+// ─────────────────────────────────────────────
+
+// setConfigKeys upsert des clés dans caleope.conf (remplace la ligne existante
+// ou l'ajoute en fin de fichier).
+func (s *Server) setConfigKeys(keys map[string]string) error {
+	confPath := filepath.Join(s.baseDir, "caleope.conf")
+	data, _ := os.ReadFile(confPath)
+	lines := strings.Split(string(data), "\n")
+	seen := map[string]bool{}
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		for k, v := range keys {
+			if strings.HasPrefix(trimmed, k+"=") {
+				lines[i] = k + "=" + v
+				seen[k] = true
+			}
+		}
+	}
+	for k, v := range keys {
+		if !seen[k] {
+			lines = append(lines, k+"="+v)
+		}
+	}
+	return os.WriteFile(confPath, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+// SetRegistry écrit la config du registre dans caleope.conf et tente un docker
+// login (best-effort). Un mot de passe vide conserve celui déjà enregistré.
+func (s *Server) SetRegistry(registry, user, pass, mode string) error {
+	registry = strings.TrimSpace(registry)
+	user = strings.TrimSpace(user)
+	keys := map[string]string{
+		"CALEOPE_REGISTRY":      registry,
+		"CALEOPE_REGISTRY_USER": user,
+		"CALEOPE_REGISTRY_MODE": strings.TrimSpace(mode),
+	}
+	if pass != "" {
+		keys["CALEOPE_REGISTRY_PASS"] = pass
+	}
+	if err := s.setConfigKeys(keys); err != nil {
+		return err
+	}
+	if registry != "" && user != "" {
+		if pass == "" {
+			if cfg, _ := s.rt.GetConfig(); cfg != nil {
+				pass = cfg.RegistryPass
+			}
+		}
+		_ = exec.Command("docker", "login", registry, "-u", user, "-p", pass).Run()
+	}
+	return nil
+}
+
+// RegistryStatus retourne la config registre pour l'UI (sans exposer le mot de passe).
+func (s *Server) RegistryStatus() map[string]interface{} {
+	res := map[string]interface{}{"registry": "", "user": "", "has_pass": false}
+	if cfg, _ := s.rt.GetConfig(); cfg != nil {
+		res["registry"] = cfg.Registry
+		res["user"] = cfg.RegistryUser
+		res["has_pass"] = cfg.RegistryPass != ""
+		res["mode"] = cfg.RegistryMode
+	}
+	return res
 }
 
 // ─────────────────────────────────────────────
@@ -1794,6 +1913,22 @@ func (s *Server) EnsureSecurityHeaders() {
 	_ = os.WriteFile(filepath.Join(traefikDir, "security-headers.yml"), []byte(content), 0644)
 }
 
+// EnsureAppPriorities ré-applique la priorité ressources (cpu_shares + oom_score_adj) à
+// toutes les apps installées, au démarrage du daemon. Indispensable après un reboot hôte :
+// les containers redémarrent via la restart-policy Docker sans passer par caleope, donc
+// l'oom_score_adj posé sur /proc/<pid> est perdu et doit être reposé. Appelée pour chaque
+// app (ApplyPriorities lit aussi les labels "caleope.priority" par service) ; no-op quand
+// tout est en tier "normal".
+func (s *Server) EnsureAppPriorities() {
+	apps, err := s.rt.ListApps()
+	if err != nil {
+		return
+	}
+	for _, app := range apps {
+		s.dc.ApplyPriorities(app.ID, app.Priority)
+	}
+}
+
 // coreApps liste les composants essentiels installés automatiquement sur toute instance Caleope.
 // Chaque entrée contient l'ID de l'app et son domaine (vide = auto-dérivé depuis la config).
 var coreApps = []struct {
@@ -1802,6 +1937,17 @@ var coreApps = []struct {
 }{
 	{"crowdsec", ""},
 	{"authentik", ""},
+}
+
+// isCoreApp indique si l'app fait partie de l'infrastructure core Caleope
+// (déployable sans licence, cf. ensureCoreApps).
+func isCoreApp(id string) bool {
+	for _, app := range coreApps {
+		if app.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureCoreApps installe silencieusement les composants core manquants.

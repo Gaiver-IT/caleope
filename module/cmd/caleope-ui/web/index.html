@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CALEOPE</title>
-  <link rel="icon" href="img/logo.png" type="image/png">
+  <link rel="icon" href="/ui/logo">
   <link rel="stylesheet" href="tabler-icons.min.css">
   <link rel="stylesheet" href="xterm.css">
   <link rel="stylesheet" href="style.css">
@@ -22,7 +22,7 @@
       </div>
       <div>
         <div class="logo-name">CALEOPE</div>
-        <div class="logo-ver">CLIENT V0.5.1</div>
+        <div class="logo-ver">INTERFACE WEB</div>
       </div>
     </div>
 
@@ -161,6 +161,9 @@
           <button class="nav-btn" data-section="apps" onclick="goSection('apps')">
             <i class="ti ti-layout-grid" aria-hidden="true"></i>APPLICATIONS
           </button>
+          <button class="nav-btn" id="nav-integrations" data-section="integrations" onclick="goSection('integrations')" style="display:none">
+            <i class="ti ti-puzzle" aria-hidden="true"></i>INTÉGRATIONS
+          </button>
           <button class="nav-btn" data-section="logs" onclick="goSection('logs')">
             <i class="ti ti-terminal-2" aria-hidden="true"></i>LOGS
           </button>
@@ -195,23 +198,6 @@
           <button class="nav-btn" data-section="storage" onclick="goSection('storage')">
             <i class="ti ti-database" aria-hidden="true"></i>STOCKAGE
           </button>
-          <button class="nav-btn" data-section="journal" onclick="goSection('journal')">
-            <i class="ti ti-file-text" aria-hidden="true"></i>JOURNAL
-          </button>
-        </div>
-      </div>
-
-      <div class="sb-section">
-        <button class="sb-group-toggle" data-gid="g-sys" onclick="toggleSbGroup('g-sys')">
-          <span>// SYSTÈME</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
-        </button>
-        <div class="sb-items" id="sb-items-g-sys">
-          <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
-            <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
-          </button>
-          <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
-            <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
-          </button>
           <button class="nav-btn" data-section="shares" onclick="goSection('shares')">
             <i class="ti ti-folder-share" aria-hidden="true"></i>PARTAGES
           </button>
@@ -221,6 +207,21 @@
           <button class="nav-btn" data-section="vms" onclick="goSection('vms')">
             <i class="ti ti-device-desktop" aria-hidden="true"></i>MACHINES VIRT.
           </button>
+          <button class="nav-btn" data-section="journal" onclick="goSection('journal')">
+            <i class="ti ti-file-text" aria-hidden="true"></i>JOURNAL
+          </button>
+        </div>
+      </div>
+
+      <!-- Supervision : observer l'état du serveur -->
+      <div class="sb-section">
+        <button class="sb-group-toggle" data-gid="g-supervision" onclick="toggleSbGroup('g-supervision')">
+          <span>// SUPERVISION</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-supervision">
+          <button class="nav-btn" data-section="stats" onclick="goSection('stats')">
+            <i class="ti ti-chart-bar" aria-hidden="true"></i>RESSOURCES
+          </button>
           <button class="nav-btn" data-section="events" onclick="goSection('events');clearEventsBadge()">
             <i class="ti ti-history" aria-hidden="true"></i>ÉVÉNEMENTS
             <span id="events-badge" style="display:none;margin-left:auto;background:var(--red-b);color:#fff;
@@ -229,8 +230,20 @@
           <button class="nav-btn" data-section="audit" onclick="goSection('audit')">
             <i class="ti ti-clipboard-list" aria-hidden="true"></i>AUDIT
           </button>
-          <button class="nav-btn" data-section="stats" onclick="goSection('stats')">
-            <i class="ti ti-chart-bar" aria-hidden="true"></i>SYSTÈME
+        </div>
+      </div>
+
+      <!-- Configuration : régler le serveur -->
+      <div class="sb-section">
+        <button class="sb-group-toggle" data-gid="g-config" onclick="toggleSbGroup('g-config')">
+          <span>// CONFIGURATION</span><i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
+        </button>
+        <div class="sb-items" id="sb-items-g-config">
+          <button class="nav-btn" data-section="secrets" onclick="goSection('secrets')">
+            <i class="ti ti-lock" aria-hidden="true"></i>SECRETS
+          </button>
+          <button class="nav-btn" data-section="locations" onclick="goSection('locations')">
+            <i class="ti ti-network" aria-hidden="true"></i>EMPLACEMENTS
           </button>
           <button class="nav-btn" data-section="settings" onclick="goSection('settings')">
             <i class="ti ti-settings" aria-hidden="true"></i>PARAMÈTRES
@@ -291,6 +304,9 @@
 
       <!-- DASHBOARD -->
       <div id="content-dashboard" class="section-content hidden" role="main"></div>
+
+      <!-- INTÉGRATIONS (page dédiée : cartes par app installée) -->
+      <div id="content-integrations" class="section-content hidden"><div id="integrations-grid"></div></div>
 
       <!-- APPS -->
       <div id="content-apps" class="section-content hidden" role="main"></div>
@@ -863,8 +879,8 @@ async function updateSidebarInfo() {
   const d = resp.data ?? resp;
   const host = d.domain?.split('.')[0]?.toUpperCase() || 'CALEOPE';
   document.getElementById('chip-host').textContent = host;
-  document.getElementById('chip-ip').textContent   = d.version ? 'v' + d.version : '—';
-  document.getElementById('sb-version').textContent = d.version ? 'V' + d.version.toUpperCase() : 'V—';
+  document.getElementById('chip-ip').textContent   = d.version || '—';
+  document.getElementById('sb-version').textContent = d.version ? d.version.toUpperCase() : 'V—';
 }
 
 const _showApp = showApp;

@@ -19,6 +19,13 @@ export PATH="/usr/sbin:/sbin:/usr/bin:/bin:/usr/local/bin:${PATH}"
 LOG_MODE="classic"
 OFFLINE_MODE=false
 OFFLINE_BUNDLE_PATH=""
+# Mode ISO : install non-interactive depuis le payload embarqué sur l'ISO
+# (voir iso/build.sh + iso/preseed.cfg). La config utilisateur (domaine, proxy,
+# mots de passe) est reportée au wizard de 1er démarrage (--iso-finalize).
+ISO_MODE=false
+ISO_FINALIZE=false
+# Répertoire du script lui-même (= payload ISO quand lancé en mode --iso)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo ".")"
 
 parse_args() {
     local i=1
@@ -34,6 +41,22 @@ parse_args() {
                     echo "Erreur : --offline requiert un chemin vers le bundle" >&2
                     exit 1
                 }
+                ;;
+            # ── Mode ISO ────────────────────────────────────────────────────
+            # --iso : install de base non-interactive (preseed late_command).
+            #   Le payload (binaires + store [+ images]) est à côté de ce script.
+            #   Réutilise la machinerie offline ; la config est reportée au 1er boot.
+            --iso)
+                ISO_MODE=true
+                OFFLINE_MODE=true
+                # payload = dossier du script, sauf si --offline l'a déjà défini
+                [[ -z "${OFFLINE_BUNDLE_PATH}" ]] && OFFLINE_BUNDLE_PATH="${SCRIPT_DIR}"
+                ;;
+            # --iso-finalize : wizard interactif de 1er démarrage. Complète la
+            #   config différée (domaine/proxy/mdp), déploie Traefik + apps, puis
+            #   se désactive. Lancé par caleope-firstboot.service sur tty1.
+            --iso-finalize)
+                ISO_FINALIZE=true
                 ;;
         esac
         i=$((i + 1))
@@ -80,6 +103,11 @@ CALEOPE_SMTP_FROM="${CALEOPE_SMTP_FROM:-}"
 CALEOPE_SECRETS_PASSWORD="${CALEOPE_SECRETS_PASSWORD:-}"
 # Mot de passe interface web
 CALEOPE_UI_PASSWORD="${CALEOPE_UI_PASSWORD:-}"
+# Registre d'images miroir (optionnel) — les apps pull leurs images depuis ici
+# au lieu de Docker Hub. Injectable par l'ISO online (build.sh) via env.
+CALEOPE_REGISTRY="${CALEOPE_REGISTRY:-}"
+CALEOPE_REGISTRY_USER="${CALEOPE_REGISTRY_USER:-}"
+CALEOPE_REGISTRY_PASS="${CALEOPE_REGISTRY_PASS:-}"
 
 # Couleurs
 RED='\033[0;31m'
@@ -136,8 +164,8 @@ check_offline_bundle() {
     # Lire et afficher les métadonnées du bundle
     if [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]]; then
         local pack_version pack_date
-        pack_version=$(jq -r '.caleope_version // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
-        pack_date=$(jq -r '.packed_at // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        pack_version=$(jq -r '.caleope_version // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null || echo "?")
+        pack_date=$(jq -r '.packed_at // "?"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null || echo "?")
         log_success "Bundle valide — version ${pack_version} (empaqueté le ${pack_date})"
     else
         log_warning "pack-info.json absent — bundle non versionné"
@@ -176,6 +204,27 @@ load_docker_images_from_bundle() {
 
 ask_config() {
     log_section "Configuration de Caleope"
+
+    # Mode ISO (install de base) : aucune question. On pose des valeurs
+    # provisoires ; le wizard de 1er démarrage (--iso-finalize) les remplacera.
+    if [[ "${ISO_MODE}" == "true" ]]; then
+        CALEOPE_DOMAIN="${CALEOPE_DOMAIN:-caleope.local}"
+        CALEOPE_PROXY_MODE="${CALEOPE_PROXY_MODE:-standalone}"
+        # Canal : depuis pack-info.json du payload si présent, sinon stable
+        if [[ -z "${CALEOPE_CHANNEL:-}" ]] && [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]]; then
+            CALEOPE_CHANNEL=$(jq -r '.channel // "stable"' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        fi
+        CALEOPE_CHANNEL="${CALEOPE_CHANNEL:-stable}"
+        # Registre miroir baké dans l'ISO online (pack-info.json)
+        if [[ -z "${CALEOPE_REGISTRY:-}" ]] && [[ -f "${OFFLINE_BUNDLE_PATH}/pack-info.json" ]]; then
+            CALEOPE_REGISTRY=$(jq -r '.registry // ""' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+            CALEOPE_REGISTRY_USER=$(jq -r '.registry_user // ""' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+            CALEOPE_REGISTRY_PASS=$(jq -r '.registry_pass // ""' "${OFFLINE_BUNDLE_PATH}/pack-info.json" 2>/dev/null)
+        fi
+        log_step "Mode ISO — configuration reportée au 1er démarrage (valeurs provisoires)"
+        echo -e "  Canal : ${YELLOW}${CALEOPE_CHANNEL}${NC}  ${GRAY}(domaine/proxy/mdp au 1er boot)${NC}"
+        return
+    fi
 
     # Mode non-interactif : si les variables essentielles sont déjà définies en
     # variables d'environnement, on les utilise directement sans prompts.
@@ -355,8 +404,60 @@ check_debian_codename() {
 
 check_user() {
     log_debug "Vérification de l'utilisateur ${CALEOPE_USER}..."
-    id "${CALEOPE_USER}" &>/dev/null || log_error "L'utilisateur '${CALEOPE_USER}' n'existe pas. Crée-le avant de lancer ce script : useradd -m -s /bin/bash ${CALEOPE_USER}"
+    if ! id "${CALEOPE_USER}" &>/dev/null; then
+        log_step "Utilisateur '${CALEOPE_USER}' absent — création automatique (appliance/ISO)."
+        /usr/sbin/useradd -m -s /bin/bash "${CALEOPE_USER}" \
+            || log_error "Impossible de créer l'utilisateur '${CALEOPE_USER}'."
+        log_success "Utilisateur '${CALEOPE_USER}' créé."
+    fi
     log_debug "Utilisateur ${CALEOPE_USER} OK"
+}
+
+# Clavier console FR (AZERTY) sur le système installé. Fait ici (bash complet,
+# données keymap présentes sur le système) plutôt que dans le preseed d-i (qui
+# ne les embarque pas en mode minimal). Idempotent.
+configure_keyboard() {
+    log_step "Configuration du clavier console (AZERTY / fr)..."
+    cat > /etc/default/keyboard <<'EOF_KBD'
+XKBMODEL="pc105"
+XKBLAYOUT="fr"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"
+EOF_KBD
+    # ⚠️ `loadkeys fr` ÉCHOUE sur un netinst minimal : aucun keymap console nommé
+    # "fr" (pas de /usr/share/keymaps/**/fr*). Il FAUT compiler le keymap depuis
+    # les données XKB avec ckbcomp, puis charger le fichier généré. Sans ça la
+    # console reste en QWERTY (VC Keymap non défini) → login impossible en azerty.
+    if command -v ckbcomp >/dev/null 2>&1; then
+        ckbcomp fr > /etc/console-setup/caleope-fr.kmap 2>/dev/null || true
+        loadkeys /etc/console-setup/caleope-fr.kmap 2>/dev/null || true
+    else
+        loadkeys fr 2>/dev/null || true
+    fi
+    # --force : régénère et applique le cache console-setup (sinon --save seul
+    # peut ne rien produire). Les services l'appliquent à chaque boot.
+    setupcon --force --save 2>/dev/null || true
+    systemctl enable console-setup.service keyboard-setup.service 2>/dev/null || true
+    log_success "Clavier console configuré en AZERTY (fr)"
+}
+
+# Console épurée façon Proxmox : réduit le bruit noyau au boot + neutralise le
+# générateur SSH-over-VSOCK (Debian 13) qui spamme « Failed to query local
+# AF_VSOCK CID » sur la console (inutile en VM/bare-metal LAN).
+configure_clean_console() {
+    log_step "Console épurée (boot silencieux)..."
+    if [[ -f /etc/default/grub ]]; then
+        if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
+            sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3"/' /etc/default/grub
+        else
+            echo 'GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3"' >> /etc/default/grub
+        fi
+        update-grub 2>/dev/null || update-grub2 2>/dev/null || true
+    fi
+    mkdir -p /etc/systemd/system-generators
+    ln -sf /dev/null /etc/systemd/system-generators/systemd-ssh-generator
+    log_success "Console épurée"
 }
 
 # =============================================================================
@@ -407,7 +508,10 @@ install_docker() {
         return 0
     fi
 
-    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+    # Submarine PUR (--offline air-gap) : Docker doit être préinstallé. Mais en
+    # mode --iso, on a le réseau au 1er boot → on installe Docker normalement
+    # (les IMAGES, elles, sont chargées depuis le bundle → pas de pull fragile).
+    if [[ "${OFFLINE_MODE}" == "true" && "${ISO_MODE}" != "true" ]]; then
         log_error "Mode submarine : Docker n'est pas installé. Installe Docker avant de lancer l'installation offline (apt-get install docker-ce depuis un dépôt local ou via dpkg)."
     fi
 
@@ -455,6 +559,10 @@ setup_security() {
     ufw allow 22/tcp comment "SSH"
     ufw allow 80/tcp comment "HTTP Traefik"
     ufw allow 443/tcp comment "HTTPS Traefik"
+    # caleope-ui accessible en IP directe (setup web du 1er boot + accès UI sans
+    # domaine). Sinon la page de config :8766 est injoignable depuis le LAN
+    # (le daemon ne l'ouvrait qu'au bridge Docker 172.18.0.0/16).
+    ufw allow "${PORT_UI}/tcp" comment "Caleope UI (accès IP direct / setup web)"
     ufw --force enable
     log_success "UFW actif (SSH + HTTP/HTTPS autorisés)"
 
@@ -989,16 +1097,13 @@ install_default_apps() {
         fi
     done
 
-    # CrowdSec — IDS/IPS réseau (pas de params requis, disponible sur canal alpha)
-    if caleope store 2>/dev/null | grep -q "crowdsec"; then
-        log_step "Installation de CrowdSec (IDS/IPS)..."
-        if caleope install crowdsec 2>/dev/null; then
-            log_success "CrowdSec installé"
-        else
-            log_warning "CrowdSec non installé (sera disponible via 'caleope install crowdsec')"
-        fi
+    # CrowdSec — IDS/IPS réseau. Composant core : masqué de 'caleope store'
+    # (ne pas tester sa présence via le listing) et déployable sans licence.
+    log_step "Installation de CrowdSec (IDS/IPS)..."
+    if caleope install crowdsec 2>/dev/null; then
+        log_success "CrowdSec installé"
     else
-        log_warning "CrowdSec non disponible dans ce canal — à installer via 'caleope install crowdsec' (canal alpha)"
+        log_warning "CrowdSec non installé (réessayer via 'caleope install crowdsec')"
     fi
 
     # Authentik — Identity Provider SSO (secrets générés automatiquement)
@@ -1080,6 +1185,11 @@ CALEOPE_SMTP_PORT=${CALEOPE_SMTP_PORT}
 CALEOPE_SMTP_USER=${CALEOPE_SMTP_USER}
 CALEOPE_SMTP_PASS=${CALEOPE_SMTP_PASS}
 CALEOPE_SMTP_FROM=${CALEOPE_SMTP_FROM}
+
+# Registre d'images miroir (optionnel) — vide = Docker Hub par défaut
+CALEOPE_REGISTRY=${CALEOPE_REGISTRY}
+CALEOPE_REGISTRY_USER=${CALEOPE_REGISTRY_USER}
+CALEOPE_REGISTRY_PASS=${CALEOPE_REGISTRY_PASS}
 EOF
 
     chmod 640 "${CALEOPE_ROOT}/caleope.conf"
@@ -1092,6 +1202,19 @@ EOF
         chmod 600 "${CALEOPE_ROOT}/core/daemon/ui-password"
         CALEOPE_UI_PASSWORD=""
         log_success "Mot de passe UI enregistré"
+    fi
+
+    # Si un registre miroir est configuré avec des identifiants, tenter un
+    # docker login (best-effort) pour que les pulls d'images fonctionnent.
+    if [[ -n "${CALEOPE_REGISTRY}" && -n "${CALEOPE_REGISTRY_USER}" && -n "${CALEOPE_REGISTRY_PASS}" ]] \
+        && command -v docker >/dev/null 2>&1; then
+        log_step "Connexion au registre miroir ${CALEOPE_REGISTRY}..."
+        if echo "${CALEOPE_REGISTRY_PASS}" | docker login "${CALEOPE_REGISTRY}" \
+            -u "${CALEOPE_REGISTRY_USER}" --password-stdin >/dev/null 2>&1; then
+            log_success "Connecté au registre miroir"
+        else
+            log_warning "Connexion au registre miroir échouée (pulls Docker Hub par défaut)"
+        fi
     fi
 
     log_success "Config sauvegardée dans ${CALEOPE_ROOT}/caleope.conf"
@@ -1138,6 +1261,11 @@ sync_store() {
         mkdir -p "${store_dir}"
         tar -xzf "${store_archive}" -C "${store_dir}" --strip-components=1
         chown -R "${CALEOPE_USER}:${CALEOPE_USER}" "${store_dir}"
+        # Le tarball embarque .git (clone complet) : le daemon (root) doit pouvoir
+        # fetch dans ce dépôt possédé par user-caleope — sans safe.directory, git
+        # refuse (« dubious ownership ») et le store ne se met JAMAIS à jour.
+        # (Le daemon passe aussi -c safe.directory par commande depuis v0.7.3.)
+        git config --global --add safe.directory "${store_dir}" 2>/dev/null || true
         log_success "Store extrait — $(find "${store_dir}/apps" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l) application(s) disponible(s)"
         return 0
     fi
@@ -1277,6 +1405,342 @@ print_summary() {
 }
 
 # =============================================================================
+# WIZARD DE PREMIER DÉMARRAGE (ISO)
+# =============================================================================
+
+FIRSTBOOT_MARKER="${CALEOPE_ROOT}/.firstboot-needed"
+FIRSTBOOT_INSTALLER="${CALEOPE_ROOT}/bin/install.sh"
+FIRSTBOOT_UNIT="/etc/systemd/system/caleope-firstboot.service"
+
+# Bannière console façon Proxmox : logo Caleope + URL d'administration
+# (http://<IP>:8766). Écrite dans /etc/issue par un petit générateur relancé
+# à chaque boot (l'IP DHCP peut changer). Remplace l'ancien wizard interactif.
+# ─────────────────────────────────────────────────────────────────────────────
+# Disques de données (setup web) — CALEOPE_DATA_DISKS="/dev/sdb,/dev/sdc"
+#   CALEOPE_DATA_MODE = separate (défaut) | raid1
+#   CALEOPE_DATA_FS   = ext4 (défaut) | btrfs | xfs
+# SÉPARÉ : chaque disque un usage — le plus GROS → app-data, le 2e → backups,
+#          les suivants → data-disks/diskN. FS au choix.
+# RAID1  : tous les disques cochés forment UN miroir → app-data (redondance).
+#          btrfs = RAID1 natif (mkfs.btrfs -d raid1) ; ext4/xfs = via mdadm.
+# Chaque disque doit être VIERGE (double filtre : caleope-ui + ici).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Formate un périphérique dans le FS demandé (label optionnel). Écho rien.
+_mkfs_dev() {
+    local fs="$1" dev="$2" label="${3:-}"
+    case "$fs" in
+        ext4)  mkfs.ext4  -F -q ${label:+-L "$label"} "$dev" ;;
+        xfs)   mkfs.xfs   -f ${label:+-L "$label"} "$dev" >/dev/null ;;  # pas d'option -q
+        btrfs) mkfs.btrfs -f ${label:+-L "$label"} "$dev" >/dev/null ;;
+        *) return 1 ;;
+    esac
+}
+
+# Ajoute une entrée fstab (UUID) + monte, en préservant le contenu existant du
+# point de montage (app-data créé à l'install de base). $1=source $2=target $3=fs
+_mount_persist() {
+    local src="$1" target="$2" fs="$3" uuid tmp=""
+    uuid=$(blkid -s UUID -o value "$src" 2>/dev/null)
+    [[ -z "$uuid" ]] && { log_warning "UUID introuvable pour $src"; return 1; }
+    mkdir -p "$target"
+    if [[ -n "$(ls -A "$target" 2>/dev/null)" ]]; then
+        tmp=$(mktemp -d) && cp -a "$target/." "$tmp/" 2>/dev/null || tmp=""
+    fi
+    echo "UUID=$uuid $target $fs defaults,nofail 0 2" >> /etc/fstab
+    systemctl daemon-reload 2>/dev/null || true
+    if ! mount "$target" 2>/dev/null; then
+        log_warning "montage de $target impossible — entrée fstab laissée (nofail)"
+        [[ -n "$tmp" ]] && rm -rf "$tmp"
+        return 1
+    fi
+    [[ -n "$tmp" ]] && { cp -a "$tmp/." "$target/" 2>/dev/null || true; rm -rf "$tmp"; }
+    chown "${CALEOPE_USER}:${CALEOPE_GROUP}" "$target" 2>/dev/null || true
+    return 0
+}
+
+# Vrai si le disque est VIERGE (aucune partition, aucun système de fichiers).
+_disk_is_blank() {
+    [[ $(lsblk -n "$1" 2>/dev/null | wc -l) -le 1 ]] && \
+    [[ -z "$(lsblk -no FSTYPE "$1" 2>/dev/null | tr -d '[:space:]')" ]]
+}
+
+setup_data_disks() {
+    [[ -z "${CALEOPE_DATA_DISKS:-}" ]] && return 0
+    local mode="${CALEOPE_DATA_MODE:-separate}" fs="${CALEOPE_DATA_FS:-ext4}"
+    log_section "Disques de données (${mode}, ${fs})"
+
+    # Outils requis (normalement posés par le preseed) — garantie best-effort.
+    local need=()
+    [[ "$fs" == "btrfs" ]] && ! command -v mkfs.btrfs >/dev/null 2>&1 && need+=(btrfs-progs)
+    [[ "$fs" == "xfs"   ]] && ! command -v mkfs.xfs   >/dev/null 2>&1 && need+=(xfsprogs)
+    [[ "$mode" == "raid1" && "$fs" != "btrfs" ]] && ! command -v mdadm >/dev/null 2>&1 && need+=(mdadm)
+    if [[ ${#need[@]} -gt 0 ]]; then
+        apt-get install -y "${need[@]}" >/dev/null 2>&1 || \
+            log_warning "Paquets stockage manquants (${need[*]}) et non installables — repli possible sur ext4/séparé"
+    fi
+    # Repli si l'outil reste indisponible
+    [[ "$fs" == "btrfs" ]] && ! command -v mkfs.btrfs >/dev/null 2>&1 && { fs=ext4; log_warning "btrfs indisponible → ext4"; }
+    [[ "$fs" == "xfs"   ]] && ! command -v mkfs.xfs   >/dev/null 2>&1 && { fs=ext4; log_warning "xfs indisponible → ext4"; }
+    [[ "$mode" == "raid1" && "$fs" != "btrfs" ]] && ! command -v mdadm >/dev/null 2>&1 && { mode=separate; log_warning "mdadm indisponible → disques séparés"; }
+
+    local disks=() d
+    IFS=',' read -ra disks <<< "${CALEOPE_DATA_DISKS}"
+
+    # Ne garder que les blocs vierges, triés par taille décroissante.
+    local ok=()
+    while read -r d; do [[ -n "$d" ]] && ok+=("$d"); done < <(
+        for d in "${disks[@]}"; do
+            [[ -b "$d" ]] || continue
+            _disk_is_blank "$d" || { log_warning "$d n'est pas vierge — ignoré"; continue; }
+            echo "$(blockdev --getsize64 "$d" 2>/dev/null || echo 0) $d"
+        done | sort -rn | awk '{print $2}')
+
+    if [[ ${#ok[@]} -eq 0 ]]; then log_warning "Aucun disque de données utilisable"; return 0; fi
+
+    # ── RAID1 : un miroir → app-data ────────────────────────────────────────
+    if [[ "$mode" == "raid1" && ${#ok[@]} -ge 2 ]]; then
+        local target="${CALEOPE_ROOT}/app-data"
+        if [[ "$fs" == "btrfs" ]]; then
+            log_step "RAID1 btrfs natif sur ${ok[*]} → $target"
+            if mkfs.btrfs -f -m raid1 -d raid1 -L caleope-app "${ok[@]}" >/dev/null 2>&1; then
+                _mount_persist "${ok[0]}" "$target" btrfs && \
+                    log_success "Miroir btrfs (${#ok[@]} disques) monté sur $target"
+            else
+                log_warning "mkfs.btrfs RAID1 a échoué"
+            fi
+        else
+            log_step "RAID1 mdadm ($fs) sur ${ok[*]} → $target"
+            local md=/dev/md0; [[ -e $md ]] && md=/dev/md/caleope
+            # --assume-clean : array NEUF, on formate juste après → inutile de
+            # resynchroniser un miroir vide (évite un long rebuild bloquant).
+            if mdadm --create "$md" --level=1 --raid-devices="${#ok[@]}" --metadata=1.2 --assume-clean --run "${ok[@]}" >/dev/null 2>&1; then
+                _mkfs_dev "$fs" "$md" caleope-app >/dev/null 2>&1
+                mkdir -p /etc/mdadm 2>/dev/null || true
+                mdadm --detail --scan >> /etc/mdadm/mdadm.conf 2>/dev/null || true
+                update-initramfs -u >/dev/null 2>&1 || true
+                _mount_persist "$md" "$target" "$fs" && \
+                    log_success "Miroir mdadm $fs (${#ok[@]} disques) monté sur $target"
+            else
+                log_warning "mdadm --create a échoué"
+            fi
+        fi
+        return 0
+    fi
+
+    # ── SÉPARÉ : un disque = un usage ────────────────────────────────────────
+    # ⚠️ label ≤ 12 caractères (limite XFS) → « caleope-app », pas « caleope-data1 ».
+    local i=0 target label
+    for d in "${ok[@]}"; do
+        i=$((i+1))
+        case $i in
+            1) target="${CALEOPE_ROOT}/app-data"; label="caleope-app" ;;
+            2) target="${CALEOPE_ROOT}/backups";  label="caleope-bak" ;;
+            *) target="${CALEOPE_ROOT}/data-disks/disk$i"; label="caleope-d$i" ;;
+        esac
+        log_step "Formatage de $d ($fs) → $target"
+        if ! _mkfs_dev "$fs" "$d" "$label" >/dev/null 2>&1; then
+            log_warning "mkfs.$fs $d a échoué — disque ignoré"; continue
+        fi
+        _mount_persist "$d" "$target" "$fs" && \
+            log_success "$d ($(lsblk -dno SIZE "$d" 2>/dev/null | tr -d ' ')) → $target"
+    done
+    return 0
+}
+
+install_console_banner() {
+    local gen="${CALEOPE_ROOT}/bin/caleope-banner.sh"
+    mkdir -p "${CALEOPE_ROOT}/bin"
+
+    # Heredoc QUOTÉ 'BANNER' → contenu écrit littéralement (les \\ et ${IP}
+    # survivent intacts jusqu'au fichier généré).
+    cat > "${gen}" << 'BANNER'
+#!/usr/bin/env bash
+# Génère /etc/issue façon Proxmox : logo Caleope + URL d'administration.
+set -u
+ROOT="/opt/gaiver-it/caleope"
+# IP LAN : première IP globale hors ponts docker/veth. On BOUCLE jusqu'à ~40s
+# car au boot le bail DHCP peut ne pas être encore acquis (sinon <ip-du-serveur>).
+IP=""
+for _try in $(seq 1 20); do
+  IP=$(ip -4 -o addr show scope global 2>/dev/null | grep -vE 'docker|br-|veth|cali|flannel' | awk '{print $4}' | cut -d/ -f1 | head -1)
+  [ -z "${IP:-}" ] && IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^(127\.|172\.1[7-9]\.|172\.2[0-9]\.|172\.3[01]\.)' | head -1)
+  [ -n "${IP:-}" ] && break
+  sleep 2
+done
+[ -z "${IP:-}" ] && IP="<ip-du-serveur>"
+if [ -f "${ROOT}/.firstboot-needed" ]; then
+  LINE1="Configuration initiale (domaine, proxy, mots de passe)"
+  LOGIN_HINT="Console : user-caleope / caleope (temporaire)"
+else
+  LINE1="Console d'administration Caleope"
+  LOGIN_HINT="Login console : user-caleope"
+fi
+# Couleurs ANSI (console VT, 16 couleurs) : 1;35 magenta vif, 0;35 magenta,
+# 1;36 cyan, 0;90 gris, 0;37 blanc. Blocs (█▄▀░▒▓) présents dans la police console.
+E=$(printf '\033')
+V="${E}[1;35m"; M="${E}[0;35m"; C2="${E}[1;36m"; G="${E}[0;90m"; W="${E}[0;37m"; R="${E}[0m"
+# Wordmark CALEOPE (blocs pleins) dégradé magenta (haut vif → bas sombre), sous-titre
+# centré, bloc infos encadré (flèches magenta, URL cyan), ligne licence. IP variable
+# → seules les lignes du cadre en ASCII sont paddées (%-Ns) pour aligner la bordure.
+{
+printf '\n'
+printf '%s%s%s\n' "$G" "════════════════════════════════════════════════════════════════════════════" "$R"
+printf '\n'
+printf '         %s ██████  █████  ██      ███████  ██████  ██████  ███████ %s\n' "$V" "$R"
+printf '         %s██      ██   ██ ██      ██      ██    ██ ██   ██ ██      %s\n' "$V" "$R"
+printf '         %s██      ███████ ██      █████   ██    ██ ██████  █████   %s\n' "$V" "$R"
+printf '         %s██      ██   ██ ██      ██      ██    ██ ██      ██      %s\n' "$M" "$R"
+printf '         %s ██████ ██   ██ ███████ ███████  ██████  ██      ███████ %s\n' "$M" "$R"
+printf '\n'
+printf '%s░▒▓███████████████%s self-hosting · souverain · self-owned %s███████████████▓▒░%s\n' "$M" "$W" "$M" "$R"
+printf '%s%s%s\n' "$G" "════════════════════════════════════════════════════════════════════════════" "$R"
+printf '\n'
+printf '        %s╔══════════════════════════════════════════════════════════╗%s\n' "$G" "$R"
+printf '        %s║%s  %s►%s %s%-54s%s%s║%s\n' "$G" "$R" "$V" "$R" "$W" "$LINE1" "$R" "$G" "$R"
+printf '        %s║%s%s%-58s%s%s║%s\n' "$G" "$R" "$C2" "      http://${IP}:8766" "$R" "$G" "$R"
+printf '        %s║%s  %s►%s %s%-54s%s%s║%s\n' "$G" "$R" "$V" "$R" "$W" "$LOGIN_HINT" "$R" "$G" "$R"
+printf '        %s╚══════════════════════════════════════════════════════════╝%s\n' "$G" "$R"
+printf '\n'
+printf '                                           %sGaiver-IT · logiciel libre AGPLv3%s\n' "$G" "$R"
+} > /etc/issue
+BANNER
+    chmod 755 "${gen}"
+
+    # Before=getty : la bannière (avec la vraie IP) est écrite AVANT que getty
+    # n'affiche le prompt, sinon la console montre l'ancienne issue.
+    cat > /etc/systemd/system/caleope-banner.service << EOF
+[Unit]
+Description=Caleope — bannière console (URL d'administration)
+After=network-online.target caleoped.service
+Wants=network-online.target
+Before=getty@tty1.service getty.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash ${gen}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable caleope-banner.service 2>/dev/null || true
+    bash "${gen}" 2>/dev/null || true   # génère tout de suite
+}
+
+# Prépare le 1er démarrage en mode --iso : la configuration se fait 100% via
+# l'interface web (caleope-ui → /setup). Plus de wizard console interactif :
+# une simple bannière indique l'URL d'admin. Appelé uniquement en mode --iso.
+setup_firstboot() {
+    log_section "Premier démarrage (configuration web)"
+
+    # install.sh à un emplacement stable : le wizard WEB lance
+    # « bin/install.sh --iso-finalize » (non-interactif, variables fournies).
+    mkdir -p "${CALEOPE_ROOT}/bin"
+    if cp "${BASH_SOURCE[0]}" "${FIRSTBOOT_INSTALLER}" 2>/dev/null; then
+        chmod 755 "${FIRSTBOOT_INSTALLER}"
+    else
+        log_warning "Impossible de copier install.sh — le wizard utilisera le payload d'origine"
+        FIRSTBOOT_INSTALLER="${SCRIPT_DIR}/install.sh"
+    fi
+
+    # Marqueur : caleope-ui sert la page /setup tant qu'il est présent.
+    touch "${FIRSTBOOT_MARKER}"
+
+    # Neutralise tout ancien wizard interactif tty1 (ré-install / vieille ISO).
+    rm -f "${FIRSTBOOT_UNIT}"
+    systemctl disable caleope-firstboot.service 2>/dev/null || true
+
+    # Bannière console (remplace le wizard) : URL d'administration.
+    install_console_banner
+
+    systemctl daemon-reload 2>/dev/null || true
+    log_success "1er démarrage = interface web — bannière console http://<IP>:${PORT_UI} activée"
+}
+
+# Flux interactif exécuté au 1er démarrage (via caleope-firstboot.service).
+# Complète la config différée, déploie Traefik + apps, puis se désactive.
+run_iso_finalize() {
+    check_root
+
+    # Si le marqueur a disparu (déjà configuré), on ne rejoue pas le wizard
+    if [[ ! -f "${FIRSTBOOT_MARKER}" ]]; then
+        echo -e "${GRAY}Configuration déjà effectuée — rien à faire.${NC}"
+        systemctl disable caleope-firstboot.service 2>/dev/null || true
+        return
+    fi
+
+    clear 2>/dev/null || true
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║   Bienvenue sur Caleope — Configuration initiale     ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo -e "  ${GRAY}Quelques questions pour finaliser ton serveur.${NC}\n"
+
+    # Préserver le canal choisi à la construction de l'ISO
+    if [[ -f "${CALEOPE_ROOT}/caleope.conf" ]]; then
+        CALEOPE_CHANNEL=$(grep -E '^CALEOPE_CHANNEL=' "${CALEOPE_ROOT}/caleope.conf" 2>/dev/null | cut -d= -f2)
+    fi
+
+    # Poser les vraies questions (domaine, proxy, email, SMTP, mots de passe)
+    ask_config
+
+    # Mot de passe SYSTÈME : l'installeur ISO ne demande jamais de mot de passe
+    # Linux (compte laissé sur le mdp temporaire « caleope » → pas d'accès
+    # console/SSH connu de l'utilisateur). Le mot de passe interface devient
+    # AUSSI celui du compte ${CALEOPE_USER} — une seule clé pour la box,
+    # choisie par l'utilisateur au setup web. (Avant save_config, qui efface
+    # CALEOPE_UI_PASSWORD après l'avoir transmis au daemon.)
+    if [[ -n "${CALEOPE_UI_PASSWORD:-}" ]]; then
+        if echo "${CALEOPE_USER}:${CALEOPE_UI_PASSWORD}" | chpasswd 2>/dev/null; then
+            log_success "Mot de passe système (${CALEOPE_USER}) aligné sur le mot de passe interface"
+        else
+            log_warning "Impossible de définir le mot de passe système — console : ${CALEOPE_USER}/caleope"
+        fi
+    fi
+
+    # Disques de données choisis au setup web (AVANT le daemon et les apps :
+    # app-data doit être monté avant que quoi que ce soit y écrive).
+    setup_data_disks
+
+    # Écrire la config réelle + transmettre les secrets au daemon
+    save_config
+    init_secrets_encryption
+
+    # Recharger le daemon avec le vrai domaine
+    log_step "Redémarrage du daemon avec la configuration finale..."
+    systemctl restart caleoped 2>/dev/null || true
+    sleep 3
+
+    # Déployer le reverse proxy et les apps par défaut
+    deploy_traefik
+    install_default_apps
+    generate_links_file
+
+    # Terminé : retirer le marqueur et désactiver le service
+    rm -f "${FIRSTBOOT_MARKER}"
+    systemctl disable caleope-firstboot.service 2>/dev/null || true
+    # Rafraîchir la bannière console (état « prêt » au lieu de « à configurer »)
+    bash "${CALEOPE_ROOT}/bin/caleope-banner.sh" 2>/dev/null || true
+    # Rendre la main à getty (session de login normale)
+    systemctl start getty@tty1.service 2>/dev/null || true
+
+    print_summary
+    echo -e "  ${GREEN}Configuration terminée — ce wizard ne se relancera plus.${NC}\n"
+}
+
+# Résumé affiché après l'install de base ISO (avant le 1er démarrage réel).
+print_iso_summary() {
+    echo ""
+    echo -e "${GREEN}◆ Image Caleope installée (base).${NC}"
+    echo -e "  ${GRAY}Au prochain démarrage, un assistant configurera le domaine,${NC}"
+    echo -e "  ${GRAY}le reverse proxy et les mots de passe, puis déploiera les apps.${NC}"
+    echo ""
+}
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -1292,7 +1756,15 @@ main() {
     echo "╚══════════════════════════════════════════╝"
     echo -e "${NC}"
 
-    if [[ "${OFFLINE_MODE}" == "true" ]]; then
+    # ── Mode finalize (wizard 1er démarrage) : flux dédié, puis on sort ──
+    if [[ "${ISO_FINALIZE}" == "true" ]]; then
+        run_iso_finalize
+        return
+    fi
+
+    if [[ "${ISO_MODE}" == "true" ]]; then
+        echo -e "${YELLOW}Mode : ISO (install de base — config au 1er démarrage)${NC}\n"
+    elif [[ "${OFFLINE_MODE}" == "true" ]]; then
         echo -e "${YELLOW}Mode : SUBMARINE (offline) — bundle : ${OFFLINE_BUNDLE_PATH}${NC}\n"
     elif [[ "${LOG_MODE}" == "debug" ]]; then
         echo -e "${GRAY}Mode : DEBUG${NC}\n"
@@ -1305,9 +1777,11 @@ main() {
     check_debian
     check_debian_codename
     check_user
-    check_offline_bundle       # Valide le bundle si --offline
+    configure_keyboard         # Clavier console AZERTY sur le système installé
+    configure_clean_console    # Boot silencieux façon Proxmox (moins de bruit console)
+    check_offline_bundle       # Valide le bundle si --offline / --iso
 
-    # Configuration interactive (domaine, mode proxy, email)
+    # Configuration interactive (domaine, mode proxy, email) — placeholders en ISO
     ask_config
 
     # Installation dans l'ordre
@@ -1316,17 +1790,27 @@ main() {
     install_docker
     setup_security             # UFW + fail2ban + unattended-upgrades
     create_docker_networks
-    load_docker_images_from_bundle  # Mode submarine : charge les images .tar
+    load_docker_images_from_bundle  # Mode submarine/ISO offline : charge les images .tar
     create_structure
     setup_caleope_group
-    install_caleope_binaries   # release GitHub → bundle (mode submarine)
+    install_caleope_binaries   # release GitHub → bundle (mode submarine/ISO)
     install_bash_completion    # tab completion pour caleope
     init_caleope_runtime
     save_config                # Sauvegarder domaine + mode proxy + SMTP dans caleope.conf
     init_secrets_encryption    # Transmettre mot de passe chiffrement au daemon
-    sync_store                 # git clone officiel → extract bundle (mode submarine)
+    sync_store                 # git clone officiel → extract bundle (mode submarine/ISO)
     install_caleoped_service
     install_caleope_ui_service
+
+    # En mode ISO, on s'arrête ici : le domaine/proxy réels et le déploiement
+    # (Traefik + apps par défaut) sont faits au 1er démarrage par le wizard.
+    if [[ "${ISO_MODE}" == "true" ]]; then
+        setup_firstboot
+        generate_links_file
+        print_iso_summary
+        return
+    fi
+
     deploy_traefik
     install_default_apps
     generate_links_file

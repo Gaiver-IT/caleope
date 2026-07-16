@@ -13,8 +13,10 @@
 package install
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,6 +130,7 @@ func (i *Installer) Install(opts InstallOptions) error {
 		InstalledAt: time.Now(),
 		Channel:     manifest.Channel,
 		Repository:  manifest.Repository,
+		Priority:    manifest.Priority,
 	}
 	_ = i.rt.SaveApp(runtimeApp)
 
@@ -150,6 +153,14 @@ func (i *Installer) Install(opts InstallOptions) error {
 
 	// ── Étape 4 : Allocation port dynamique ──
 	fmt.Println("  [4/12] Allocation des ports...")
+	// Ports FIXES (dynamic:false, ex :53 DNS) : docker binde host=container en
+	// dur → si déjà pris, « docker compose up » plante avec un message cryptique
+	// (« Bind for 0.0.0.0:53 failed: port is already allocated »). On vérifie
+	// AVANT pour refuser proprement en nommant l'app fautive.
+	if err := i.checkStaticPorts(manifest); err != nil {
+		audit.Log(audit.ActionInstall, opts.AppID, "DENIED:port_conflict")
+		return err
+	}
 	hostPort, err = i.allocatePorts(manifest)
 	if err != nil {
 		return err
@@ -202,6 +213,16 @@ func (i *Installer) Install(opts InstallOptions) error {
 			return err
 		}
 
+		// ── Étape 8.5 : Pré-pull avec fallback miroir (mode registre "fallback") ──
+		i.pullImagesWithFallback(composeDir)
+
+		// ── Étape 8.9 : nettoyage des orphelins en conflit ──
+		// Un container du projet resté d'un run précédent en état created/exited/dead
+		// (ex: un `up` interrompu) bloque le `up` suivant par conflit de container_name
+		// ("name already in use"). On le supprime AVANT le up, sans jamais toucher aux
+		// containers VIVANTS (un AzuraCast externe encore Up ne doit pas être coupé).
+		i.docker.PruneStaleProjectContainers(opts.AppID)
+
 		// ── Étape 9 : docker compose up ──
 		fmt.Println("  [9/12] Démarrage des containers...")
 		if err := i.docker.Up(composeDir); err != nil {
@@ -213,6 +234,12 @@ func (i *Installer) Install(opts InstallOptions) error {
 		if err := i.waitForStart(ctx, composeDir); err != nil {
 			return err
 		}
+
+		// ── Étape 10.5 : priorité ressources (« apps prioritaires ») ──
+		// Applique cpu_shares + oom_score_adj selon le tier du manifeste (champ
+		// "priority"), avec override par service via le label compose "caleope.priority".
+		// Après le start pour que les containers aient un PID. No-op si tout est "normal".
+		i.docker.ApplyPriorities(opts.AppID, manifest.Priority)
 	}
 
 	// ── Étape 11 : Enregistrement runtime ──
@@ -316,6 +343,81 @@ func (i *Installer) checkSecurity(manifest *types.AppManifest, trust types.Trust
 	fmt.Scanln(&resp)
 	if strings.ToLower(resp) != "o" {
 		return fmt.Errorf("installation annulée")
+	}
+	return nil
+}
+
+// portProtos traduit le champ Protocol du manifest en protocoles à vérifier.
+func portProtos(p string) []string {
+	switch strings.ToLower(p) {
+	case "udp":
+		return []string{"udp"}
+	case "any":
+		return []string{"tcp", "udp"}
+	default:
+		return []string{"tcp"}
+	}
+}
+
+// portFree teste si un port hôte est libre (tcp via net.Listen, udp via
+// net.ListenPacket) — même approche que l'allocation dynamique.
+func portFree(proto string, port int) bool {
+	addr := fmt.Sprintf(":%d", port)
+	if proto == "udp" {
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return false
+		}
+		_ = pc.Close()
+		return true
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
+}
+
+// checkStaticPorts refuse l'install si un port FIXE (dynamic:false) de l'app est
+// déjà occupé — soit par une autre app Caleope (nommée), soit par un service
+// tiers. Ignore le cas où l'app se réinstalle sur son propre port.
+func (i *Installer) checkStaticPorts(manifest *types.AppManifest) error {
+	if manifest.NoContainer {
+		return nil // outil système sans conteneur → pas de bind de port hôte
+	}
+	installed, _ := i.rt.ListApps()
+	for _, p := range manifest.Ports {
+		if p.Dynamic || p.Container == 0 {
+			continue
+		}
+		port := p.Container // port fixe : host = container (compose « 53:53 »)
+		for _, proto := range portProtos(p.Protocol) {
+			if portFree(proto, port) {
+				continue
+			}
+			// Occupé : est-ce nous-mêmes (réinstall) ou une autre app ?
+			var culprit string
+			for _, app := range installed {
+				for _, ap := range app.Ports {
+					if ap.Dynamic || ap.Container != port {
+						continue
+					}
+					if app.ID == manifest.ID {
+						culprit = "" // c'est notre propre app → on n'empêche pas
+						goto ownPort
+					}
+					culprit = app.ID
+				}
+			}
+			if culprit != "" {
+				return fmt.Errorf("port %d/%s déjà utilisé par l'app « %s » — désinstalle-la (ou change son port) avant d'installer « %s »",
+					port, proto, culprit, manifest.ID)
+			}
+			return fmt.Errorf("port %d/%s déjà utilisé sur cet hôte (service tiers) — libère-le avant d'installer « %s »",
+				port, proto, manifest.ID)
+		ownPort:
+		}
 	}
 	return nil
 }
@@ -484,13 +586,28 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 		Volumes:    manifest.Volumes,
 	}
 
-	outFile, err := os.Create(filepath.Join(composeDir, "compose.yml"))
-	if err != nil {
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return err
 	}
-	defer outFile.Close()
+	composeContent := buf.String()
 
-	if err := tmpl.Execute(outFile, data); err != nil {
+	// Réécritures post-template dépendant de la config plateforme.
+	if cfg, cerr := i.rt.GetConfig(); cerr == nil {
+		// Registre miroir : réécriture des images vers le miroir SEULEMENT en mode
+		// "mirror" (confiance Caleope) ou historique (miroir défini, mode vide).
+		// En "fallback"/"upstream", on garde les refs upstream — le fallback vers
+		// le miroir se fait au pull (voir pullImagesWithFallback dans Install).
+		if cfg.Registry != "" && cfg.RegistryMode != "fallback" && cfg.RegistryMode != "upstream" {
+			composeContent = rewriteImages(composeContent, cfg.Registry)
+		}
+		// Reverse proxy : en mode npm/standalone, Traefik ne voit que du HTTP,
+		// donc les routers des apps doivent écouter sur l'entrypoint "web"
+		// (les composes du store sont écrits pour le mode traefik : websecure+tls).
+		composeContent = rewriteTraefikEntrypoints(composeContent, cfg.ProxyMode)
+	}
+
+	if err := os.WriteFile(filepath.Join(composeDir, "compose.yml"), []byte(composeContent), 0644); err != nil {
 		return err
 	}
 
@@ -502,6 +619,123 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 	}
 
 	return nil
+}
+
+// rewriteImages préfixe les images upstream d'un compose par le registre miroir.
+// Ex: "image: postgres:16-alpine" → "image: <registry>/postgres:16-alpine".
+// Le miroir stocke chaque image sous son chemin d'origine (voir le peuplement skopeo).
+// N'est PAS réécrit :
+//   - les images construites localement (préfixe "caleope-", absentes du miroir) ;
+//   - les images déjà préfixées par le registre (idempotent) ;
+//   - les valeurs de template non résolues.
+func rewriteImages(compose, registry string) string {
+	reg := strings.TrimRight(registry, "/")
+	if reg == "" {
+		return compose
+	}
+	lines := strings.Split(compose, "\n")
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "image:") {
+			continue
+		}
+		ref := strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
+		ref = strings.Trim(ref, "\"'")
+		if ref == "" ||
+			strings.HasPrefix(ref, "caleope-") || // build local
+			strings.HasPrefix(ref, reg+"/") || // déjà préfixé
+			strings.Contains(ref, "{{") { // template non résolu
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		lines[idx] = indent + "image: " + reg + "/" + ref
+	}
+	return strings.Join(lines, "\n")
+}
+
+// rewriteTraefikEntrypoints adapte les labels Traefik des routers d'app au mode
+// reverse proxy de la plateforme. Les composes du store sont écrits pour le mode
+// "traefik" natif (routers sur `websecure` + `tls=true`, Let's Encrypt géré par
+// Traefik). En mode "npm" (ou "standalone"), le TLS est géré en amont (NPM) et
+// Traefik ne reçoit que du HTTP sur l'entrypoint `web` : sans réécriture, les
+// routers restent sur `websecure` et NPM→Traefik:80 ne matche aucun router → 404.
+//
+// En mode npm/standalone on : (1) bascule `entrypoints=websecure` → `web`,
+// (2) supprime les labels TLS des routers (`tls=true`, `tls.certresolver`).
+// En mode traefik : no-op (les labels d'origine sont corrects).
+func rewriteTraefikEntrypoints(compose, proxyMode string) string {
+	// Cohérent avec la génération du router caleope-ui : seul le mode "traefik"
+	// natif garde websecure+tls ; tout le reste (npm, standalone, non configuré)
+	// route en HTTP sur `web`.
+	if proxyMode == "traefik" {
+		return compose
+	}
+	lines := strings.Split(compose, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		l := strings.ToLower(line)
+		if strings.Contains(l, "traefik.http.routers.") &&
+			(strings.Contains(l, ".tls=true") || strings.Contains(l, ".tls.certresolver")) {
+			continue // retirer les labels TLS des routers
+		}
+		if strings.Contains(l, "traefik.http.routers.") && strings.Contains(l, ".entrypoints=websecure") {
+			line = strings.Replace(line, "entrypoints=websecure", "entrypoints=web", 1)
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// composeImageRefs extrait les refs d'images concrètes d'un compose.yml résolu
+// (ignore templates {{...}}, variables ${...} et images locales caleope-*).
+func composeImageRefs(composePath string) []string {
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "image:") {
+			continue
+		}
+		ref := strings.Trim(strings.TrimSpace(strings.TrimPrefix(t, "image:")), "\"'")
+		if ref == "" || strings.Contains(ref, "{{") || strings.Contains(ref, "$") || strings.HasPrefix(ref, "caleope-") {
+			continue
+		}
+		if !seen[ref] {
+			seen[ref] = true
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// pullImagesWithFallback (mode registre "fallback") : pull upstream d'abord, et
+// si ça échoue, bascule sur le miroir (<registry>/<ref>) puis retague vers la ref
+// upstream pour que `docker compose up` trouve l'image. No-op hors mode fallback.
+func (i *Installer) pullImagesWithFallback(composeDir string) {
+	cfg, err := i.rt.GetConfig()
+	if err != nil || cfg.RegistryMode != "fallback" || cfg.Registry == "" {
+		return
+	}
+	reg := strings.TrimRight(cfg.Registry, "/")
+	for _, ref := range composeImageRefs(filepath.Join(composeDir, "compose.yml")) {
+		if i.docker.ImageExists(ref) {
+			continue
+		}
+		if err := i.docker.PullImage(ref); err == nil {
+			continue // upstream OK
+		}
+		mref := reg + "/" + ref
+		fmt.Printf("     ↻ %s indisponible en upstream → bascule miroir\n", ref)
+		if err := i.docker.PullImage(mref); err == nil {
+			_ = i.docker.TagImage(mref, ref)
+		} else {
+			fmt.Printf("     ⚠ %s introuvable (upstream ET miroir)\n", ref)
+		}
+	}
 }
 
 // writeGPUOverride génère un compose.override.yml pour le passthrough GPU.

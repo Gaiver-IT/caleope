@@ -11,14 +11,18 @@
 //   - app-config/<app>/secrets.enc : version chiffrée de secrets.env (pour `caleope secrets show`)
 //   - app-config/<app>/secrets.env : version plaintext pour Docker (inchangée)
 //
-// KDF : SHA-256 × 100 000 iterations + salt 16 octets (stdlib uniquement)
-// Chiffrement : AES-256-GCM — nonce(12B) || ciphertext+tag
+// KDF : PBKDF2-HMAC-SHA256, 600 000 itérations + salt 16 octets (RFC 8018,
+// recommandation OWASP). Format master.enc versionné : "v2:hex(salt):hex(encDEK)".
+// Les anciens fichiers "hex(salt):hex(encDEK)" (KDF SHA-256 itéré, v1) restent
+// déchiffrables et sont migrés vers v2 automatiquement au premier déverrouillage.
+// Chiffrement : AES-256-GCM — nonce(12B) || ciphertext+tag — stdlib uniquement.
 
 package secrets
 
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,11 +35,25 @@ import (
 
 const masterFile = "core/daemon/master.enc"
 
+// Paramètres KDF v2 (PBKDF2-HMAC-SHA256).
+const (
+	kdfV2Prefix = "v2"
+	pbkdf2Iters = 600000 // OWASP 2023 pour PBKDF2-HMAC-SHA256
+)
+
 // ─────────────────────────────────────────────
 // KDF — dériver une clé AES-256 depuis un mot de passe
 // ─────────────────────────────────────────────
 
-// deriveKey dérive une clé de 32 octets depuis password + salt via SHA-256 itéré.
+// deriveKeyV2 dérive une clé AES-256 (32 octets) via PBKDF2-HMAC-SHA256.
+// KDF standard (RFC 8018) — remplace l'ancien deriveKey maison.
+func deriveKeyV2(password string, salt []byte) ([]byte, error) {
+	return pbkdf2.Key(sha256.New, password, salt, pbkdf2Iters, 32)
+}
+
+// deriveKey (LEGACY v1) — SHA-256 itéré maison. Conservé uniquement pour
+// déchiffrer les master.enc créés avant la migration vers PBKDF2 (deriveKeyV2).
+// Ne plus utiliser pour de nouveaux fichiers.
 func deriveKey(password string, salt []byte) []byte {
 	h := sha256.New()
 	h.Write([]byte(password))
@@ -114,8 +132,11 @@ func Setup(baseDir, password string) ([]byte, error) {
 		return nil, fmt.Errorf("génération salt: %w", err)
 	}
 
-	// Dériver le KEK depuis le mot de passe
-	kek := deriveKey(password, salt)
+	// Dériver le KEK depuis le mot de passe (PBKDF2)
+	kek, err := deriveKeyV2(password, salt)
+	if err != nil {
+		return nil, fmt.Errorf("dérivation clé: %w", err)
+	}
 
 	// Chiffrer le DEK avec le KEK
 	encDEK, err := encrypt(kek, dek)
@@ -123,17 +144,25 @@ func Setup(baseDir, password string) ([]byte, error) {
 		return nil, fmt.Errorf("chiffrement DEK: %w", err)
 	}
 
-	// Écrire master.enc : hex(salt):hex(encDEK)
-	masterPath := filepath.Join(baseDir, masterFile)
-	if err := os.MkdirAll(filepath.Dir(masterPath), 0700); err != nil {
+	// Écrire master.enc au format v2
+	if err := writeMaster(baseDir, salt, encDEK); err != nil {
 		return nil, err
-	}
-	content := hex.EncodeToString(salt) + ":" + hex.EncodeToString(encDEK)
-	if err := os.WriteFile(masterPath, []byte(content), 0600); err != nil {
-		return nil, fmt.Errorf("écriture master.enc: %w", err)
 	}
 
 	return dek, nil
+}
+
+// writeMaster écrit master.enc au format v2 : "v2:hex(salt):hex(encDEK)".
+func writeMaster(baseDir string, salt, encDEK []byte) error {
+	masterPath := filepath.Join(baseDir, masterFile)
+	if err := os.MkdirAll(filepath.Dir(masterPath), 0700); err != nil {
+		return err
+	}
+	content := kdfV2Prefix + ":" + hex.EncodeToString(salt) + ":" + hex.EncodeToString(encDEK)
+	if err := os.WriteFile(masterPath, []byte(content), 0600); err != nil {
+		return fmt.Errorf("écriture master.enc: %w", err)
+	}
+	return nil
 }
 
 // ─────────────────────────────────────────────
@@ -148,25 +177,57 @@ func UnlockDEK(baseDir, password string) ([]byte, error) {
 		return nil, fmt.Errorf("master.enc introuvable (chiffrement non initialisé): %w", err)
 	}
 
-	parts := strings.SplitN(strings.TrimSpace(string(data)), ":", 2)
-	if len(parts) != 2 {
+	// Format versionné : "v2:hex(salt):hex(encDEK)" (3 parts) ou legacy
+	// "hex(salt):hex(encDEK)" (2 parts, KDF v1).
+	parts := strings.Split(strings.TrimSpace(string(data)), ":")
+	var version, saltHex, encHex string
+	switch len(parts) {
+	case 3:
+		version, saltHex, encHex = parts[0], parts[1], parts[2]
+	case 2:
+		version, saltHex, encHex = "v1", parts[0], parts[1]
+	default:
 		return nil, fmt.Errorf("master.enc corrompu")
 	}
 
-	salt, err := hex.DecodeString(parts[0])
+	salt, err := hex.DecodeString(saltHex)
 	if err != nil {
 		return nil, fmt.Errorf("master.enc: salt invalide: %w", err)
 	}
-
-	encDEK, err := hex.DecodeString(parts[1])
+	encDEK, err := hex.DecodeString(encHex)
 	if err != nil {
 		return nil, fmt.Errorf("master.enc: DEK invalide: %w", err)
 	}
 
-	kek := deriveKey(password, salt)
+	var kek []byte
+	switch version {
+	case kdfV2Prefix:
+		kek, err = deriveKeyV2(password, salt)
+		if err != nil {
+			return nil, fmt.Errorf("dérivation clé: %w", err)
+		}
+	case "v1":
+		kek = deriveKey(password, salt)
+	default:
+		return nil, fmt.Errorf("master.enc: version KDF inconnue %q", version)
+	}
+
 	dek, err := decrypt(kek, encDEK)
 	if err != nil {
 		return nil, fmt.Errorf("mot de passe incorrect ou master.enc corrompu")
+	}
+
+	// Migration opportuniste v1 → v2 : re-chiffrer le DEK avec PBKDF2 et un
+	// nouveau salt. Best-effort — un échec d'écriture ne bloque pas le unlock.
+	if version == "v1" {
+		newSalt := make([]byte, 16)
+		if _, e := io.ReadFull(rand.Reader, newSalt); e == nil {
+			if newKek, e := deriveKeyV2(password, newSalt); e == nil {
+				if enc, e := encrypt(newKek, dek); e == nil {
+					_ = writeMaster(baseDir, newSalt, enc)
+				}
+			}
+		}
 	}
 
 	return dek, nil

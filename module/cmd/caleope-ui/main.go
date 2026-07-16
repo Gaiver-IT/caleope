@@ -47,6 +47,7 @@ var webFiles embed.FS
 type sessions struct {
 	mu   sync.RWMutex
 	data map[string]time.Time
+	path string // fichier de persistance (vide = pas de persistance)
 }
 
 // vwSessionCache : cookie VW_ADMIN mis en cache pour éviter le rate-limit (Max-Age=1200s)
@@ -116,7 +117,11 @@ func ghostAdminJWT(apiKey string) (string, error) {
 	return msg + "." + sig, nil
 }
 
-func newSessions() *sessions { return &sessions{data: make(map[string]time.Time)} }
+func newSessions(path string) *sessions {
+	s := &sessions{data: make(map[string]time.Time), path: path}
+	s.load()
+	return s
+}
 
 func (s *sessions) create() string {
 	b := make([]byte, 32)
@@ -125,6 +130,7 @@ func (s *sessions) create() string {
 	s.mu.Lock()
 	s.data[tok] = time.Now().Add(24 * time.Hour)
 	s.mu.Unlock()
+	s.save()
 	return tok
 }
 
@@ -139,6 +145,54 @@ func (s *sessions) delete(tok string) {
 	s.mu.Lock()
 	delete(s.data, tok)
 	s.mu.Unlock()
+	s.save()
+}
+
+// load charge les sessions persistées (best-effort, fail-safe : en cas d'erreur
+// on démarre avec un store vide — équivalent au comportement sans persistance).
+func (s *sessions) load() {
+	if s.path == "" {
+		return
+	}
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return
+	}
+	var m map[string]int64 // token → expiry (unix)
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return
+	}
+	now := time.Now()
+	s.mu.Lock()
+	for tok, exp := range m {
+		if t := time.Unix(exp, 0); t.After(now) {
+			s.data[tok] = t // ignorer les sessions expirées
+		}
+	}
+	s.mu.Unlock()
+}
+
+// save persiste les sessions non expirées (best-effort ; un échec d'écriture ne
+// bloque jamais l'authentification, qui reste en mémoire).
+func (s *sessions) save() {
+	if s.path == "" {
+		return
+	}
+	now := time.Now()
+	s.mu.RLock()
+	m := make(map[string]int64, len(s.data))
+	for tok, exp := range s.data {
+		if exp.After(now) {
+			m[tok] = exp.Unix()
+		}
+	}
+	s.mu.RUnlock()
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(s.path), 0o700)
+	_ = os.WriteFile(s.path, raw, 0o600)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -176,6 +230,71 @@ func readEnvKey(path, key string) string {
 	return ""
 }
 
+// ── Disques de données (setup 1er démarrage) ────────────────────────────────
+
+// emptyDiskInfo décrit un disque candidat au stockage de données.
+type emptyDiskInfo struct {
+	Path  string `json:"path"`  // ex: /dev/sdb
+	Size  int64  `json:"size"`  // octets
+	Model string `json:"model"` // ex: WDC WD40EFRX
+	Rota  bool   `json:"rota"`  // true = disque rotatif (HDD)
+}
+
+// listEmptyDisks liste les disques ENTIERS et VIERGES : type "disk", aucune
+// partition, aucun système de fichiers, > 2 Go. Le disque système porte des
+// partitions → jamais listé. Base du choix « utiliser ce disque pour les
+// données » du setup web.
+// ⚠️ Sans NAME dans les colonnes, lsblk -J rend une liste PLATE (pas d'arbre
+// children) — on identifie donc les disques partitionnés via PKNAME : toute
+// ligne (partition/LVM) désigne son parent par PKNAME ; un disque référencé
+// comme parent n'est pas vierge. (Bug attrapé en test : /dev/sda système
+// listé comme éligible avec l'ancien filtre "children".)
+func listEmptyDisks() []emptyDiskInfo {
+	out, err := exec.Command("lsblk", "-J", "-b", "-o", "PATH,PKNAME,TYPE,SIZE,FSTYPE,MODEL,ROTA").Output()
+	if err != nil {
+		return nil
+	}
+	var tree struct {
+		Blockdevices []struct {
+			Path   string  `json:"path"`
+			Pkname *string `json:"pkname"`
+			Type   string  `json:"type"`
+			Size   int64   `json:"size"`
+			Fstype *string `json:"fstype"`
+			Model  *string `json:"model"`
+			Rota   bool    `json:"rota"`
+		} `json:"blockdevices"`
+	}
+	if json.Unmarshal(out, &tree) != nil {
+		return nil
+	}
+	// Noms noyau (ex: "sda") référencés comme parent par au moins une ligne.
+	hasChildren := map[string]bool{}
+	for _, d := range tree.Blockdevices {
+		if d.Pkname != nil && *d.Pkname != "" {
+			hasChildren[*d.Pkname] = true
+		}
+	}
+	disks := []emptyDiskInfo{}
+	for _, d := range tree.Blockdevices {
+		if d.Type != "disk" || d.Size < 2<<30 {
+			continue
+		}
+		if hasChildren[strings.TrimPrefix(d.Path, "/dev/")] {
+			continue // porte des partitions (disque système ou déjà utilisé)
+		}
+		if d.Fstype != nil && *d.Fstype != "" {
+			continue // déjà formaté
+		}
+		model := ""
+		if d.Model != nil {
+			model = strings.TrimSpace(*d.Model)
+		}
+		disks = append(disks, emptyDiskInfo{Path: d.Path, Size: d.Size, Model: model, Rota: d.Rota})
+	}
+	return disks
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
@@ -201,7 +320,7 @@ func main() {
 	}
 	var uiPasswordMu sync.RWMutex
 
-	store := newSessions()
+	store := newSessions(filepath.Join(*baseDir, "data", "ui", "sessions.json"))
 
 	// Répertoire pour le logo custom
 	logoDir  := filepath.Join(*baseDir, "data", "ui")
@@ -468,6 +587,9 @@ func main() {
 		// Changedetection.io — sans auth par défaut
 		"changedetection": {tokenKey: "CHANGEDETECTION_API_TOKEN", authScheme: "X-Api-Key",
 			containerName: "changedetection", containerPort: 5000},
+
+		// Gaiverland Radio — playlist engine FastAPI (community app)
+		"gaiverland-radio": {containerName: "gaiverland-playlist", containerPort: 8080},
 
 		// Gotify — notifications push, client token dans X-Gotify-Key
 		"gotify": {tokenKey: "GOTIFY_CLIENT_TOKEN", authScheme: "X-Gotify-Key",
@@ -1271,8 +1393,138 @@ func main() {
 	}))
 
 	// SPA fallback
+	// ── Premier démarrage (ISO) : setup web SANS login, accessible en IP directe ──
+	// À la sortie de l'install de base (boot 1), le marqueur .firstboot-needed existe.
+	// caleope-UI (root) sert alors une page de configuration à la racine et lance
+	// le finalize (non-interactif) — alternative web au wizard console.
+	firstbootMarker := filepath.Join(*baseDir, ".firstboot-needed")
+	firstbootActive := func() bool { _, err := os.Stat(firstbootMarker); return err == nil }
+
+	mux.HandleFunc("/setup/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"firstboot": firstbootActive()})
+	})
+
+	// Disques de données éligibles au 1er démarrage : disques ENTIERS et VIERGES
+	// (aucune partition, aucun système de fichiers) — le disque système, qui
+	// porte des partitions, est exclu de fait. Servi sans login pendant le
+	// firstboot uniquement (comme /setup).
+	mux.HandleFunc("/setup/disks", func(w http.ResponseWriter, r *http.Request) {
+		if !firstbootActive() {
+			jsonErr(w, http.StatusForbidden, "configuration déjà effectuée")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"disks": listEmptyDisks()})
+	})
+
+	mux.HandleFunc("/setup", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		if !firstbootActive() {
+			jsonErr(w, http.StatusForbidden, "configuration déjà effectuée")
+			return
+		}
+		var b struct {
+			Domain          string   `json:"domain"`
+			ProxyMode       string   `json:"proxy_mode"`
+			Email           string   `json:"email"`
+			Channel         string   `json:"channel"`
+			UIPassword      string   `json:"ui_password"`
+			SecretsPassword string   `json:"secrets_password"`
+			DataDisks       []string `json:"data_disks"`
+			DataMode        string   `json:"data_mode"` // separate | raid1
+			DataFS          string   `json:"data_fs"`   // ext4 | btrfs | xfs
+		}
+		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+			jsonErr(w, http.StatusBadRequest, "JSON invalide")
+			return
+		}
+		if b.Domain == "" || b.ProxyMode == "" || b.UIPassword == "" {
+			jsonErr(w, http.StatusBadRequest, "domaine, mode proxy et mot de passe UI requis")
+			return
+		}
+		// Stockage : valeurs sur liste blanche (finissent dans un script root).
+		if b.DataMode != "raid1" {
+			b.DataMode = "separate"
+		}
+		switch b.DataFS {
+		case "ext4", "btrfs", "xfs":
+		default:
+			b.DataFS = "ext4"
+		}
+		// Canal figé par l'ISO au build (pas un choix utilisateur) : lu depuis le
+		// pack-info.json du payload, avec repli "stable".
+		if b.Channel == "" {
+			b.Channel = "stable"
+			if data, err := os.ReadFile("/opt/caleope-install/pack-info.json"); err == nil {
+				var pi struct {
+					Channel string `json:"channel"`
+				}
+				if json.Unmarshal(data, &pi) == nil && pi.Channel != "" {
+					b.Channel = pi.Channel
+				}
+			}
+		}
+		// Lancer le finalize DÉTACHÉ via systemd-run. CRITIQUE : install.sh
+		// --iso-finalize redémarre caleope-ui.service ; s'il tournait comme enfant
+		// de caleope-ui, le restart le tuerait (kill du cgroup) → finalize avortée,
+		// apps jamais déployées, UI inaccessible. systemd-run = cgroup indépendant
+		// (unité caleope-finalize) qui survit au redémarrage de caleope-ui.
+		// Disques de données : STRICTEMENT restreints à la liste des disques
+		// vierges détectés (ces chemins finissent dans un script root — aucune
+		// valeur libre de l'utilisateur ne doit passer).
+		var dataDisks []string
+		if len(b.DataDisks) > 0 {
+			eligible := map[string]bool{}
+			for _, d := range listEmptyDisks() {
+				eligible[d.Path] = true
+			}
+			for _, p := range b.DataDisks {
+				if eligible[p] {
+					dataDisks = append(dataDisks, p)
+				}
+			}
+		}
+		// RAID1 exige au moins 2 disques → sinon on retombe sur « séparés ».
+		if b.DataMode == "raid1" && len(dataDisks) < 2 {
+			b.DataMode = "separate"
+		}
+		go func() {
+			args := []string{
+				"--unit=caleope-finalize", "--collect",
+				"--setenv=CALEOPE_DOMAIN=" + b.Domain,
+				"--setenv=CALEOPE_PROXY_MODE=" + b.ProxyMode,
+				"--setenv=CALEOPE_CHANNEL=" + b.Channel,
+				"--setenv=CALEOPE_EMAIL=" + b.Email,
+				"--setenv=CALEOPE_UI_PASSWORD=" + b.UIPassword,
+				"--setenv=CALEOPE_SECRETS_PASSWORD=" + b.SecretsPassword,
+				"--setenv=CALEOPE_DATA_DISKS=" + strings.Join(dataDisks, ","),
+				"--setenv=CALEOPE_DATA_MODE=" + b.DataMode,
+				"--setenv=CALEOPE_DATA_FS=" + b.DataFS,
+				"/bin/bash", filepath.Join(*baseDir, "bin", "install.sh"), "--iso-finalize",
+			}
+			cmd := exec.Command("systemd-run", args...)
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+			_ = cmd.Run()
+		}()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
+		// Premier démarrage → servir la page de configuration (sans login).
+		if firstbootActive() && (path == "" || path == "index.html") {
+			if f, err := webFiles.Open("web/setup.html"); err == nil {
+				defer f.Close()
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = io.Copy(w, f)
+				return
+			}
+		}
 		if path == "" {
 			path = "index.html"
 		}

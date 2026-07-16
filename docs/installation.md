@@ -116,7 +116,7 @@ sudo bash install.sh --offline /media/usb/caleope-bundle-2026-06-22
 
 > Docker doit être installé avant de lancer l'installation offline.
 
-→ [Documentation complète du mode submarine](/submarine)
+→ [Documentation complète du mode submarine](/docs/submarine)
 
 ---
 

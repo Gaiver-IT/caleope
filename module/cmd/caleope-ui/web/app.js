@@ -882,6 +882,10 @@ function appCard(app) {
             <i class="ti ti-device-floppy"></i>
             <span class="btn-label">BACKUP</span>
           </button>
+          <button class="action-btn" onclick="exportApp('${app.id}')" title="Exporter — archive auto-suffisante (données + définition + images), restaurable hors-ligne même sans le store">
+            <i class="ti ti-package-export"></i>
+            <span class="btn-label">EXPORT</span>
+          </button>
           ${HARDCODED_PARAMS[app.id] ? `
           <button class="action-btn" onclick="openReconfigureModal('${app.id}')" title="Reconfigurer">
             <i class="ti ti-settings"></i>
@@ -896,10 +900,6 @@ function appCard(app) {
             <i class="ti ti-notes"></i>
             <span class="btn-label">NOTES</span>
           </button>
-          <button class="action-btn danger" onclick="removeApp('${app.id}')" title="Supprimer">
-            <i class="ti ti-trash"></i>
-            <span class="btn-label">SUPPRIMER</span>
-          </button>
           ${APP_PANELS[app.id] && isRunning ? `
           <button class="action-btn" onclick="goSection('${APP_PANELS[app.id].panels[0]?.id || 'panel-'+app.id}')" title="Ouvrir le panel intégré">
             <i class="ti ti-layout-sidebar-right"></i>
@@ -912,6 +912,10 @@ function appCard(app) {
               <span class="btn-label">${pinned ? 'ÉPINGLÉ' : 'ÉPINGLER'}</span>
             </button>`;
           })()}
+          <button class="action-btn danger" onclick="removeApp('${app.id}')" title="Supprimer (action irréversible)">
+            <i class="ti ti-trash"></i>
+            <span class="btn-label">SUPPRIMER</span>
+          </button>
         </div>
         ${domain ? `<a class="app-link" href="${domain}" target="_blank" rel="noopener"><i class="ti ti-external-link" style="font-size:10px"></i>OUVRIR</a>` : ''}
       </div>
@@ -1119,6 +1123,46 @@ async function triggerAppBackup(id) {
   }
 }
 
+// Export auto-suffisant : archive données + définition + images, restaurable
+// hors-ligne (caleope import) même si l'app disparaît du store.
+async function exportApp(id) {
+  if (!confirm(`Exporter ${id} ?\n\nCrée une archive AUTO-SUFFISANTE (données + définition + images Docker) restaurable des mois plus tard, même hors-ligne ou si l'app quitte le store.\n\nPeut être long (docker save des images).`)) return;
+  notify(`Export de ${id} en cours (images incluses)...`, 'info');
+  const r = await api.post(`/api/v1/apps/${id}/export`);
+  if (r && r.success !== false) {
+    const p = (r.data && r.data.path) || r.path || '';
+    notify(`${id} exporté`, 'ok');
+    if (p) alert(`✅ Archive créée sur le serveur :\n\n${p}\n\nRécupère-la en SSH :\n  scp <user>@<serveur>:${p} .\n\nRestauration : caleope import <archive> [--legacy|--migrate]`);
+  } else {
+    notify(r?.error || 'Erreur export', 'err');
+  }
+}
+
+// Import : recrée une app depuis une archive d'export (chemin serveur).
+async function importApp() {
+  const path = (document.getElementById('import-path').value || '').trim();
+  const mode = (document.getElementById('import-mode') || {}).value || 'legacy';
+  const msg = document.getElementById('import-msg');
+  if (!path) { if (msg) { msg.style.color = 'var(--err)'; msg.textContent = "Indique le chemin de l'archive."; } return; }
+  if (!confirm(`Importer l'app depuis :\n${path}\n(mode ${mode}) ?\n\nL'app sera recréée (docker load + démarrage).`)) return;
+  if (msg) { msg.style.color = 'var(--text3)'; msg.textContent = 'Import en cours (chargement des images + démarrage)…'; }
+  try {
+    const r = await fetch('/api/v1/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ archive: path, mode }),
+    });
+    if (r.ok) {
+      if (msg) { msg.style.color = 'var(--ok)'; msg.textContent = '✓ App importée et démarrée.'; }
+      setTimeout(loadApps, 1500);
+    } else {
+      const e = await r.json().catch(() => ({}));
+      if (msg) { msg.style.color = 'var(--err)'; msg.textContent = (e.error || e.data?.error || 'Erreur import'); }
+    }
+  } catch (e) {
+    if (msg) { msg.style.color = 'var(--err)'; msg.textContent = 'Erreur réseau'; }
+  }
+}
+
 async function openReconfigureModal(appId) {
   S.installTarget = appId;
   const app = S.apps.find(a => a.id === appId);
@@ -1147,14 +1191,21 @@ async function openInstallModal(appId) {
   S.installTarget = appId;
   const info = S.catalog.find(a => a.id === appId) || {};
 
-  // Charger les params depuis le store (endpoint individuel)
+  // Charger les params depuis le store (endpoint individuel) PUIS fusionner avec
+  // les HARDCODED_PARAMS de l'UI. Sans ça, une app sans params.json (ex: immich)
+  // renvoyait une liste vide et le champ de stockage (type 'location') n'apparaissait
+  // jamais. On garde les params du store et on ajoute ceux hardcodés absents (par id).
+  let storeParams = [];
   try {
     const paramsData = await api.get(`/api/v1/store/${appId}`);
-    S.installParams = Array.isArray(paramsData?.data) ? paramsData.data : [];
+    storeParams = Array.isArray(paramsData?.data) ? paramsData.data
+      : (info.params || info.parameters || info.install_params || []);
   } catch (_) {
-    S.installParams = info.params || info.parameters || info.install_params
-      || HARDCODED_PARAMS[appId] || [];
+    storeParams = info.params || info.parameters || info.install_params || [];
   }
+  const hardcoded = HARDCODED_PARAMS[appId] || [];
+  const seenIds = new Set(storeParams.map(p => p.id));
+  S.installParams = [...storeParams, ...hardcoded.filter(p => !seenIds.has(p.id))];
 
   // Précharger les emplacements pour le type 'location'
   if (S.installParams.some(p => p.type === 'location') && S.locations.length === 0) {
@@ -2569,6 +2620,7 @@ async function loadSettings() {
   const c = document.getElementById('content-settings');
   if (!c) return;
   c.innerHTML = `
+    <div class="settings-group-label">// SYSTÈME</div>
     <div class="settings-card">
       <div class="settings-title">SERVEUR</div>
       <div class="setting-row"><span>DOMAINE</span><span class="setting-val">${data?.domain || '—'}</span></div>
@@ -2588,28 +2640,20 @@ async function loadSettings() {
       </div>
       <div id="upgrade-log" style="display:none;margin-top:10px;background:var(--bg1);border:1px solid var(--border1);padding:8px 10px;font-size:10px;font-family:monospace;color:var(--text2);max-height:160px;overflow-y:auto;line-height:1.7"></div>
     </div>
-    <div class="settings-card">
-      <div class="settings-title">LOGO DE L'INTERFACE</div>
-      <div style="display:flex;align-items:center;gap:16px">
-        <div style="width:56px;height:56px;border:1px solid var(--border2);background:var(--bg3);flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center">
-          <img src="/ui/logo?${Date.now()}" class="logo-img" style="width:100%;height:100%;object-fit:cover" onerror="this.style.opacity=0" alt="">
-        </div>
-        <div style="flex:1">
-          <div style="font-size:10px;color:var(--text2);margin-bottom:8px">PNG, SVG, JPG ou WebP — max 5 Mo</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            <label class="btn" style="cursor:pointer;flex:0">
-              <i class="ti ti-upload"></i>IMPORTER UN LOGO
-              <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" style="display:none" onchange="uploadLogo(this)">
-            </label>
-            <button class="btn-sm danger" onclick="resetLogo()"><i class="ti ti-trash"></i>RÉINITIALISER</button>
-          </div>
+    <div class="settings-card" id="maintenance-card">
+      <div class="settings-title">MAINTENANCE</div>
+      <div id="maintenance-content">
+        <div style="display:flex;align-items:center;gap:8px;color:var(--text3);font-size:9px">
+          <span class="spinner"></span> Analyse en cours...
         </div>
       </div>
     </div>
-    <div class="settings-card" id="license-settings-card">
-      <div class="settings-title">LICENCE</div>
-      <div id="license-settings-content"><div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement…</div></div>
+    <div class="settings-card">
+      <div class="settings-title">EXPORT SYSTÈME</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:10px">Télécharger un snapshot JSON de l'état courant (apps, tâches, événements)</div>
+      <button id="snapshot-btn" class="btn" onclick="exportSystemSnapshot()"><i class="ti ti-download"></i> SNAPSHOT</button>
     </div>
+    <div class="settings-group-label">// COMPTE & SÉCURITÉ</div>
     <div class="settings-card">
       <div class="settings-title">MOT DE PASSE</div>
       <div style="display:flex;flex-direction:column;gap:8px">
@@ -2625,6 +2669,103 @@ async function loadSettings() {
       <div class="settings-title">DOUBLE AUTHENTIFICATION (2FA TOTP)</div>
       <div id="totp-settings-content"><div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement…</div></div>
     </div>
+    <div class="settings-card">
+      <div class="settings-title">SSO / OIDC</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
+        Configurez un provider OpenID Connect (Authentik, Keycloak, etc.) pour ajouter un bouton de connexion SSO sur l'écran de login.
+        <br>Pour Authentik, l'issuer est au format <code style="font-size:8px;background:var(--bg3);padding:1px 4px;border-radius:3px">https://authentik.domain.tld/application/o/slug/</code>
+      </div>
+      <div id="oidc-settings-form" style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+          <span class="spinner" id="oidc-loading" style="display:none"></span>
+          <span id="oidc-status-badge"></span>
+        </div>
+        <input type="text" id="oidc-name" placeholder="Nom du bouton (ex: Connexion Authentik)" class="param-input">
+        <input type="text" id="oidc-issuer" placeholder="OIDC Issuer URL" class="param-input">
+        <input type="text" id="oidc-client-id" placeholder="Client ID" class="param-input">
+        <input type="password" id="oidc-client-secret" placeholder="Client Secret" class="param-input">
+        <input type="text" id="oidc-redirect-uri" placeholder="Redirect URI (optionnel — dérivé automatiquement)" class="param-input">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+          <button class="btn" onclick="saveOidcSettings()"><i class="ti ti-device-floppy"></i> SAUVEGARDER</button>
+          <button class="btn-sm danger" onclick="clearOidcSettings()"><i class="ti ti-trash"></i> DÉSACTIVER SSO</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">SESSION</div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
+        <button class="btn btn-sm danger" onclick="logout()"><i class="ti ti-logout"></i>SE DÉCONNECTER</button>
+      </div>
+    </div>
+    <div class="settings-group-label">// LICENCE & CERTIFICATS</div>
+    <div class="settings-card" id="license-settings-card">
+      <div class="settings-title">LICENCE</div>
+      <div id="license-settings-content"><div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement…</div></div>
+    </div>
+    <div class="settings-card" id="settings-certs-card">
+      <div class="settings-title">CERTIFICATS SSL <span style="font-size:8px;color:var(--text3);font-weight:400;letter-spacing:0">Chargement…</span></div>
+    </div>
+    <div class="settings-group-label">// STORE & IMAGES</div>
+    <div class="settings-card">
+      <div class="settings-title">DÉPÔTS DE MISE À JOUR</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
+        Dépôts git des définitions d'apps du store. Le dépôt officiel ne peut pas être retiré.
+      </div>
+      <div id="repos-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+        <div style="font-size:9px;color:var(--text3)"><span class="spinner"></span> Chargement...</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <input type="text" id="repo-name" placeholder="Nom" class="param-input" style="flex:0 0 110px">
+        <input type="text" id="repo-url" placeholder="URL git (https://github.com/...)" class="param-input" style="flex:1;min-width:160px">
+        <input type="text" id="repo-branch" placeholder="Branche (main)" class="param-input" style="flex:0 0 110px">
+        <button class="btn" onclick="addRepo()"><i class="ti ti-plus"></i> AJOUTER</button>
+      </div>
+      <div id="repos-msg" style="font-size:9px;color:var(--text3);min-height:12px;margin-top:6px"></div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">REGISTRE D'IMAGES</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
+        Registre miroir depuis lequel les apps récupèrent leurs images Docker (au lieu de Docker Hub). Laisser vide = images d'origine.
+      </div>
+      <div id="registry-settings-form" style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:2px">
+          <button class="btn-sm" onclick="setRegistryPreset('caleope-registry.gaiver-it.fr')">Caleope</button>
+          <button class="btn-sm" onclick="setRegistryPreset('ghcr.io')">GHCR</button>
+          <button class="btn-sm" onclick="setRegistryPreset('lscr.io')">LSCR</button>
+          <button class="btn-sm" onclick="setRegistryPreset('registry-1.docker.io')">Docker Hub</button>
+          <button class="btn-sm danger" onclick="setRegistryPreset('')">Aucun</button>
+        </div>
+        <select id="registry-mode" class="param-input" title="Comment le miroir est utilisé">
+          <option value="fallback">Fallback — upstream d'abord, miroir en secours (recommandé)</option>
+          <option value="mirror">Confiance Caleope — tout depuis le miroir</option>
+          <option value="upstream">Upstream seul — registres d'origine</option>
+        </select>
+        <input type="text" id="registry-url" placeholder="URL du registre (ex: caleope-registry.gaiver-it.fr)" class="param-input">
+        <input type="text" id="registry-user" placeholder="Utilisateur (optionnel)" class="param-input" autocomplete="off">
+        <input type="password" id="registry-pass" placeholder="Mot de passe (vide = garder l'actuel)" class="param-input" autocomplete="new-password">
+        <div id="registry-msg" style="font-size:9px;color:var(--text3);min-height:12px"></div>
+        <div style="display:flex;gap:8px;margin-top:2px">
+          <button class="btn" onclick="saveRegistrySettings()"><i class="ti ti-device-floppy"></i> ENREGISTRER</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-title">IMPORTER UNE APP</div>
+      <div style="font-size:9px;color:var(--text3);margin-bottom:8px">
+        Recrée une app depuis une archive d'export (données + définition + images), même hors-ligne. Indique le chemin de l'archive <b>sur le serveur</b>.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <input type="text" id="import-path" placeholder="/opt/gaiver-it/caleope/exports/caleope-export-….tar.gz" class="param-input">
+        <select id="import-mode" class="param-input">
+          <option value="legacy">Legacy — à l'identique (recommandé)</option>
+          <option value="migrate">Migrate — standard courant si dispo, sinon legacy</option>
+        </select>
+        <div id="import-msg" style="font-size:9px;color:var(--text3);min-height:12px"></div>
+        <button class="btn" onclick="importApp()"><i class="ti ti-package-import"></i> IMPORTER</button>
+      </div>
+    </div>
+    <div class="settings-group-label">// INTERFACE</div>
     <div class="settings-card">
       <div class="settings-title">APPARENCE</div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -2657,13 +2798,23 @@ async function loadSettings() {
         <button class="btn-sm" onclick="resetTheme()" style="font-size:9px;color:var(--text3)">DÉFAUT</button>
       </div>
     </div>
-    <div class="settings-card" id="settings-certs-card">
-      <div class="settings-title">CERTIFICATS SSL <span style="font-size:8px;color:var(--text3);font-weight:400;letter-spacing:0">Chargement…</span></div>
-    </div>
     <div class="settings-card">
-      <div class="settings-title">EXPORT SYSTÈME</div>
-      <div style="font-size:10px;color:var(--text3);margin-bottom:10px">Télécharger un snapshot JSON de l'état courant (apps, tâches, événements)</div>
-      <button id="snapshot-btn" class="btn" onclick="exportSystemSnapshot()"><i class="ti ti-download"></i> SNAPSHOT</button>
+      <div class="settings-title">LOGO DE L'INTERFACE</div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="width:56px;height:56px;border:1px solid var(--border2);background:var(--bg3);flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center">
+          <img src="/ui/logo?${Date.now()}" class="logo-img" style="width:100%;height:100%;object-fit:cover" onerror="this.style.opacity=0" alt="">
+        </div>
+        <div style="flex:1">
+          <div style="font-size:10px;color:var(--text2);margin-bottom:8px">PNG, SVG, JPG ou WebP — max 5 Mo</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <label class="btn" style="cursor:pointer;flex:0">
+              <i class="ti ti-upload"></i>IMPORTER UN LOGO
+              <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" style="display:none" onchange="uploadLogo(this)">
+            </label>
+            <button class="btn-sm danger" onclick="resetLogo()"><i class="ti ti-trash"></i>RÉINITIALISER</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="settings-card">
       <div class="settings-title">ACTUALISATION AUTOMATIQUE</div>
@@ -2676,49 +2827,112 @@ async function loadSettings() {
         }).join('')}
       </div>
     </div>
-    <div class="settings-card" id="maintenance-card">
-      <div class="settings-title">MAINTENANCE</div>
-      <div id="maintenance-content">
-        <div style="display:flex;align-items:center;gap:8px;color:var(--text3);font-size:9px">
-          <span class="spinner"></span> Analyse en cours...
-        </div>
-      </div>
-    </div>
-    <div class="settings-card">
-      <div class="settings-title">SSO / OIDC</div>
-      <div style="font-size:9px;color:var(--text3);margin-bottom:10px">
-        Configurez un provider OpenID Connect (Authentik, Keycloak, etc.) pour ajouter un bouton de connexion SSO sur l'écran de login.
-        <br>Pour Authentik, l'issuer est au format <code style="font-size:8px;background:var(--bg3);padding:1px 4px;border-radius:3px">https://authentik.domain.tld/application/o/slug/</code>
-      </div>
-      <div id="oidc-settings-form" style="display:flex;flex-direction:column;gap:8px">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-          <span class="spinner" id="oidc-loading" style="display:none"></span>
-          <span id="oidc-status-badge"></span>
-        </div>
-        <input type="text" id="oidc-name" placeholder="Nom du bouton (ex: Connexion Authentik)" class="param-input">
-        <input type="text" id="oidc-issuer" placeholder="OIDC Issuer URL" class="param-input">
-        <input type="text" id="oidc-client-id" placeholder="Client ID" class="param-input">
-        <input type="password" id="oidc-client-secret" placeholder="Client Secret" class="param-input">
-        <input type="text" id="oidc-redirect-uri" placeholder="Redirect URI (optionnel — dérivé automatiquement)" class="param-input">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
-          <button class="btn" onclick="saveOidcSettings()"><i class="ti ti-device-floppy"></i> SAUVEGARDER</button>
-          <button class="btn-sm danger" onclick="clearOidcSettings()"><i class="ti ti-trash"></i> DÉSACTIVER SSO</button>
-        </div>
-      </div>
-    </div>
-    <div class="settings-card">
-      <div class="settings-title">SESSION</div>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:10px;color:var(--text3)">CONNECTÉ À L'INTERFACE WEB</div>
-        <button class="btn btn-sm danger" onclick="logout()"><i class="ti ti-logout"></i>SE DÉCONNECTER</button>
-      </div>
-    </div>
   `;
   loadSettingsCerts();
   loadSettingsLicense();
   loadMaintenancePanel();
   loadOidcSettings();
   loadTOTPSettings();
+  loadRegistrySettings();
+  loadRepos();
+}
+
+async function loadRepos() {
+  const el = document.getElementById('repos-list');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/v1/repos');
+    const raw = r.ok ? await r.json() : null;
+    const repos = (raw && raw.data) ? raw.data : (Array.isArray(raw) ? raw : []);
+    if (!repos.length) { el.innerHTML = '<div style="font-size:9px;color:var(--text3)">Aucun dépôt.</div>'; return; }
+    el.innerHTML = repos.map(rp => {
+      const official = rp.trust === 'official';
+      const rm = official
+        ? '<span style="font-size:8px;color:var(--text3);flex-shrink:0">verrouillé</span>'
+        : `<button class="btn-sm danger" style="flex-shrink:0" onclick="removeRepo('${escapeHtml(rp.name)}')"><i class="ti ti-trash"></i></button>`;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;font-weight:700">${escapeHtml(rp.name)}
+            <span style="font-size:8px;color:var(--vio-b);letter-spacing:.5px">${(rp.trust||'').toUpperCase()}</span>
+            <span style="font-size:8px;color:var(--text3)">@${escapeHtml(rp.branch||'main')}</span></div>
+          <div style="font-size:9px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(rp.url)}</div>
+        </div>${rm}</div>`;
+    }).join('');
+  } catch(e) { el.innerHTML = '<div style="font-size:9px;color:var(--red-b)">Erreur de chargement</div>'; }
+}
+async function addRepo() {
+  const msg = document.getElementById('repos-msg');
+  const name = (document.getElementById('repo-name').value || '').trim();
+  const url = (document.getElementById('repo-url').value || '').trim();
+  const branch = (document.getElementById('repo-branch').value || '').trim();
+  if (!name || !url) { if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Nom et URL requis'; } return; }
+  if (msg) { msg.style.color = 'var(--text3)'; msg.textContent = 'Ajout...'; }
+  try {
+    const r = await fetch('/api/v1/repos', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, url, branch, trust: 'community' }) });
+    if (r.ok) {
+      if (msg) { msg.style.color = 'var(--ok)'; msg.textContent = '✓ Dépôt ajouté'; }
+      ['repo-name','repo-url','repo-branch'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+      loadRepos();
+    } else { const e = await r.json().catch(() => ({})); if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur : ' + (e.error || r.status); } }
+  } catch(e) { if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur réseau'; } }
+}
+async function removeRepo(name) {
+  const msg = document.getElementById('repos-msg');
+  try {
+    const r = await fetch('/api/v1/repos?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    if (r.ok) { if (msg) { msg.style.color = 'var(--ok)'; msg.textContent = '✓ Dépôt retiré'; } loadRepos(); }
+    else { const e = await r.json().catch(() => ({})); if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur : ' + (e.error || r.status); } }
+  } catch(e) { if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur réseau'; } }
+}
+
+async function loadRegistrySettings() {
+  try {
+    const r = await fetch('/api/v1/registry');
+    if (!r.ok) return;
+    const raw = await r.json();
+    const d = (raw && raw.data) ? raw.data : raw;
+    const url = document.getElementById('registry-url');
+    const user = document.getElementById('registry-user');
+    const pass = document.getElementById('registry-pass');
+    if (url) url.value = d.registry || '';
+    if (user) user.value = d.user || '';
+    if (pass) pass.placeholder = d.has_pass ? "Mot de passe enregistré (vide = garder)" : "Mot de passe (optionnel)";
+    const modeEl = document.getElementById('registry-mode');
+    if (modeEl) modeEl.value = d.mode || 'fallback';
+  } catch(e) {}
+}
+function setRegistryPreset(url) {
+  const el = document.getElementById('registry-url');
+  if (el) el.value = url;
+}
+async function saveRegistrySettings() {
+  const msg = document.getElementById('registry-msg');
+  const body = {
+    registry: (document.getElementById('registry-url').value || '').trim(),
+    user: (document.getElementById('registry-user').value || '').trim(),
+    pass: document.getElementById('registry-pass').value || '',
+    mode: (document.getElementById('registry-mode') || {}).value || 'fallback',
+  };
+  if (msg) { msg.style.color = 'var(--text3)'; msg.textContent = 'Enregistrement...'; }
+  try {
+    const r = await fetch('/api/v1/registry', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      if (msg) { msg.style.color = 'var(--ok)'; msg.textContent = body.registry
+        ? "✓ Enregistré — les prochaines installs pull depuis ce registre."
+        : "✓ Enregistré — images d'origine."; }
+      const p = document.getElementById('registry-pass'); if (p) p.value = '';
+      loadRegistrySettings();
+    } else {
+      const e = await r.json().catch(() => ({}));
+      if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur : ' + (e.error || r.status); }
+    }
+  } catch(e) {
+    if (msg) { msg.style.color = 'var(--red-b)'; msg.textContent = 'Erreur réseau'; }
+  }
 }
 
 async function loadMaintenancePanel() {
@@ -2889,8 +3103,10 @@ async function loadSettingsLicense() {
   const el = document.getElementById('license-settings-content');
   if (!el) return;
   const r = await fetch('/api/v1/license');
-  const d = r.ok ? await r.json() : null;
-  if (!d) { el.innerHTML = '<div style="font-size:9px;color:var(--red-b)">Impossible de contacter le serveur de licence</div>'; return; }
+  const raw = r.ok ? await r.json() : null;
+  if (!raw) { el.innerHTML = '<div style="font-size:9px;color:var(--red-b)">Impossible de contacter le serveur de licence</div>'; return; }
+  // Réponse API enveloppée : {data:{...},success}. On lit d.data.
+  const d = (raw && raw.data) ? raw.data : raw;
 
   if (d.activated) {
     el.innerHTML = `
@@ -3400,7 +3616,7 @@ async function loadDashboard() {
     { id: 'secrets',   icon: 'ti-lock',            label: 'SECRETS',      val: 'AES-256-GCM' },
     { id: 'events',    icon: 'ti-history',         label: 'ÉVÉNEMENTS',   val: 'Historique' },
     { id: 'audit',     icon: 'ti-clipboard-list',  label: 'AUDIT',        val: 'Journal sécurisé' },
-    { id: 'stats',     icon: 'ti-chart-bar',       label: 'SYSTÈME',      val: ram ? `RAM ${ram}%` : '—' },
+    { id: 'stats',     icon: 'ti-chart-bar',       label: 'RESSOURCES',   val: ram ? `RAM ${ram}%` : '—' },
     { id: 'settings',  icon: 'ti-settings',        label: 'PARAMÈTRES',   val: `v${S.stats.version || '—'}` },
   ];
 
@@ -5681,7 +5897,7 @@ async function loadDashResourcesWidget() {
   }).join('<div style="width:1px;background:var(--border)"></div>');
 
   const sparkHtml = `
-    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:0 0 10px">// SYSTÈME${hist && hist.length > 1 ? ` <span style="font-size:7px;font-weight:400;opacity:.5">· ${hist.length} pts / 1h</span>` : ''}</div>
+    <div style="font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:700;margin:0 0 10px">// RESSOURCES${hist && hist.length > 1 ? ` <span style="font-size:7px;font-weight:400;opacity:.5">· ${hist.length} pts / 1h</span>` : ''}</div>
     <div class="settings-card" style="padding:10px 12px;margin-bottom:14px">
       <div style="display:flex;gap:14px;align-items:stretch">${sysMetrics}</div>
     </div>`;
@@ -5900,19 +6116,20 @@ const SECTIONS = {
   backups:   { label: 'SAUVEGARDES',     num: '/03', load: loadBackups,    content: 'content-backups',    btn: { icon: 'ti-device-floppy', label: 'SAUVEGARDER',   action: "triggerBackup()" } },
   secrets:   { label: 'SECRETS',         num: '/04', load: loadSecrets,    content: 'content-secrets',    btn: { icon: 'ti-lock-open',     label: 'DÉVERROUILLER', action: "unlockSecrets()" } },
   locations: { label: 'EMPLACEMENTS',    num: '/05', load: loadLocations,  content: 'content-locations',  btn: { icon: 'ti-plus',          label: 'AJOUTER',       action: "openAddLocationModal()" } },
-  shares:    { label: 'PARTAGES',        num: '/16', load: loadShares,     content: 'content-shares',     btn: { icon: 'ti-plus',          label: 'NOUVEAU PARTAGE', action: "openAddShareModal()" } },
-  files:     { label: 'FICHIERS',        num: '/17', load: loadFiles,      content: 'content-files',      btn: null },
-  vms:       { label: 'MACHINES VIRT.',  num: '/18', load: loadVMs,        content: 'content-vms',        btn: { icon: 'ti-plus', label: 'NOUVELLE VM', action: "openCreateVMModal()" } },
   tasks:     { label: 'TÂCHES',           num: '/06', load: loadTasks,      content: 'content-tasks',      btn: { icon: 'ti-plus', label: 'NOUVELLE TÂCHE', action: 'openTaskModal()' } },
   events:    { label: 'ÉVÉNEMENTS',       num: '/07', load: loadEvents,     content: 'content-events',     btn: null },
   audit:     { label: 'AUDIT',           num: '/08', load: loadAudit,      content: 'content-audit',      btn: null },
   settings:  { label: 'PARAMÈTRES',      num: '/09', load: loadSettings,   content: 'content-settings',   btn: null },
-  stats:     { label: 'SYSTÈME',         num: '/10', load: loadStats,      content: 'content-stats',      btn: null },
+  stats:     { label: 'RESSOURCES',      num: '/10', load: loadStats,      content: 'content-stats',      btn: null },
   terminal:  { label: 'TERMINAL',        num: '/11', load: loadTerminal,   content: 'content-terminal',   btn: null },
   services:  { label: 'SERVICES',        num: '/12', load: loadServices,   content: 'content-services',   btn: null },
   network:   { label: 'RÉSEAU',          num: '/13', load: loadNetwork,    content: 'content-network',    btn: null },
   storage:   { label: 'STOCKAGE',        num: '/14', load: loadStorage,    content: 'content-storage',    btn: null },
   journal:   { label: 'JOURNAL',         num: '/15', load: loadJournal,    content: 'content-journal',    btn: null },
+  shares:    { label: 'PARTAGES',        num: '/16', load: loadShares,     content: 'content-shares',     btn: { icon: 'ti-plus',          label: 'NOUVEAU PARTAGE', action: "openAddShareModal()" } },
+  files:     { label: 'FICHIERS',        num: '/17', load: loadFiles,      content: 'content-files',      btn: null },
+  vms:       { label: 'MACHINES VIRT.',  num: '/18', load: loadVMs,        content: 'content-vms',        btn: { icon: 'ti-plus', label: 'NOUVELLE VM', action: "openCreateVMModal()" } },
+  integrations: { label: 'INTÉGRATIONS', num: '/INT', load: buildDynamicNav, content: 'content-integrations', btn: null },
 };
 
 // ── Intégrations apps (panels embarqués) ─────────────────────────────────────
@@ -5963,6 +6180,15 @@ const APP_PANELS = {
     icon: 'ti-radio',
     panels: [
       { id: 'panel-azuracast', label: 'RADIO', icon: 'ti-broadcast', load: loadAzuraCast },
+    ],
+  },
+  'gaiverland-radio': {
+    group: '// RADIO',
+    icon: 'ti-music',
+    panels: [
+      { id: 'panel-gaiverland-live',     label: 'EN DIRECT',    icon: 'ti-broadcast',   load: loadGaiverlandLive     },
+      { id: 'panel-gaiverland-schedule', label: 'HORAIRES',     icon: 'ti-clock',       load: loadGaiverlandSchedule },
+      { id: 'panel-gaiverland-styles',   label: 'PROGRAMMATION', icon: 'ti-adjustments', load: loadGaiverlandStyles   },
     ],
   },
   'pterodactyl': {
@@ -6301,36 +6527,24 @@ function buildPinnedSection() {
   }).join('');
 }
 
+// Intégrations : au lieu d'empiler des sous-groupes déroulants dans la sidebar
+// (qui prenaient tout l'espace vertical), on enregistre les panels puis on rend
+// une PAGE dédiée (cartes par app). La sidebar garde un seul item "INTÉGRATIONS".
 function buildDynamicNav() {
-  const sbInt = document.getElementById('sb-integrations');
-  if (!sbInt) return;
-
   const installedIds = new Set(S.apps.map(a => a.id));
   const content = document.querySelector('.content');
-
-  let html = '';
   let hasAny = false;
+  const cards = [];
 
   Object.entries(APP_PANELS).forEach(([appId, app]) => {
     if (!installedIds.has(appId)) return;
     hasAny = true;
-    const gid = 'int-' + appId;
     const appObj = S.apps.find(a => a.id === appId);
     const isRunning = appObj?.status === 'running';
-    const healthDot = `<span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${isRunning ? 'var(--green-b)' : 'var(--red-b)'};margin-right:4px;flex-shrink:0"></span>`;
-    html += `
-      <div class="sb-section">
-        <button class="sb-app-toggle" data-gid="${gid}" id="sb-items-${gid}-toggle"
-          onclick="toggleSbGroup('${gid}')">
-          <i class="ti ${app.icon}" style="font-size:11px;opacity:.7"></i>
-          ${healthDot}<span>${appObj?.name || appId}</span>
-          <i class="ti ti-chevron-down sb-chev" aria-hidden="true"></i>
-        </button>
-        <div class="sb-app-items" id="sb-items-${gid}">`;
+
+    // Enregistrer les sections de panels + créer leurs content divs
+    // (goSection('panel-...') s'appuie dessus — inchangé).
     app.panels.forEach(panel => {
-      html += `<button class="nav-btn" data-section="${panel.id}" onclick="goSection('${panel.id}')">
-        <i class="ti ${panel.icon}" aria-hidden="true"></i>${panel.label}
-      </button>`;
       if (!SECTIONS[panel.id]) {
         SECTIONS[panel.id] = {
           label: panel.label, num: '/INT', load: panel.load,
@@ -6344,30 +6558,41 @@ function buildDynamicNav() {
         content.appendChild(el);
       }
     });
-    html += `</div></div>`;
+
+    // Carte de l'app pour la page dédiée
+    const dot = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isRunning ? 'var(--green-b)' : 'var(--red-b)'};flex-shrink:0"></span>`;
+    const panelBtns = app.panels.map(p =>
+      `<button class="btn" onclick="goSection('${p.id}')" style="justify-content:flex-start"><i class="ti ${p.icon}"></i>${p.label}</button>`
+    ).join('');
+    cards.push(`
+      <div class="int-card" style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <i class="ti ${app.icon}" style="font-size:18px;color:var(--vio-b)"></i>
+          ${dot}
+          <span style="font-weight:700;font-size:12px;letter-spacing:.3px">${escapeHtml(appObj?.name || appId)}</span>
+          <span style="margin-left:auto;font-size:8px;color:var(--text3);letter-spacing:.5px">${app.group || ''}</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${panelBtns}</div>
+      </div>`);
   });
 
-  sbInt.innerHTML = html;
+  // Rendre la page dédiée
+  const grid = document.getElementById('integrations-grid');
+  if (grid) {
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px';
+    grid.innerHTML = hasAny ? cards.join('')
+      : '<div style="padding:40px;text-align:center;color:var(--text3);font-size:10px">Aucune intégration disponible. Installe une app compatible (Authentik, Nextcloud, Gitea…) pour la gérer ici.</div>';
+  }
 
-  // Afficher / masquer le groupe parent INTÉGRATIONS
-  const sbSectionInt = document.getElementById('sb-section-integrations');
-  if (sbSectionInt) sbSectionInt.style.display = hasAny ? '' : 'none';
+  // Item de nav unique (visible seulement si au moins une intégration installée)
+  const navItem = document.getElementById('nav-integrations');
+  if (navItem) navItem.style.display = hasAny ? '' : 'none';
 
-  // Restaurer état collapse pour les sous-groupes intégrations
-  Object.keys(APP_PANELS).forEach(appId => {
-    if (!installedIds.has(appId)) return;
-    const gid = 'int-' + appId;
-    try {
-      if (localStorage.getItem('sb-col-' + gid) === '1') {
-        const items = document.getElementById(`sb-items-${gid}`);
-        const tog   = document.querySelector(`[data-gid="${gid}"]`);
-        if (items) { items.classList.add('collapsed'); }
-        if (tog)   { tog.classList.add('collapsed'); }
-      }
-    } catch(e) {}
-  });
+  // Neutraliser l'ancien groupe déroulant de la sidebar
+  const oldGroup = document.getElementById('sb-section-integrations');
+  if (oldGroup) oldGroup.style.display = 'none';
 
-  // Re-marquer le bouton actif si on est déjà dans un panel
+  // Re-marquer le bouton actif
   document.querySelectorAll('.nav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.section === S.section);
   });
@@ -6968,6 +7193,308 @@ async function loadAzuraCast() {
       </div>
       <div style="padding:0 12px 12px">${rows}</div>
     </div>`;
+}
+
+// ── Gaiverland Radio — En direct ─────────────────────────────────────────────
+async function loadGaiverlandLive() {
+  const c = document.getElementById('content-panel-gaiverland-live');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/gaiverland-radio/nowplaying');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-music-off"></i></div>
+      <div class="empty-title">RADIO INDISPONIBLE</div>
+      <div class="empty-sub">Le moteur de playlist Gaiverland ne répond pas.</div></div>`;
+    return;
+  }
+  const d = await r.json();
+  const np = d.now_playing || {};
+  const lib = d.library || {};
+
+  const moodColors = { festival: 'var(--vio)', intense: 'var(--red-b)', energique: 'var(--blue)',
+                       melodique: 'var(--green-b)', nocturne: '#8b7cf6' };
+  const moodColor = moodColors[d.mood] || 'var(--text2)';
+
+  const artHtml = (np.art && np.art.startsWith('http'))
+    ? `<img src="${np.art}" style="width:56px;height:56px;border-radius:4px;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">`
+    : `<div style="width:56px;height:56px;border-radius:4px;background:var(--bg3);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="ti ti-music" style="font-size:20px;color:var(--text3)"></i></div>`;
+
+  const progress = np.duration > 0
+    ? `<div style="height:2px;background:var(--bg3);border-radius:1px;margin-top:8px;overflow:hidden">
+        <div style="height:100%;background:var(--vio);width:${Math.min(100, Math.round(np.elapsed/np.duration*100))}%;transition:width 1s linear"></div>
+       </div>` : '';
+
+  c.innerHTML = `
+    <div class="dash-row" style="gap:8px;margin-bottom:12px">
+      <div class="stat-card" style="flex:1">
+        <div class="stat-val">${lib.analyzed ?? '—'}</div>
+        <div class="stat-lbl">TRACKS ANALYSÉES</div>
+      </div>
+      <div class="stat-card" style="flex:1">
+        <div class="stat-val">${d.listeners ?? '—'}</div>
+        <div class="stat-lbl">AUDITEURS</div>
+      </div>
+      <div class="stat-card" style="flex:1">
+        <div class="stat-val" style="color:${moodColor};text-transform:uppercase">${d.mood || '—'}</div>
+        <div class="stat-lbl">MOOD</div>
+      </div>
+    </div>
+
+    <div class="settings-card" style="padding:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        ${artHtml}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${escapeHtml(np.title || 'Aucune lecture en cours')}
+          </div>
+          <div style="font-size:9px;color:var(--text3);margin-top:2px">${escapeHtml(np.artist || '')}</div>
+          ${d.current_playlist ? `<div style="font-size:8px;color:var(--vio);margin-top:4px;text-transform:uppercase">${escapeHtml(d.current_playlist)}</div>` : ''}
+          ${progress}
+        </div>
+        ${d.is_online ? '<span class="badge badge-run" style="font-size:7px;flex-shrink:0">EN LIGNE</span>'
+                      : '<span class="badge badge-stop" style="font-size:7px;flex-shrink:0">HORS LIGNE</span>'}
+      </div>
+    </div>
+
+    <div style="margin-top:8px;text-align:right">
+      <button class="btn-sm" onclick="loadGaiverlandLive()" style="font-size:8px">
+        <i class="ti ti-refresh" style="font-size:9px"></i> ACTUALISER
+      </button>
+    </div>`;
+}
+
+// ── Gaiverland Radio — Horaires ───────────────────────────────────────────────
+async function loadGaiverlandSchedule() {
+  const c = document.getElementById('content-panel-gaiverland-schedule');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/gaiverland-radio/config');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-clock-off"></i></div>
+      <div class="empty-title">CONFIGURATION INDISPONIBLE</div></div>`;
+    return;
+  }
+  const cfg = await r.json();
+
+  const dayLabels = ['', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+  const daysHtml = [1,2,3,4,5,6,7].map(d => {
+    const on = (cfg.work_days || [1,2,3,4,5]).includes(d);
+    return `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:9px">
+      <input type="checkbox" id="gwr-day-${d}" ${on ? 'checked' : ''} style="accent-color:var(--vio)">
+      ${dayLabels[d]}
+    </label>`;
+  }).join('');
+
+  const weights = cfg.playlist_weights || {};
+  const weightRow = (key, label, icon) => {
+    const w = weights[key] ?? 1;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--bd)">
+      <i class="ti ${icon}" style="font-size:11px;color:var(--text3);flex-shrink:0"></i>
+      <div style="flex:1;font-size:9px;font-weight:700">${label}</div>
+      <input type="range" id="gwr-w-${key}" min="0" max="5" value="${w}" step="1"
+        style="width:80px;accent-color:var(--vio)" oninput="document.getElementById('gwr-wv-${key}').textContent=this.value">
+      <span id="gwr-wv-${key}" style="font-size:10px;font-weight:800;color:var(--vio);min-width:12px;text-align:right">${w}</span>
+    </div>`;
+  };
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0;margin-bottom:12px">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-clock" style="font-size:11px"></i> HORAIRES MODE TRAVAIL
+      </div>
+      <div style="padding:0 12px 12px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:9px;color:var(--text3);width:50px">DÉBUT</span>
+          <input type="time" id="gwr-start" value="${cfg.work_start || '08:20'}"
+            style="background:var(--bg2);border:1px solid var(--bd);color:var(--text1);
+                   border-radius:4px;padding:4px 6px;font-size:10px;font-family:inherit">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:9px;color:var(--text3);width:50px">FIN</span>
+          <input type="time" id="gwr-end" value="${cfg.work_end || '17:00'}"
+            style="background:var(--bg2);border:1px solid var(--bd);color:var(--text1);
+                   border-radius:4px;padding:4px 6px;font-size:10px;font-family:inherit">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:9px;color:var(--text3);width:50px">DÉCALAGE</span>
+          <input type="range" id="gwr-offset" min="-60" max="60" value="${cfg.work_offset_min || 0}" step="5"
+            style="width:100px;accent-color:var(--vio)" oninput="document.getElementById('gwr-offset-v').textContent=(this.value>0?'+':'')+this.value+'min'">
+          <span id="gwr-offset-v" style="font-size:9px;color:var(--vio);min-width:40px">${cfg.work_offset_min > 0 ? '+' : ''}${cfg.work_offset_min || 0}min</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:9px;color:var(--text3);width:50px">JOURS</span>
+          ${daysHtml}
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-card" style="padding:0;margin-bottom:12px">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-playlist" style="font-size:11px"></i> POIDS DES PLAYLISTS (MODE TRAVAIL)
+      </div>
+      <div style="padding:0 12px 12px">
+        ${weightRow('decouverte',   'Travail Découverte', 'ti-sparkles')}
+        ${weightRow('bien_francais','Bien Français',      'ti-flag')}
+        ${weightRow('gaiverland_ia','Gaiverland IA',      'ti-robot')}
+        <div style="margin-top:8px;font-size:8px;color:var(--text3)">
+          Poids 0 = désactivé · 5 = prioritaire maximum
+        </div>
+      </div>
+    </div>
+
+    <button class="btn btn-vio" style="width:100%;font-size:9px" onclick="saveGaiverlandSchedule()">
+      <i class="ti ti-device-floppy"></i> ENREGISTRER
+    </button>`;
+}
+
+async function saveGaiverlandSchedule() {
+  const days = [1,2,3,4,5,6,7].filter(d => document.getElementById(`gwr-day-${d}`)?.checked);
+  const weights = {};
+  ['decouverte', 'bien_francais', 'gaiverland_ia'].forEach(k => {
+    const el = document.getElementById(`gwr-w-${k}`);
+    if (el) weights[k] = parseInt(el.value);
+  });
+  const payload = {
+    work_start:       document.getElementById('gwr-start')?.value,
+    work_end:         document.getElementById('gwr-end')?.value,
+    work_offset_min:  parseInt(document.getElementById('gwr-offset')?.value || '0'),
+    work_days:        days,
+    playlist_weights: weights,
+  };
+  const r = await fetch('/ui/proxy/gaiverland-radio/config', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+  });
+  if (r.ok) { notify('Horaires enregistrés', 'ok'); }
+  else { notify('Erreur lors de la sauvegarde', 'err'); }
+}
+
+// ── Gaiverland Radio — Styles / Programmation ─────────────────────────────────
+async function loadGaiverlandStyles() {
+  const c = document.getElementById('content-panel-gaiverland-styles');
+  if (!c) return;
+  c.innerHTML = `<div class="dash-loading"><span class="spinner"></span> CHARGEMENT...</div>`;
+
+  const r = await fetch('/ui/proxy/gaiverland-radio/config');
+  if (!r.ok) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-adjustments-off"></i></div>
+      <div class="empty-title">CONFIGURATION INDISPONIBLE</div></div>`;
+    return;
+  }
+  const cfg = await r.json();
+
+  const pausedMoods  = cfg.paused_moods  || [];
+  const pausedGenres = cfg.paused_genres || [];
+
+  const ALL_MOODS = [
+    { name: 'festival',  icon: 'ti-confetti',  label: 'Festival' },
+    { name: 'intense',   icon: 'ti-bolt',       label: 'Intense' },
+    { name: 'energique', icon: 'ti-flame',      label: 'Énergique' },
+    { name: 'melodique', icon: 'ti-wave-sine',  label: 'Mélodique' },
+    { name: 'nocturne',  icon: 'ti-moon',       label: 'Nocturne' },
+  ];
+  const ALL_GENRES = [
+    { name: 'Hardstyle',       label: 'Hardstyle'      },
+    { name: 'Hard Techno',     label: 'Hard Techno'    },
+    { name: 'Hardcore',        label: 'Hardcore'       },
+    { name: 'Drum and Bass',   label: 'Drum & Bass'    },
+    { name: 'Dubstep',         label: 'Dubstep'        },
+    { name: 'French House',    label: 'French House'   },
+    { name: 'Deep House',      label: 'Deep House'     },
+    { name: 'Tech House',      label: 'Tech House'     },
+    { name: 'Progressive House', label: 'Progressive House' },
+    { name: 'Trance',          label: 'Trance'         },
+    { name: 'Synthwave',       label: 'Synthwave'      },
+  ];
+
+  const pausedMoodNames  = new Set(pausedMoods.map(p => p.name));
+  const pausedGenreNames = new Set(pausedGenres.map(p => p.name));
+
+  const pauseUntilSel = (id) => `
+    <select id="days-${id}" style="background:var(--bg2);border:1px solid var(--bd);color:var(--text1);
+      border-radius:3px;padding:2px 4px;font-size:8px;font-family:inherit">
+      <option value="1">1 jour</option>
+      <option value="3">3 jours</option>
+      <option value="7" selected>7 jours</option>
+      <option value="14">14 jours</option>
+      <option value="30">1 mois</option>
+    </select>`;
+
+  const moodRows = ALL_MOODS.map(m => {
+    const paused = pausedMoodNames.has(m.name);
+    const until  = pausedMoods.find(p => p.name === m.name)?.until || '';
+    return `<div class="loc-row" style="gap:8px">
+      <i class="ti ${m.icon}" style="font-size:13px;color:var(--text3);flex-shrink:0;width:18px"></i>
+      <div style="flex:1;font-size:9px;font-weight:700">${m.label}</div>
+      ${paused
+        ? `<span style="font-size:8px;color:var(--text3)">jusqu'au ${until}</span>
+           <button class="btn-sm" style="font-size:7px;color:var(--green-b)"
+             onclick="resumeGaiverlandPause('mood','${m.name}')">
+             <i class="ti ti-player-play" style="font-size:8px"></i> RÉACTIVER
+           </button>`
+        : `${pauseUntilSel('mood-'+m.name)}
+           <button class="btn-sm danger" style="font-size:7px"
+             onclick="pauseGaiverlandStyle('mood','${m.name}','mood-${m.name}')">
+             <i class="ti ti-pause" style="font-size:8px"></i> PAUSE
+           </button>`
+      }
+    </div>`;
+  }).join('');
+
+  const genreRows = ALL_GENRES.map(g => {
+    const paused = pausedGenreNames.has(g.name);
+    const until  = pausedGenres.find(p => p.name === g.name)?.until || '';
+    return `<div class="loc-row" style="gap:8px">
+      <i class="ti ti-tag" style="font-size:11px;color:var(--text3);flex-shrink:0;width:18px"></i>
+      <div style="flex:1;font-size:9px;font-weight:700">${g.label}</div>
+      ${paused
+        ? `<span style="font-size:8px;color:var(--text3)">jusqu'au ${until}</span>
+           <button class="btn-sm" style="font-size:7px;color:var(--green-b)"
+             onclick="resumeGaiverlandPause('genre','${g.name}')">
+             <i class="ti ti-player-play" style="font-size:8px"></i> RÉACTIVER
+           </button>`
+        : `${pauseUntilSel('genre-'+g.name)}
+           <button class="btn-sm danger" style="font-size:7px"
+             onclick="pauseGaiverlandStyle('genre','${g.name}','genre-${g.name}')">
+             <i class="ti ti-pause" style="font-size:8px"></i> PAUSE
+           </button>`
+      }
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `
+    <div class="settings-card" style="padding:0;margin-bottom:12px">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-mood-happy" style="font-size:11px"></i> MOODS
+        <span style="font-size:8px;color:var(--text3);margin-left:4px;font-weight:400">
+          Suspend un mood de la rotation
+        </span>
+      </div>
+      <div style="padding:0 12px 12px">${moodRows}</div>
+    </div>
+    <div class="settings-card" style="padding:0">
+      <div class="settings-title" style="padding:10px 12px">
+        <i class="ti ti-tag" style="font-size:11px"></i> GENRES
+        <span style="font-size:8px;color:var(--text3);margin-left:4px;font-weight:400">
+          Exclut un genre du moteur de playlist
+        </span>
+      </div>
+      <div style="padding:0 12px 12px">${genreRows}</div>
+    </div>`;
+}
+
+async function pauseGaiverlandStyle(type, name, selId) {
+  const days = parseInt(document.getElementById('days-'+selId)?.value || '7');
+  const r = await fetch(`/ui/proxy/gaiverland-radio/config/pause?type=${type}&name=${encodeURIComponent(name)}&days=${days}`, { method: 'POST' });
+  if (r.ok) { notify(`${name} mis en pause ${days}j`, 'ok'); loadGaiverlandStyles(); }
+  else { notify('Erreur', 'err'); }
+}
+
+async function resumeGaiverlandPause(type, name) {
+  const r = await fetch(`/ui/proxy/gaiverland-radio/config/pause?type=${type}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (r.ok) { notify(`${name} réactivé`, 'ok'); loadGaiverlandStyles(); }
+  else { notify('Erreur', 'err'); }
 }
 
 // ── Pterodactyl — Serveurs de jeux ────────────────────────────────────────────
@@ -10016,7 +10543,9 @@ async function checkLicenseOnLogin() {
     const r = await fetch('/api/v1/license');
     if (!r.ok) return;
     const d = await r.json();
-    if (!d.activated) showLicenseModal();
+    // La réponse API est enveloppée : {data:{activated,...},success}. On lit d.data.
+    const lic = (d && d.data) ? d.data : d;
+    if (!lic || !lic.activated) showLicenseModal();
   } catch(e) {}
 }
 

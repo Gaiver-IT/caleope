@@ -15,7 +15,7 @@ Interface de demande de contenus multimédia pour Jellyfin. Permet aux utilisate
 caleope install jellyseerr --domain media.monserveur.fr
 ```
 
-> Jellyseerr est inclus dans l'[arr-stack](/apps/arr-stack). L'installer séparément uniquement si tu utilises Jellyfin sans l'arr-stack.
+> Jellyseerr est inclus dans l'[arr-stack](/docs/apps/arr-stack). L'installer séparément uniquement si tu utilises Jellyfin sans l'arr-stack.
 
 ## Accès
 

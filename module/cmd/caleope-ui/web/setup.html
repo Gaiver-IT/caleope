@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caleope — Premier démarrage</title>
+<style>
+  :root { --bg:#0c0c0e; --bg2:#141418; --border:#26262e; --text:#e8e8ec; --text2:#a0a0aa; --text3:#6a6a76; --vio:#7c6cff; --ok:#3ecf8e; --err:#ff5c6c; --mono:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--mono); display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px; }
+  .card { width:100%; max-width:460px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:26px; }
+  h1 { font-size:16px; margin:0 0 4px; letter-spacing:1px; }
+  .sub { font-size:11px; color:var(--text3); margin-bottom:18px; }
+  label { display:block; font-size:10px; color:var(--text2); letter-spacing:.5px; margin:12px 0 4px; text-transform:uppercase; }
+  input, select { width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:9px 10px; font-family:var(--mono); font-size:12px; }
+  input:focus, select:focus { outline:none; border-color:var(--vio); }
+  .hint { font-size:9px; color:var(--text3); margin-top:3px; }
+  button { width:100%; margin-top:20px; background:var(--vio); color:#fff; border:none; border-radius:6px; padding:11px; font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:.5px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  #msg { min-height:16px; font-size:11px; margin-top:12px; text-align:center; }
+  .row2 { display:flex; gap:10px; }
+  .row2 > div { flex:1; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>CALEOPE</h1>
+    <div class="sub">Premier démarrage — configuration du serveur</div>
+
+    <form id="f" onsubmit="return false">
+      <label>Domaine de base</label>
+      <input id="domain" placeholder="caleope.mondomaine.fr" autocomplete="off">
+      <div class="hint">Les apps seront sur jellyfin.&lt;domaine&gt;, etc. (utilise une IP si tu n'as pas de domaine)</div>
+
+      <label>Mode reverse proxy</label>
+      <select id="proxy_mode" onchange="toggleEmail()">
+        <option value="npm">NPM/Caddy en amont (Traefik reçoit du HTTP)</option>
+        <option value="traefik">Traefik natif (gère HTTPS / Let's Encrypt)</option>
+        <option value="standalone">Standalone (HTTP seul — LAN / hors-ligne)</option>
+      </select>
+
+      <div id="emailWrap" class="hide">
+        <label>Email (Let's Encrypt)</label>
+        <input id="email" placeholder="admin@mondomaine.fr" autocomplete="off">
+      </div>
+
+      <!-- Canal (stable/alpha) : figé par l'ISO au build (pack-info.json) — pas un choix ici. -->
+
+      <div class="row2">
+        <div>
+          <label>Mot de passe interface</label>
+          <input id="ui_password" type="password" autocomplete="new-password">
+          <div class="hint">Sert aussi pour la console / SSH (compte user-caleope).</div>
+        </div>
+        <div>
+          <label>Mot de passe secrets</label>
+          <input id="secrets_password" type="password" autocomplete="new-password">
+          <div class="hint">Protège les secrets des apps. À noter — irrécupérable.</div>
+        </div>
+      </div>
+
+      <!-- Disques de données détectés (vierges) : proposés au formatage.
+           La section n'apparaît que si /setup/disks en trouve. -->
+      <div id="disksWrap" class="hide">
+        <label>Stockage détecté</label>
+        <div class="hint" style="margin-bottom:6px">
+          Disques vierges détectés — cochés : ils seront <b>formatés</b> et utilisés pour tes données.
+        </div>
+        <div id="disksList" style="margin-bottom:10px"></div>
+        <div class="row2">
+          <div>
+            <label>Système de fichiers</label>
+            <select id="data_fs">
+              <option value="ext4">ext4 — éprouvé (recommandé)</option>
+              <option value="btrfs">btrfs — snapshots, RAID natif</option>
+              <option value="xfs">xfs — perf gros fichiers / médias</option>
+            </select>
+          </div>
+          <div>
+            <label>Organisation</label>
+            <select id="data_mode" onchange="updateDiskHint()">
+              <option value="separate">Disques séparés (données + sauvegardes)</option>
+              <option value="raid1">RAID1 — miroir (redondance)</option>
+            </select>
+          </div>
+        </div>
+        <div class="hint" id="diskHint" style="margin-top:6px"></div>
+      </div>
+
+      <button id="btn" onclick="submitSetup()">CONFIGURER &amp; DÉMARRER</button>
+      <div id="msg"></div>
+    </form>
+  </div>
+
+<script>
+function toggleEmail(){
+  document.getElementById('emailWrap').classList.toggle('hide',
+    document.getElementById('proxy_mode').value !== 'traefik');
+}
+function v(id){ return (document.getElementById(id).value||'').trim(); }
+
+// Disques vierges détectés par le serveur → cases à cocher (cochées par défaut :
+// seuls des disques SANS partition ni système de fichiers sont proposés).
+function fmtSize(b){ const u=['o','Ko','Mo','Go','To']; let i=0; while(b>=1024&&i<4){b/=1024;i++;} return b.toFixed(b>=100?0:1)+' '+u[i]; }
+async function loadDisks(){
+  try{
+    const r = await fetch('/setup/disks'); if(!r.ok) return;
+    const d = await r.json(); const disks = d.disks||[];
+    if(!disks.length) return;
+    document.getElementById('disksList').innerHTML = disks.map(x=>`
+      <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border);margin-bottom:5px;cursor:pointer;font-weight:400">
+        <input type="checkbox" class="disk-cb" value="${x.path}" checked onchange="updateDiskHint()" style="accent-color:var(--vio)">
+        <span style="font-family:var(--mono);font-size:12px">${x.path}</span>
+        <span style="color:var(--text2);font-size:12px">${fmtSize(x.size)} ${x.rota?'HDD':'SSD'}</span>
+        <span style="color:var(--text3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.model||''}</span>
+      </label>`).join('');
+    document.getElementById('disksWrap').classList.remove('hide');
+    updateDiskHint();
+  }catch(_){}
+}
+loadDisks();
+
+// Explique ce qui va se passer selon le nombre de disques cochés + le mode.
+// RAID1 exige ≥ 2 disques ; sinon on retombe (visuellement) sur « séparés ».
+function updateDiskHint(){
+  const n = document.querySelectorAll('.disk-cb:checked').length;
+  const mode = v('data_mode'), fs = v('data_fs'), hint = document.getElementById('diskHint');
+  const raidOpt = document.querySelector('#data_mode option[value="raid1"]');
+  if (raidOpt) raidOpt.disabled = (n < 2);
+  if (!hint) return;
+  if (n === 0){ hint.textContent = 'Aucun disque coché — les données resteront sur le disque système.'; return; }
+  if (mode === 'raid1'){
+    if (n < 2){ hint.innerHTML = '⚠️ RAID1 nécessite <b>au moins 2 disques</b> cochés.'; return; }
+    hint.innerHTML = `RAID1 : les <b>${n} disques</b> forment <b>un miroir ${fs}</b> pour les données des apps — si un disque meurt, rien n'est perdu.`;
+  } else {
+    hint.innerHTML = n === 1
+      ? `1 disque en <b>${fs}</b> → données des apps.`
+      : `${n} disques en <b>${fs}</b> : le plus grand → <b>données des apps</b>, le suivant → <b>sauvegardes</b>.`;
+  }
+}
+
+async function submitSetup(){
+  const msg = document.getElementById('msg'), btn = document.getElementById('btn');
+  if(!v('domain') || !v('ui_password') || !v('secrets_password')){
+    msg.style.color='var(--err)'; msg.textContent='Domaine et les 2 mots de passe sont requis.'; return;
+  }
+  const dataDisks = Array.from(document.querySelectorAll('.disk-cb:checked')).map(c=>c.value);
+  const dataMode = v('data_mode') || 'separate';
+  if (dataMode === 'raid1' && dataDisks.length < 2){
+    msg.style.color='var(--err)'; msg.textContent='RAID1 nécessite au moins 2 disques cochés.'; return;
+  }
+  btn.disabled = true;
+  msg.style.color='var(--text3)'; msg.textContent='Configuration en cours (déploiement de Traefik + apps)…';
+  try{
+    const r = await fetch('/setup', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ domain:v('domain'), proxy_mode:v('proxy_mode'), email:v('email'),
+        ui_password:v('ui_password'), secrets_password:v('secrets_password'),
+        data_disks:dataDisks, data_mode:dataMode, data_fs:(v('data_fs')||'ext4') }) });
+    if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.error||'Erreur'); }
+    poll();
+  }catch(e){ msg.style.color='var(--err)'; msg.textContent=e.message; btn.disabled=false; }
+}
+async function poll(){
+  const msg = document.getElementById('msg');
+  try{
+    const r = await fetch('/setup/status'); const d = await r.json();
+    if(!d.firstboot){ msg.style.color='var(--ok)'; msg.textContent='✓ Configuré ! Redirection…'; setTimeout(()=>location.href='/',1500); return; }
+  }catch(_){}
+  setTimeout(poll, 4000);
+}
+</script>
+</body>
+</html>

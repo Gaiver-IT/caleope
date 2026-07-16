@@ -121,10 +121,32 @@ func (m *Manager) Activate(licenseKey string) error {
 	machineHash := MachineHash()
 
 	body := fmt.Sprintf(`{"license_key":%q,"machine_hash":%q}`, licenseKey, machineHash)
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Post(serverURL()+"/api/activate", "application/json", strings.NewReader(body))
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	// Le serveur de licence peut être temporairement injoignable (coupure, DNS,
+	// NAT hairpin quand le serveur Caleope est sur le même LAN que le backend de
+	// licence). On réessaie une fois sur erreur réseau, puis on renvoie un message
+	// ACTIONNABLE plutôt qu'un « no route to host » brut. À noter : le runtime n'a
+	// AUCUNE dépendance réseau à la licence (Verify() est hors-ligne, signature
+	// Ed25519 sur token local) — seule cette activation contacte le serveur.
+	const attempts = 2
+	var resp *http.Response
+	var err error
+	for i := 0; i < attempts; i++ {
+		resp, err = client.Post(serverURL()+"/api/activate", "application/json", strings.NewReader(body))
+		if err == nil {
+			break
+		}
+		if i < attempts-1 {
+			time.Sleep(2 * time.Second)
+		}
+	}
 	if err != nil {
-		return fmt.Errorf("impossible de contacter le serveur de licence: %w", err)
+		return fmt.Errorf("serveur de licence injoignable (%s) : %w\n"+
+			"→ vérifiez la connexion réseau et la résolution DNS. Si votre serveur de "+
+			"licence est sur le réseau local, définissez CALEOPE_LICENSE_SERVER "+
+			"(ex: CALEOPE_LICENSE_SERVER=http://192.168.x.y:PORT) puis relancez l'activation",
+			serverURL(), err)
 	}
 	defer resp.Body.Close()
 
@@ -161,14 +183,18 @@ func (m *Manager) Activate(licenseKey string) error {
 	return nil
 }
 
-// verifyToken vérifie la signature Ed25519 et retourne le payload.
+// verifyToken vérifie la signature Ed25519 avec la clé publique de production.
 func verifyToken(token string) (*Payload, error) {
 	pubKeyBytes, err := base64.StdEncoding.DecodeString(PublicKeyB64)
 	if err != nil {
 		return nil, fmt.Errorf("clé publique invalide")
 	}
-	pub := ed25519.PublicKey(pubKeyBytes)
+	return verifyTokenWithKey(token, ed25519.PublicKey(pubKeyBytes))
+}
 
+// verifyTokenWithKey vérifie la signature Ed25519 d'un token contre une clé
+// publique donnée et retourne le payload. Couture extraite pour les tests.
+func verifyTokenWithKey(token string, pub ed25519.PublicKey) (*Payload, error) {
 	parts := strings.SplitN(token, ".", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("format token invalide")
@@ -183,7 +209,9 @@ func verifyToken(token string) (*Payload, error) {
 		return nil, fmt.Errorf("signature token invalide")
 	}
 
-	if !ed25519.Verify(pub, payloadBytes, sig) {
+	// Le serveur de licence signe la CHAÎNE encodée en base64url (parts[0]),
+	// pas le JSON décodé. On doit vérifier exactement les mêmes octets.
+	if !ed25519.Verify(pub, []byte(parts[0]), sig) {
 		return nil, fmt.Errorf("signature invalide")
 	}
 

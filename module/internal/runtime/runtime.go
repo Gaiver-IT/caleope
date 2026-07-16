@@ -377,6 +377,58 @@ func (m *Manager) writeRepos(repos []types.Repo) error {
 	return os.WriteFile(m.reposFile(), data, 0644)
 }
 
+// AddRepo ajoute un dépôt (ou met à jour celui du même nom) et persiste repos.json.
+func (m *Manager) AddRepo(repo types.Repo) error {
+	if repo.Name == "" || repo.URL == "" {
+		return fmt.Errorf("nom et URL requis")
+	}
+	if repo.Branch == "" {
+		repo.Branch = "main"
+	}
+	if repo.Trust == "" {
+		repo.Trust = types.TrustCommunity
+	}
+	if repo.LocalDir == "" {
+		repo.LocalDir = filepath.Join(m.baseDir, "core", "cache", repo.Name)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	repos, _ := m.readRepos()
+	found := false
+	for i := range repos {
+		if repos[i].Name == repo.Name {
+			repos[i] = repo
+			found = true
+			break
+		}
+	}
+	if !found {
+		repos = append(repos, repo)
+	}
+	return m.writeRepos(repos)
+}
+
+// RemoveRepo retire un dépôt par nom. Le dépôt officiel ne peut pas être retiré.
+func (m *Manager) RemoveRepo(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	repos, err := m.readRepos()
+	if err != nil {
+		return err
+	}
+	kept := make([]types.Repo, 0, len(repos))
+	for _, r := range repos {
+		if r.Name == name {
+			if r.Trust == types.TrustOfficial {
+				return fmt.Errorf("le dépôt officiel ne peut pas être retiré")
+			}
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return m.writeRepos(kept)
+}
+
 // ─────────────────────────────────────────────
 // CONFIG — lecture de caleope.conf
 // ─────────────────────────────────────────────
@@ -397,6 +449,18 @@ type Config struct {
 	SMTPFrom string
 	// Token GitHub pour les repos privés (upgrade, update store)
 	GithubToken string
+	// Registre d'images miroir (optionnel). Si défini, les images des apps sont
+	// réécrites vers ce registre à l'install (ex: caleope-registry.gaiver-it.fr
+	// pour les clients, ou 172.16.51.9:5000 en LAN). Vide = images d'origine.
+	Registry     string
+	RegistryUser string
+	RegistryPass string
+	// RegistryMode pilote l'usage du miroir :
+	//   "mirror"   → images réécrites vers le miroir (confiance Caleope, miroir-first)
+	//   "fallback" → images upstream d'abord, bascule sur le miroir si le pull échoue
+	//   "" / "upstream" → images upstream uniquement (défaut si pas de miroir)
+	// Rétro-compat : miroir défini + mode vide = "mirror" (comportement historique).
+	RegistryMode string
 }
 
 // GetConfig lit et parse caleope.conf.
@@ -447,6 +511,14 @@ func (m *Manager) GetConfig() (*Config, error) {
 			cfg.SMTPFrom = val
 		case "CALEOPE_GITHUB_TOKEN":
 			cfg.GithubToken = val
+		case "CALEOPE_REGISTRY":
+			cfg.Registry = val
+		case "CALEOPE_REGISTRY_USER":
+			cfg.RegistryUser = val
+		case "CALEOPE_REGISTRY_PASS":
+			cfg.RegistryPass = val
+		case "CALEOPE_REGISTRY_MODE":
+			cfg.RegistryMode = val
 		}
 	}
 	return cfg, nil

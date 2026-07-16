@@ -314,6 +314,92 @@ func (s *Server) StartHTTP(port int) error {
 		})
 	})
 
+	// GET/POST /api/v1/registry — lire/écrire la config du registre miroir
+	mux.Handle("/api/v1/registry", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			s.httpOK(w, s.RegistryStatus())
+		case http.MethodPost:
+			var body struct {
+				Registry string `json:"registry"`
+				User     string `json:"user"`
+				Pass     string `json:"pass"`
+				Mode     string `json:"mode"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				s.httpError(w, "JSON invalide", http.StatusBadRequest)
+				return
+			}
+			if err := s.SetRegistry(body.Registry, body.User, body.Pass, body.Mode); err != nil {
+				s.httpError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			s.httpOK(w, s.RegistryStatus())
+		default:
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+		}
+	})))
+
+	// POST /api/v1/import — recréer une app depuis une archive d'export (chemin serveur)
+	mux.Handle("/api/v1/import", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Archive string `json:"archive"`
+			Mode    string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			s.httpError(w, "JSON invalide", http.StatusBadRequest)
+			return
+		}
+		if err := s.handleImport(map[string]string{"archive": body.Archive, "mode": body.Mode}); err != nil {
+			s.httpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.httpOK(w, map[string]string{"status": "imported", "archive": body.Archive})
+	})))
+
+	// GET/POST/DELETE /api/v1/repos — gérer les dépôts du store
+	mux.Handle("/api/v1/repos", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			repos, err := s.rt.GetRepos()
+			if err != nil {
+				s.httpError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			s.httpOK(w, repos)
+		case http.MethodPost:
+			var body types.Repo
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				s.httpError(w, "JSON invalide", http.StatusBadRequest)
+				return
+			}
+			if err := s.rt.AddRepo(body); err != nil {
+				s.httpError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			repos, _ := s.rt.GetRepos()
+			s.httpOK(w, repos)
+		case http.MethodDelete:
+			name := r.URL.Query().Get("name")
+			if name == "" {
+				s.httpError(w, "nom du dépôt requis", http.StatusBadRequest)
+				return
+			}
+			if err := s.rt.RemoveRepo(name); err != nil {
+				s.httpError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			repos, _ := s.rt.GetRepos()
+			s.httpOK(w, repos)
+		default:
+			s.httpError(w, "méthode non autorisée", http.StatusMethodNotAllowed)
+		}
+	})))
+
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("✓ API REST sur %s\n", addr)
 	return http.ListenAndServe(addr, s.rateLimit(mux))
@@ -380,6 +466,8 @@ func (s *Server) routeApp(w http.ResponseWriter, r *http.Request) {
 		s.httpRestartByID(w, r, id)
 	case "POST backup", "POST backups":
 		s.httpBackupByID(w, r, id)
+	case "POST export":
+		s.httpExportByID(w, r, id)
 	case "POST restore":
 		s.httpRestoreByID(w, r, id)
 	case "GET backups":
@@ -740,6 +828,21 @@ func (s *Server) httpRestartByID(w http.ResponseWriter, r *http.Request, id stri
 
 func (s *Server) httpBackupByID(w http.ResponseWriter, r *http.Request, id string) {
 	data, err := s.handleBackup(map[string]string{"app": id})
+	if err != nil {
+		s.httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.httpOK(w, data)
+}
+
+// httpExportByID : POST /api/v1/apps/{id}/export?no_images=true
+// Crée une archive auto-suffisante et renvoie son chemin serveur.
+func (s *Server) httpExportByID(w http.ResponseWriter, r *http.Request, id string) {
+	args := map[string]string{"app": id}
+	if r.URL.Query().Get("no_images") == "true" {
+		args["no_images"] = "true"
+	}
+	data, err := s.handleExport(args)
 	if err != nil {
 		s.httpError(w, err.Error(), http.StatusInternalServerError)
 		return

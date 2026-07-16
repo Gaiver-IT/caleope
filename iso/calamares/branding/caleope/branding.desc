@@ -1,0 +1,45 @@
+# Branding Caleope pour Calamares — look sombre + accent violet, façon Windows 11.
+---
+componentName: caleope
+
+welcomeStyleCalamares: true
+welcomeExpandingLogo: true
+
+# Plein écran : expérience installeur immersive (façon assistant OS).
+windowExpanding: fullscreen
+windowSize: 100%,100%
+windowPlacement: center
+
+# Barre latérale d'étapes (façon assistant Windows 11) + navigation en bas.
+sidebar: widget
+navigation: widget
+
+strings:
+    productName:         Caleope
+    shortProductName:    Caleope
+    version:             0.7
+    shortVersion:        0.7
+    versionedName:       Caleope 0.7
+    shortVersionedName:  Caleope 0.7
+    bootloaderEntryName: Caleope
+    productUrl:          https://gaiver-it.fr
+    supportUrl:          https://gaiver-it.fr
+    knownIssuesUrl:      https://gaiver-it.fr
+    releaseNotesUrl:     https://gaiver-it.fr
+    productLogo:         logo.png
+    productIcon:         logo.png
+
+images:
+    productLogo:         logo.png
+    productIcon:         logo.png
+    productWelcome:      logo.png
+
+slideshow:               show.qml
+slideshowAPI: 2
+
+# Couleurs de la barre latérale (le reste vient de stylesheet.qss).
+style:
+    sidebarBackground:    "#0c0c0e"
+    sidebarText:          "#a0a0aa"
+    sidebarTextSelect:    "#7c6cff"
+    sidebarTextHighlight: "#7c6cff"

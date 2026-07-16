@@ -1,0 +1,70 @@
+/* Thème Caleope pour Calamares — sombre, accent violet, coins arrondis (Win 11-like). */
+
+#mainApp, QWidget {
+    background-color: #0c0c0e;
+    color: #e8e8ec;
+    font-family: "Inter", "Segoe UI", "Cantarell", sans-serif;
+    font-size: 11pt;
+}
+
+/* Titres d'étape */
+QLabel#titleLabel, QLabel[objectName="titleLabel"] {
+    color: #ffffff;
+    font-size: 18pt;
+    font-weight: 700;
+}
+
+/* Cartes / conteneurs */
+QFrame, QGroupBox {
+    background-color: #141418;
+    border: 1px solid #26262e;
+    border-radius: 10px;
+}
+
+/* Champs de saisie */
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QTextEdit {
+    background-color: #0c0c0e;
+    border: 1px solid #26262e;
+    border-radius: 6px;
+    padding: 7px 9px;
+    color: #e8e8ec;
+    selection-background-color: #7c6cff;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border: 1px solid #7c6cff;
+}
+
+/* Boutons primaires (Suivant / Installer) */
+QPushButton {
+    background-color: #7c6cff;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 9px 18px;
+    font-weight: 700;
+}
+QPushButton:hover  { background-color: #8f80ff; }
+QPushButton:pressed{ background-color: #6a5cf0; }
+QPushButton:disabled { background-color: #3a3550; color: #8a8a96; }
+
+/* Bouton secondaire (Précédent / Annuler) */
+QPushButton[objectName="backButton"], QPushButton[objectName="quitButton"] {
+    background-color: transparent;
+    color: #a0a0aa;
+    border: 1px solid #26262e;
+}
+QPushButton[objectName="backButton"]:hover { color: #e8e8ec; border-color: #7c6cff; }
+
+/* Barres de progression */
+QProgressBar {
+    background-color: #141418;
+    border: 1px solid #26262e;
+    border-radius: 6px;
+    text-align: center;
+    color: #e8e8ec;
+}
+QProgressBar::chunk { background-color: #7c6cff; border-radius: 5px; }
+
+/* Cases / radios */
+QCheckBox, QRadioButton { color: #e8e8ec; }
+QCheckBox::indicator:checked, QRadioButton::indicator:checked { background-color: #7c6cff; }
