@@ -3,6 +3,26 @@
 Objectif v0.7 : distribuer Caleope sous forme d'**ISO d'installation** (Debian 13
 Trixie + Docker + Caleope), avec un **wizard de premier démarrage** (web ou CLI).
 
+> ## ⚠️ Source de vérité — à lire avant tout build
+>
+> **`iso/` n'existe que sur la branche `main`.** Il n'est PAS sur `alpha` ni sur les
+> branches de feature. Avant de builder :
+> ```bash
+> git fetch origin && git checkout origin/main -- iso/ install.sh
+> ```
+> Ne builde **jamais** depuis une copie de travail dont tu n'as pas vérifié la
+> fraîcheur : un `iso/preseed.cfg` périmé produit une ISO qui *semble* correcte
+> (elle boote, le menu s'affiche) mais qui **s'arrête à l'écran de partitionnement**
+> et attend un humain. Vérification en une commande :
+> ```bash
+> git diff --stat origin/main -- iso/ install.sh    # doit être vide
+> ```
+> *Incident 16/07 : une ISO buildée depuis un dossier figé au 10/07 embarquait un
+> preseed antérieur à v0.7.6 (le commit `68f8605` du 11/07, qui ajoute le choix
+> automatique du disque). Raté d'une journée. Deux boot-tests à l'aveugle et un
+> soupçon infondé sur la version de Debian avant d'ouvrir la console et de voir
+> l'écran « Méthode de partitionnement » qui attendait `<Entrée>`.*
+
 ## Deux modes de distribution
 
 ### 0. Le plus simple — `make-iso.sh` (assistant guidé)
@@ -65,6 +85,50 @@ n'est qu'un bundle (produit par `offline-builder/`) embarqué dans l'image.
 > ⚠️ **À tester sur un hôte Linux** (xorriso). Points à valider au 1er build réel :
 > chemins de l'initrd Trixie (`install.amd/initrd.gz`), boot UEFI (`boot/grub/efi.img`),
 > et le flux des deux démarrages.
+
+## Contrôle qualité de l'ISO produite
+
+Une ISO qui se construit sans erreur n'est pas une ISO qui marche. Ces quatre
+contrôles se font **sans booter** et attrapent l'essentiel :
+
+```bash
+ISO=build/caleope-installer-vX.Y.Z.iso
+
+# 1. Le preseed réellement embarqué est-il le bon ? (le piège n°1)
+xorriso -osirrox on -indev $ISO -extract /install.amd/initrd.gz /tmp/i.gz
+mkdir -p /tmp/ir && (cd /tmp/ir && gunzip -c /tmp/i.gz | cpio -idm --quiet)
+diff iso/preseed.cfg /tmp/ir/preseed.cfg && echo "preseed OK"
+grep -c partman/early_command /tmp/ir/preseed.cfg   # doit être ≥ 1, sinon install NON auto
+
+# 2. Le payload contient-il les bons binaires ?
+xorriso -osirrox on -indev $ISO -extract /caleope /tmp/pl
+md5sum /tmp/pl/binaries/*                            # à comparer aux binaires attendus
+cat /tmp/pl/pack-info.json                           # version + canal
+
+# 3. Le store embarqué a-t-il les apps attendues ?
+tar tzf /tmp/pl/store.tar.gz | grep -c '^[^/]*/apps/'
+
+# 4. L'ISO est-elle réellement amorçable BIOS **et** UEFI ?
+fdisk -l $ISO | tail -3     # doit montrer une partition bootable (*) + une partition EFI (type ef)
+```
+
+## Pannes connues (et pourquoi elles sont sournoises)
+
+| Symptôme | Cause | Correctif |
+|---|---|---|
+| L'install s'arrête sur « **[!!] Partitionner les disques — Méthode de partitionnement** » | preseed sans `partman/early_command` → d-i ne sait pas choisir parmi plusieurs disques et retombe sur le menu. Sur une machine **mono-disque ça passe quand même** : le bug ne se voit qu'en multi-disques. | preseed ≥ v0.7.6 (`git checkout origin/main -- iso/`) |
+| L'ISO se construit mais n'amorce pas en BIOS | `/usr/lib/ISOLINUX/isohdpfx.bin` absent → l'`xorriso` final échoue, **mais `build.sh` masque l'erreur avec `2>/dev/null`** | `apt install -y isolinux syslinux-common` |
+| `caleope-completion.bash` fait 0 octet dans l'ISO | il est `wget` depuis le **tag** `${CALEOPE_VERSION}` ; si le tag n'existe pas encore (build pré-release), 404 → le `\|\| true` laisse un fichier vide | builder depuis un tag existant, ou ignorer (cosmétique) |
+| La version affichée n'est pas celle de `version.go` | le Makefile injecte `git describe --tags --abbrev=0`, pas `version.go` | poser le tag avant de builder |
+
+**Le fil rouge : `2>/dev/null` et `|| true`.** Trois des quatre pannes ci-dessus sont
+des erreurs réelles converties en silence. Quand un build « réussit » mais que le
+résultat est faux, cherche d'abord ce qui a été mis en sourdine.
+
+> Piège d'outillage, hors ISO mais de la même famille : en **zsh**, `$var:a` applique
+> le modificateur `:a` (chemin absolu). Un `git show "origin/$b:apps/x.yml"` devient
+> `origin//tmp/mainpps/x.yml` → erreur fatale, et avec `2>/dev/null` un joli `0` bien
+> trompeur. Utiliser `origin/${b}:apps/x.yml`.
 
 ### 2. ISO offline — outil builder côté utilisateur (à venir : `offline-builder/`)
 Plutôt qu'une énorme ISO « tout inclus » (~40 Go pour les 42 apps), un **binaire Go
