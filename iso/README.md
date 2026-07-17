@@ -62,12 +62,26 @@ Ce que fait `build.sh` :
    `/opt/caleope-install`, active `caleope-install.service`. *Rien de lourd
    n'est fait dans le chroot d-i* (pas de systemd/Docker fiables).
 2. **1er boot (headless)** — `caleope-install.service` lance
-   `install.sh --iso` : Docker + binaires + daemon + store, active le wizard,
-   puis reboote.
-3. **2e boot (console)** — `caleope-firstboot.service` lance le wizard
-   `install.sh --iso-finalize` sur `tty1` : domaine, reverse proxy, e-mail,
-   mots de passe → écrit la config, déploie Traefik + apps par défaut, se
-   désactive et rend la main à la session de login.
+   `install.sh --iso` : Docker + binaires + daemon + store, active le setup
+   web, puis se désactive (`Removed .../caleope-install.service`) et reboote.
+3. **2e boot — setup WEB sur `:8766`** (`Caleope — Premier démarrage`), à faire
+   depuis un autre poste. `caleope-banner.service` affiche l'URL sur la console.
+   Le formulaire couvre domaine, mode proxy, e-mail, mots de passe UI/secrets
+   **et les disques de données** (`/setup/disks` liste les disques hors système
+   → aucun/simple/RAID1 + ext4|btrfs|xfs). `POST /setup` répond
+   `{"status":"started"}` et travaille en détaché ; `GET /setup/status` renvoie
+   `{"firstboot":false}` une fois fini. Le mot de passe UI devient **aussi** le
+   mot de passe console de `user-caleope`.
+
+> Le wizard **console** sur tty1 (`caleope-firstboot.service` /
+> `install.sh --iso-finalize`) n'existe plus : il a été remplacé par le setup web
+> (commit `a477109`). L'unité `caleope-firstboot.service` est absente d'une
+> install à jour — si tu la cherches, c'est normal de ne pas la trouver.
+
+**Vérifié de bout en bout le 17/07** sur une install ISO réelle (3 disques) :
+install auto ~4 min 25 sans une seule question, OS sur le SSD, `sdb`/`sdc`
+laissés vierges puis assemblés par le wizard en `md0 : active raid1 [2/2] [UU]`
+monté sur `app-data`, puis Authentik/CrowdSec/Traefik `healthy`.
 
 ### Layout du payload (`/caleope/` sur l'ISO)
 ```
