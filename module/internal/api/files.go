@@ -51,6 +51,15 @@ func (s *Server) routeFiles(w http.ResponseWriter, r *http.Request) {
 			s.httpError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// La racine des partages n'existe qu'à partir du premier partage créé.
+		// Sur une install neuve, la page Fichiers doit montrer un dossier vide,
+		// pas une erreur → on la crée à la volée.
+		if full == s.sh.SharesRoot() {
+			if err := os.MkdirAll(full, 0o755); err != nil {
+				s.httpError(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		entries, err := os.ReadDir(full)
 		if err != nil {
 			s.httpError(w, err.Error(), http.StatusNotFound)

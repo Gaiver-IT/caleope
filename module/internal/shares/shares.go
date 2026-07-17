@@ -97,12 +97,34 @@ func (m *Manager) containerSharePath(s types.Share) string {
 // ─────────────────────────────────────────────
 
 // Add crée un partage : valide, crée le dossier, écrit la méta, régénère Samba.
+// validateACL refuse un accès qui n'est ni ro ni rw.
+//
+// Sans ce garde-fou, une valeur inconnue est stockée telle quelle : le groupe
+// atterrit dans « valid users » mais jamais dans « write list » (qui ne teste
+// que AccessWrite). Le partage paraît configuré en écriture et reste en
+// lecture seule pour tout le monde, sans le moindre message.
+func validateACL(acl []types.ShareGroupACL) error {
+	for _, a := range acl {
+		if strings.TrimSpace(a.Group) == "" {
+			return fmt.Errorf("ACL : nom de groupe vide")
+		}
+		if a.Access != types.AccessRead && a.Access != types.AccessWrite {
+			return fmt.Errorf("ACL du groupe '%s' : accès '%s' invalide (attendu '%s' ou '%s')",
+				a.Group, a.Access, types.AccessRead, types.AccessWrite)
+		}
+	}
+	return nil
+}
+
 func (m *Manager) Add(s types.Share) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if !nameRe.MatchString(s.Name) {
 		return fmt.Errorf("nom de partage invalide (a-z, 0-9, - et _, 1-32 caractères)")
+	}
+	if err := validateACL(s.ACL); err != nil {
+		return err
 	}
 	if _, err := os.Stat(m.shareFile(s.Name)); err == nil {
 		return fmt.Errorf("un partage '%s' existe déjà", s.Name)
@@ -129,6 +151,9 @@ func (m *Manager) Update(s types.Share) error {
 
 	if !nameRe.MatchString(s.Name) {
 		return fmt.Errorf("nom de partage invalide")
+	}
+	if err := validateACL(s.ACL); err != nil {
+		return err
 	}
 	old, err := m.readShare(s.Name)
 	if err != nil {
