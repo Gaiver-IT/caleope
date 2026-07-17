@@ -1,5 +1,20 @@
 # Caleope — Journal des versions
 
+## v0.8.0 (2026-07-17)
+Grosse version : trois fonctionnalités inspirées d'Unraid + tout l'acquis v0.7.x.
+- **Partages réseau (SMB)** — dossiers montables (`smb://…`), ACL par groupe Authentik
+  (lecture / lecture-écriture), mot de passe réseau dédié, app `caleope-samba`. Page
+  **PARTAGES** dans l'UI.
+- **Gestionnaire de fichiers natif** — explorer/créer/renommer/supprimer, upload repris
+  par morceaux (gros rushs), download avec reprise (Range). Page **FICHIERS**.
+- **Machines virtuelles (KVM/libvirt)** — création/cycle de vie de VMs d'appoint,
+  **Pro-only**, détection de capacité (KVM, virtualisation imbriquée). Page **MACHINES VIRT.**
+- **ISO d'installation** : choix **automatique** du disque système (SSD préféré) même en
+  multi-disques, stockage first-boot **RAID1 + ext4/btrfs/xfs** via le setup web, boot
+  **BIOS et UEFI** vérifié, `nfs-common`/`cifs-utils` préinstallés.
+- **Apps prioritaires** (`caleope.priority` : critical/normal/background → cpu_shares +
+  oom_score_adj), **activation de licence résiliente**, refus propre des conflits de port.
+
 ## v0.6.10 (2026-07-05)
 - **UI** : sélecteur de **mode registre** (fallback/mirror/upstream) dans la carte Registre.
 - **UI** : carte **« Importer une app »** (Paramètres) — recrée une app depuis une archive d'export.
