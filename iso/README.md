@@ -78,10 +78,29 @@ Ce que fait `build.sh` :
 > (commit `a477109`). L'unité `caleope-firstboot.service` est absente d'une
 > install à jour — si tu la cherches, c'est normal de ne pas la trouver.
 
-**Vérifié de bout en bout le 17/07** sur une install ISO réelle (3 disques) :
-install auto ~4 min 25 sans une seule question, OS sur le SSD, `sdb`/`sdc`
-laissés vierges puis assemblés par le wizard en `md0 : active raid1 [2/2] [UU]`
-monté sur `app-data`, puis Authentik/CrowdSec/Traefik `healthy`.
+**Vérifié de bout en bout le 17/07** sur des installs ISO réelles (multi-disques) :
+install auto sans une seule question, OS sur le SSD, disques data laissés vierges
+puis assemblés par le wizard en `md0 : active raid1 [2/2] [UU]` monté sur
+`app-data`, puis Authentik/CrowdSec/Traefik `healthy`.
+
+| | BIOS (SeaBIOS) | UEFI (OVMF + q35) |
+|---|---|---|
+| Install auto | ✅ 4 min 25 | ✅ 4 min 58 |
+| Disque système choisi seul | ✅ le SSD | ✅ le SSD |
+| Disques data intacts | ✅ | ✅ |
+| Partitions | `/boot` + LVM | **`/boot/efi` (ESP)** + `/boot` + LVM |
+| Bascule sur le système installé | manuelle en VM (voir ci-dessous) | ✅ automatique (entrée EFI Debian) |
+
+### Boot-tester l'ISO en VM sans tomber dans la boucle du CD
+Après l'install, la VM redémarre **avec l'ordre de boot du démarrage** : si le CD est
+premier, elle relance l'installeur en boucle et **réinstalle par-dessus**.
+
+> Mettre le **disque en premier** et laisser le disque **vierge** :
+> `boot=order=scsi0;ide2`. Rien d'amorçable sur le disque → bascule sur le CD →
+> install → le système installé prend la main tout seul au reboot. Aucune
+> intervention, donc aucune fenêtre à rater.
+
+Sur une vraie machine la question ne se pose pas : on retire la clé USB.
 
 ### Layout du payload (`/caleope/` sur l'ISO)
 ```
