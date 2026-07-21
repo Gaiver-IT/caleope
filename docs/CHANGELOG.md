@@ -1,5 +1,12 @@
 # Caleope — Journal des versions
 
+## v0.8.1 (2026-07-17)
+- **Fix** : le préflight de conflit de ports ignorait le champ `host` d'un port
+  statique (il testait le port *container*). Conséquence : **Gitea** (et toute app
+  publiant un port statique sur un port hôte différent, ex. SSH `2222:22`) était
+  **refusé à l'installation** sur toute machine ayant un serveur SSH sur le port 22.
+  Corrigé : le préflight teste le port réellement ouvert sur l'hôte.
+
 ## v0.8.0 (2026-07-17)
 Grosse version : trois fonctionnalités inspirées d'Unraid + tout l'acquis v0.7.x.
 - **Partages réseau (SMB)** — dossiers montables (`smb://…`), ACL par groupe Authentik

@@ -12,6 +12,6 @@
 package version
 
 var (
-	Version = "v0.8.0"  // ex: v0.2.0 — injecté par le Makefile
+	Version = "v0.8.1"  // ex: v0.2.0 — injecté par le Makefile
 	Commit  = "unknown" // ex: abc1234 — hash git court
 )
