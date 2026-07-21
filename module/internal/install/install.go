@@ -382,6 +382,16 @@ func portFree(proto string, port int) bool {
 // checkStaticPorts refuse l'install si un port FIXE (dynamic:false) de l'app est
 // déjà occupé — soit par une autre app Caleope (nommée), soit par un service
 // tiers. Ignore le cas où l'app se réinstalle sur son propre port.
+// staticHostPort retourne le port réellement ouvert sur l'hôte pour un port
+// statique : le champ Host quand il est renseigné (mapping « hostPort:container »
+// comme gitea 2222:22), sinon le port container (mapping « 53:53 »).
+func staticHostPort(p types.AppPort) int {
+	if p.Host != 0 {
+		return p.Host
+	}
+	return p.Container
+}
+
 func (i *Installer) checkStaticPorts(manifest *types.AppManifest) error {
 	if manifest.NoContainer {
 		return nil // outil système sans conteneur → pas de bind de port hôte
@@ -391,7 +401,10 @@ func (i *Installer) checkStaticPorts(manifest *types.AppManifest) error {
 		if p.Dynamic || p.Container == 0 {
 			continue
 		}
-		port := p.Container // port fixe : host = container (compose « 53:53 »)
+		// Port RÉELLEMENT bindé sur l'hôte : c'est le champ Host quand il est
+		// défini (compose « 2222:22 » → on teste 2222, pas 22), sinon le port
+		// container (compose « 53:53 » où host = container et Host vaut 0).
+		port := staticHostPort(p)
 		for _, proto := range portProtos(p.Protocol) {
 			if portFree(proto, port) {
 				continue
@@ -400,7 +413,7 @@ func (i *Installer) checkStaticPorts(manifest *types.AppManifest) error {
 			var culprit string
 			for _, app := range installed {
 				for _, ap := range app.Ports {
-					if ap.Dynamic || ap.Container != port {
+					if ap.Dynamic || staticHostPort(ap) != port {
 						continue
 					}
 					if app.ID == manifest.ID {
