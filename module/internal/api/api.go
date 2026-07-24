@@ -284,6 +284,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleVMAction(req.Args, "force-stop")
 	case "vm-delete":
 		err = s.handleVMAction(req.Args, "delete")
+	case "packs-list":
+		data, err = s.handlePacksList()
+	case "pack-status":
+		data, err = s.handlePackStatus(req.Args["id"])
+	case "pack-install":
+		data, err = s.handlePackInstall(req.Args)
 	case "task-list":
 		data, err = s.handleTaskList()
 	case "task-add":

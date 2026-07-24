@@ -106,6 +106,10 @@ func main() {
 		cmdOfflineUpdate(args)
 	case "task", "tasks":
 		cmdTask(args)
+	case "packs":
+		cmdPacksList(args)
+	case "pack":
+		cmdPack(args)
 	case "help", "--help", "-h":
 		printHelp()
 	default:
@@ -1601,5 +1605,96 @@ func cmdLicense(args []string) {
 
 	default:
 		die("❌ Sous-commande inconnue: caleope license " + args[0])
+	}
+}
+
+// ─────────────────────────────────────────────
+// PACKS — bundles d'apps par usage
+// ─────────────────────────────────────────────
+
+func packNum(v interface{}) int {
+	if f, ok := v.(float64); ok {
+		return int(f)
+	}
+	return 0
+}
+
+// cmdPacksList : `caleope packs` — liste les packs et leur état.
+func cmdPacksList(_ []string) {
+	resp := callDaemon("packs-list", map[string]string{})
+	if !resp.Success {
+		die("❌ " + resp.Error)
+	}
+	packs, ok := resp.Data.([]interface{})
+	if !ok || len(packs) == 0 {
+		fmt.Println("Aucun pack disponible. (fais `caleope update` pour synchroniser le store)")
+		return
+	}
+	for _, raw := range packs {
+		p, _ := raw.(map[string]interface{})
+		pack, _ := p["pack"].(map[string]interface{})
+		name, _ := pack["name"].(string)
+		id, _ := pack["id"].(string)
+		apps, _ := p["apps"].([]interface{})
+		complete, _ := p["complete"].(bool)
+		badge := fmt.Sprintf("%d/%d apps installées", packNum(p["installed"]), len(apps))
+		if complete {
+			badge = "✓ complet"
+		}
+		fmt.Printf("\n● %s  [%s]  — %s\n", name, id, badge)
+		marks := []string{}
+		for _, ar := range apps {
+			a, _ := ar.(map[string]interface{})
+			an, _ := a["name"].(string)
+			mark := "○"
+			if inst, _ := a["installed"].(bool); inst {
+				mark = "✓"
+			} else if inc, _ := a["in_catalog"].(bool); !inc {
+				mark = "✗"
+			}
+			marks = append(marks, mark+" "+an)
+		}
+		fmt.Printf("    %s\n", strings.Join(marks, "    "))
+	}
+	fmt.Println("\n✓ installée   ○ à installer   ✗ absente du catalogue")
+	fmt.Println("Installer : caleope pack install <id> [--alpha]")
+}
+
+// cmdPack : `caleope pack install <id>` — installe les apps manquantes d'un pack.
+func cmdPack(args []string) {
+	if len(args) < 2 || args[0] != "install" {
+		die("Usage: caleope pack install <id> [--alpha]")
+	}
+	id := args[1]
+	apiArgs := map[string]string{"id": id}
+	for _, a := range args[2:] {
+		if a == "--alpha" {
+			apiArgs["channel"] = "alpha"
+		}
+	}
+	fmt.Printf("📦 Installation du pack « %s »...\n", id)
+	resp := callDaemon("pack-install", apiArgs)
+	if !resp.Success {
+		die("❌ " + resp.Error)
+	}
+	data, _ := resp.Data.(map[string]interface{})
+	if results, _ := data["results"].([]interface{}); len(results) > 0 {
+		for _, rr := range results {
+			r, _ := rr.(map[string]interface{})
+			mark := "✓"
+			if okv, _ := r["ok"].(bool); !okv {
+				mark = "⚠"
+			}
+			fmt.Printf("  %s %v — %v\n", mark, r["app"], r["message"])
+		}
+	}
+	fmt.Printf("✅ Pack « %v » : %d installée(s), %d déjà présente(s).\n",
+		data["pack"], packNum(data["installed_now"]), packNum(data["already"]))
+	if missing, _ := data["missing"].([]interface{}); len(missing) > 0 {
+		ms := make([]string, 0, len(missing))
+		for _, m := range missing {
+			ms = append(ms, fmt.Sprint(m))
+		}
+		fmt.Printf("⚠ Absentes du catalogue (non installées) : %s\n", strings.Join(ms, ", "))
 	}
 }

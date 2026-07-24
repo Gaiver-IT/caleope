@@ -377,3 +377,37 @@ type Schedule struct {
 	Minute int   `json:"minute"`         // 0–59
 	Days   []int `json:"days,omitempty"` // 0=dim … 6=sam ; vide = tous les jours
 }
+
+// ─────────────────────────────────────────────
+// PACKS — bundles d'apps par usage (métadonnées au-dessus du catalogue)
+// Stockés dans <repo>/packs/<id>/pack.json
+// ─────────────────────────────────────────────
+
+// Pack décrit un cas d'usage : un ensemble d'apps du catalogue à installer
+// ensemble. Les Packs ne remplacent PAS le catalogue — chaque app reste
+// installable individuellement. L'ordre de Apps est l'ordre d'installation.
+type Pack struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Icon        string   `json:"icon,omitempty"`
+	Description string   `json:"description"`
+	Apps        []string `json:"apps"`
+}
+
+// PackAppState = état d'une app d'un pack vis-à-vis de l'installation.
+type PackAppState struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`      // nom lisible (depuis le manifest), ID si introuvable
+	Installed bool   `json:"installed"` // déjà installée sur le système
+	InCatalog bool   `json:"in_catalog"`// présente dans le store (installable)
+}
+
+// PackStatus = un Pack + son préflight (ce qui est déjà là, ce qu'il reste).
+type PackStatus struct {
+	Pack      Pack           `json:"pack"`
+	Apps      []PackAppState `json:"apps"`
+	ToInstall []string       `json:"to_install"` // apps du pack pas encore installées ET présentes au catalogue
+	Missing   []string       `json:"missing"`    // apps du pack absentes du catalogue (non installables)
+	Installed int            `json:"installed"`  // nb d'apps du pack déjà installées
+	Complete  bool           `json:"complete"`   // toutes les apps installables sont installées
+}

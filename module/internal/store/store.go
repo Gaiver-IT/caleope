@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/gaiver-it/caleope/pkg/types"
@@ -248,4 +249,71 @@ func (s *Store) Search(term string, repos []types.Repo) ([]types.AppManifest, er
 	}
 
 	return results, nil
+}
+
+// ─────────────────────────────────────────────
+// PACKS — lecture des manifestes packs/<id>/pack.json
+// ─────────────────────────────────────────────
+
+// ListPacks retourne tous les packs trouvés dans les repos (par ordre de
+// confiance : un pack d'un repo prioritaire masque le même id d'un repo moins
+// prioritaire, comme pour les apps).
+func (s *Store) ListPacks(repos []types.Repo) ([]types.Pack, error) {
+	var packs []types.Pack
+	seen := map[string]bool{}
+	order := []types.TrustLevel{types.TrustOfficial, types.TrustCommunity, types.TrustUntrusted}
+	for _, trust := range order {
+		for _, repo := range repos {
+			if repo.Trust != trust {
+				continue
+			}
+			packsDir := filepath.Join(repo.LocalDir, "packs")
+			entries, err := os.ReadDir(packsDir)
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if !entry.IsDir() || seen[entry.Name()] {
+					continue
+				}
+				p, err := readPack(filepath.Join(packsDir, entry.Name()))
+				if err != nil {
+					continue
+				}
+				packs = append(packs, *p)
+				seen[entry.Name()] = true
+			}
+		}
+	}
+	sort.Slice(packs, func(i, j int) bool { return packs[i].Name < packs[j].Name })
+	return packs, nil
+}
+
+// GetPack retourne un pack par son id (nil-error si introuvable).
+func (s *Store) GetPack(id string, repos []types.Repo) (*types.Pack, error) {
+	packs, err := s.ListPacks(repos)
+	if err != nil {
+		return nil, err
+	}
+	for i := range packs {
+		if packs[i].ID == id {
+			return &packs[i], nil
+		}
+	}
+	return nil, fmt.Errorf("pack '%s' introuvable", id)
+}
+
+func readPack(dir string) (*types.Pack, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "pack.json"))
+	if err != nil {
+		return nil, err
+	}
+	var p types.Pack
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, err
+	}
+	if p.ID == "" || len(p.Apps) == 0 {
+		return nil, fmt.Errorf("pack invalide dans %s", dir)
+	}
+	return &p, nil
 }
