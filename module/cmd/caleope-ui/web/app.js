@@ -6108,6 +6108,66 @@ async function submitTaskForm() {
   }
 }
 
+// ── Packs (bundles d'apps par usage) ───────────────────────────────────────────
+async function loadPacks() {
+  const c = document.getElementById('content-packs');
+  if (!c) return;
+  const data = await api.get('/api/v1/packs');
+  const packs = Array.isArray(data?.data) ? data.data : [];
+  if (!packs.length) {
+    c.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="ti ti-package"></i></div><div class="empty-title">AUCUN PACK</div><div class="empty-sub">Synchronise le catalogue (Applications → mettre à jour) pour récupérer les packs.</div></div>`;
+    return;
+  }
+  const intro = `<div class="loc-meta" style="margin-bottom:14px">Un Pack installe d'un coup plusieurs applications pour un usage — sans remplacer le catalogue. Choisis ce que tu veux faire, Caleope compose.</div>`;
+  c.innerHTML = intro + `<div class="pack-grid">${packs.map(packCard).join('')}</div>`;
+}
+
+function packCard(p) {
+  const pack = p.pack || {};
+  const apps = Array.isArray(p.apps) ? p.apps : [];
+  const icon = pack.icon || 'ti-package';
+  const chips = apps.map(a => {
+    let mark = '<i class="ti ti-circle" style="opacity:.4"></i>';       // à installer
+    let cls = 'pack-chip';
+    if (a.installed) { mark = '<i class="ti ti-circle-check"></i>'; cls += ' ok'; }
+    else if (!a.in_catalog) { mark = '<i class="ti ti-circle-x"></i>'; cls += ' missing'; }
+    return `<span class="${cls}">${mark}&nbsp;${escapeHtml(a.name || a.id)}</span>`;
+  }).join('');
+  const toInstall = Array.isArray(p.to_install) ? p.to_install.length : 0;
+  let action;
+  if (p.complete) {
+    action = `<span class="loc-type-badge" style="background:var(--ok,#3a5)"><i class="ti ti-check"></i>&nbsp;COMPLET</span>`;
+  } else if (toInstall > 0) {
+    action = `<button class="btn-sm" onclick="installPack('${escapeHtml(pack.id)}')"><i class="ti ti-download"></i>&nbsp;INSTALLER (${toInstall})</button>`;
+  } else {
+    action = `<span class="loc-type-badge" style="opacity:.6">INDISPONIBLE</span>`;
+  }
+  const missing = (p.missing && p.missing.length)
+    ? `<div class="loc-meta" style="color:var(--warn,#c84)"><i class="ti ti-alert-triangle"></i> Absentes du catalogue : ${p.missing.map(escapeHtml).join(', ')}</div>` : '';
+  return `<div class="pack-card">
+    <div class="pack-head"><i class="ti ${escapeHtml(icon)} pack-icon"></i>
+      <div><div class="pack-name">${escapeHtml(pack.name || pack.id)}</div>
+      <div class="loc-meta">${p.installed || 0}/${apps.length} installée(s)</div></div></div>
+    <div class="pack-desc">${escapeHtml(pack.description || '')}</div>
+    <div class="pack-chips">${chips}</div>
+    ${missing}
+    <div class="pack-foot">${action}</div>
+  </div>`;
+}
+
+async function installPack(id) {
+  if (!confirm(`Installer le pack « ${id} » ? Les applications manquantes seront installées.`)) return;
+  notify('Installation du pack en cours…', 'ok');
+  const r = await api.post(`/api/v1/packs/${encodeURIComponent(id)}/install`);
+  if (r && r.success !== false) {
+    const d = r.data || {};
+    notify(`Pack : ${d.installed_now || 0} app(s) installée(s)`, 'ok');
+    loadPacks();
+  } else {
+    notify(r?.error || 'Erreur à l\'installation du pack', 'err');
+  }
+}
+
 // ── Navigation ────────────────────────────────────────────────────────────────
 const SECTIONS = {
   dashboard: { label: 'TABLEAU DE BORD', num: '/00', load: loadDashboard,  content: 'content-dashboard',  btn: null },
@@ -6129,6 +6189,7 @@ const SECTIONS = {
   shares:    { label: 'PARTAGES',        num: '/16', load: loadShares,     content: 'content-shares',     btn: { icon: 'ti-plus',          label: 'NOUVEAU PARTAGE', action: "openAddShareModal()" } },
   files:     { label: 'FICHIERS',        num: '/17', load: loadFiles,      content: 'content-files',      btn: null },
   vms:       { label: 'MACHINES VIRT.',  num: '/18', load: loadVMs,        content: 'content-vms',        btn: { icon: 'ti-plus', label: 'NOUVELLE VM', action: "openCreateVMModal()" } },
+  packs:     { label: 'PACKS',           num: '/19', load: loadPacks,      content: 'content-packs',      btn: null },
   integrations: { label: 'INTÉGRATIONS', num: '/INT', load: buildDynamicNav, content: 'content-integrations', btn: null },
 };
 

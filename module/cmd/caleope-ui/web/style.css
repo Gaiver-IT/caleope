@@ -1253,3 +1253,44 @@ a.app-icon:hover { border-color: var(--blue); background: var(--blue-g); }
   color: var(--text3); font-size: 11px; letter-spacing: .5px;
   display: flex; align-items: center; justify-content: center; gap: 8px;
 }
+
+/* ── Packs (bundles d'apps par usage) ─────────────────────────────────── */
+.pack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.pack-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pack-head { display: flex; align-items: center; gap: 12px; }
+.pack-icon {
+  font-size: 26px;
+  color: var(--vio);
+  background: var(--vio-dim);
+  border-radius: 8px;
+  padding: 8px;
+  line-height: 1;
+}
+.pack-name { font-weight: 600; color: var(--text); font-size: 15px; }
+.pack-desc { color: var(--text2); font-size: 13px; line-height: 1.4; flex: 1; }
+.pack-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pack-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 20px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text2);
+}
+.pack-chip.ok { color: var(--ok); border-color: var(--ok); }
+.pack-chip.missing { color: var(--err); border-color: var(--err); opacity: .8; }
+.pack-foot { display: flex; justify-content: flex-end; margin-top: 4px; }
