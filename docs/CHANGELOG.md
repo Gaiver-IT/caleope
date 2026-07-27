@@ -1,5 +1,16 @@
 # Caleope — Journal des versions
 
+## v0.9.0 (2026-07-17)
+- **Packs** : nouvelle fonctionnalité — des bundles d'applications par usage.
+  L'utilisateur choisit un cas d'usage (« IA privée », « Communication »,
+  « Cloud personnel »…) et Caleope installe les apps qui vont ensemble, dans le
+  bon ordre. Couche mince au-dessus du catalogue (les apps restent installables
+  à l'unité). Page « Packs » dans l'UI, `caleope packs` / `caleope pack install`
+  en CLI. 7 packs livrés : IA privée, Développement, Communication, Vie privée,
+  Souveraineté numérique, Serveur familial, Cloud personnel.
+- **Nouvelles apps** (pour les Packs) : SearXNG, Qdrant, Ollama, Open WebUI,
+  Forgejo, Woodpecker CI, Matrix (Synapse), Element, Jitsi Meet, Collabora Online.
+
 ## v0.8.1 (2026-07-17)
 - **Fix** : le préflight de conflit de ports ignorait le champ `host` d'un port
   statique (il testait le port *container*). Conséquence : **Gitea** (et toute app
