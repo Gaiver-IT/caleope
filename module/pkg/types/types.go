@@ -22,8 +22,10 @@ type AppManifest struct {
 	ID             string          `json:"id"`
 	Name           string          `json:"name"`
 	Category       string          `json:"category"`
-	Channel        string          `json:"channel"`    // stable, latest, nightly
-	Repository     string          `json:"repository"` // official, community, untrusted
+	Channel        string          `json:"channel"`             // stable, latest, nightly
+	Repository     string          `json:"repository"`          // official, community, untrusted
+	Type           string          `json:"type,omitempty"`      // "" | "compose" (défaut) | "appliance" (VM depuis ISO)
+	Appliance      *ApplianceSpec  `json:"appliance,omitempty"` // requis si Type == "appliance"
 	Capabilities   AppCapabilities `json:"capabilities"`
 	Network        AppNetwork      `json:"network"`
 	Ports          []AppPort       `json:"ports"`
@@ -34,6 +36,20 @@ type AppManifest struct {
 	AuthMiddleware bool            `json:"auth_middleware,omitempty"` // Authentik forward auth opt-in
 	NoContainer    bool            `json:"no_container,omitempty"`    // true = outil système, pas de container Docker
 	Priority       string          `json:"priority,omitempty"`        // critical | normal | background — priorité ressources (cpu_shares + oom_score_adj) des containers de l'app. Override par service via label compose "caleope.priority".
+}
+
+// ApplianceSpec décrit une app de type "appliance" : au lieu d'un docker-compose,
+// Caleope crée une VM KVM depuis une ISO officielle (téléchargée + vérifiée) et
+// injecte un preseed d'auto-installation. Réservé à l'édition Pro (crée une VM).
+type ApplianceSpec struct {
+	ISOURL    string `json:"iso_url"`              // URL de l'ISO d'install officielle (ex: netinst Debian)
+	ISOSha256 string `json:"iso_sha256"`           // SHA256 attendu de l'ISO (intégrité — obligatoire)
+	Preseed   string `json:"preseed,omitempty"`    // nom du fichier preseed dans le dossier de l'app (injecté dans l'initrd)
+	ExtraArgs string `json:"extra_args,omitempty"` // args noyau installeur additionnels (ex: locale/console)
+	VCPUs     int    `json:"vcpus,omitempty"`      // défaut 2
+	MemMB     int    `json:"mem_mb,omitempty"`     // défaut 2048
+	DiskGB    int    `json:"disk_gb,omitempty"`    // défaut 20
+	Network   string `json:"network,omitempty"`    // "nat" (défaut) | "bridge"
 }
 
 type AppCapabilities struct {
@@ -158,6 +174,7 @@ type RuntimeApp struct {
 	Domain          string    `json:"domain,omitempty"`           // domaine public de l'app (depuis app.env)
 	Ports           []AppPort `json:"ports"`                      // avec les ports hôtes alloués
 	ComposeDir      string    `json:"compose_dir"`                // chemin vers apps-installed/<id>/
+	VMName          string    `json:"vm_name,omitempty"`          // nom de la VM libvirt si Type == "appliance"
 	StorageLocation string    `json:"storage_location,omitempty"` // nom de la location NAS (vide = stockage local)
 	Priority        string    `json:"priority,omitempty"`         // tier de priorité ressources (critical|normal|background) — ré-appliqué à chaque start/restart
 	Error           string    `json:"error,omitempty"`
@@ -397,9 +414,9 @@ type Pack struct {
 // PackAppState = état d'une app d'un pack vis-à-vis de l'installation.
 type PackAppState struct {
 	ID        string `json:"id"`
-	Name      string `json:"name"`      // nom lisible (depuis le manifest), ID si introuvable
-	Installed bool   `json:"installed"` // déjà installée sur le système
-	InCatalog bool   `json:"in_catalog"`// présente dans le store (installable)
+	Name      string `json:"name"`       // nom lisible (depuis le manifest), ID si introuvable
+	Installed bool   `json:"installed"`  // déjà installée sur le système
+	InCatalog bool   `json:"in_catalog"` // présente dans le store (installable)
 }
 
 // PackStatus = un Pack + son préflight (ce qui est déjà là, ce qu'il reste).

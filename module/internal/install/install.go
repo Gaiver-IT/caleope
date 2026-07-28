@@ -30,6 +30,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/runtime"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/internal/ufw"
+	"github.com/gaiver-it/caleope/internal/vms"
 	"github.com/gaiver-it/caleope/pkg/types"
 )
 
@@ -40,6 +41,8 @@ type Installer struct {
 	docker  *docker.Client
 	emitter *events.Emitter
 	baseDir string
+	vm      *vms.Manager // gestionnaire de VMs (apps de type "appliance")
+	isPro   func() bool  // vrai si l'édition licenciée est Pro (gating appliance)
 }
 
 func NewInstaller(
@@ -48,13 +51,20 @@ func NewInstaller(
 	dc *docker.Client,
 	em *events.Emitter,
 	baseDir string,
+	vm *vms.Manager,
+	isPro func() bool,
 ) *Installer {
+	if isPro == nil {
+		isPro = func() bool { return false }
+	}
 	return &Installer{
 		rt:      rt,
 		st:      st,
 		docker:  dc,
 		emitter: em,
 		baseDir: baseDir,
+		vm:      vm,
+		isPro:   isPro,
 	}
 }
 
@@ -120,6 +130,12 @@ func (i *Installer) Install(opts InstallOptions) error {
 		if _, err := i.rt.GetApp(opts.AppID); err == nil {
 			return fmt.Errorf("'%s' est déjà installée (utilisez --force pour réinstaller)", opts.AppID)
 		}
+	}
+
+	// ── Type "appliance" : VM depuis ISO officielle (pas de Docker) ──
+	// Chemin dédié : on ne fait ni allocation de ports, ni compose, ni pull.
+	if manifest.Type == "appliance" {
+		return i.installAppliance(manifest, appDir, opts)
 	}
 
 	// Marquer l'app comme "en cours d'installation" dans le runtime
@@ -278,6 +294,106 @@ func (i *Installer) Install(opts InstallOptions) error {
 		}
 	}
 
+	return nil
+}
+
+// installAppliance installe une app de type "appliance" : au lieu d'un
+// docker-compose, on crée une VM KVM depuis l'ISO officielle du manifeste
+// (téléchargée + vérifiée SHA256) avec un preseed d'auto-installation.
+// Réservé à l'édition Pro (crée une VM).
+func (i *Installer) installAppliance(manifest *types.AppManifest, appDir string, opts InstallOptions) error {
+	fmt.Printf("\n📦 Installation de l'appliance %s (VM)...\n", manifest.Name)
+
+	// Gating Pro
+	if !i.isPro() {
+		audit.Log(audit.ActionInstall, opts.AppID, "DENIED:pro_required")
+		return fmt.Errorf("les appliances (VM) nécessitent l'édition Pro")
+	}
+	if i.vm == nil {
+		return fmt.Errorf("gestionnaire de VM indisponible")
+	}
+	if manifest.Appliance == nil {
+		return fmt.Errorf("manifeste appliance invalide : section 'appliance' manquante")
+	}
+
+	// Capacité KVM de l'hôte
+	if c := i.vm.Capability(); !c.Available {
+		return fmt.Errorf("VM indisponible sur cet hôte : %s", c.Reason)
+	}
+
+	// Preseed (optionnel) : fichier dans le dossier de l'app
+	preseed := ""
+	if manifest.Appliance.Preseed != "" {
+		preseed = filepath.Join(appDir, manifest.Appliance.Preseed)
+		if _, err := os.Stat(preseed); err != nil {
+			return fmt.Errorf("preseed introuvable : %s", preseed)
+		}
+	}
+
+	// État runtime : en cours d'installation
+	runtimeApp := &types.RuntimeApp{
+		ID:          manifest.ID,
+		Name:        manifest.Name,
+		Status:      types.StatusInstalling,
+		InstalledAt: time.Now(),
+		UpdatedAt:   time.Now(),
+		Channel:     manifest.Channel,
+		Repository:  manifest.Repository,
+	}
+	_ = i.rt.SaveApp(runtimeApp)
+
+	fmt.Println("  → Téléchargement de l'ISO (vérif SHA256) + création de la VM...")
+	vmName, err := i.vm.InstallAppliance(manifest.ID, *manifest.Appliance, preseed)
+	if err != nil {
+		runtimeApp.Status = types.StatusError
+		runtimeApp.Error = err.Error()
+		_ = i.rt.SaveApp(runtimeApp)
+		audit.Log(audit.ActionInstall, opts.AppID, "ERROR:vm_create")
+		return err
+	}
+
+	// État runtime : VM lancée (l'installeur tourne puis reboote dans l'appliance)
+	runtimeApp.Status = types.StatusRunning
+	runtimeApp.VMName = vmName
+	runtimeApp.UpdatedAt = time.Now()
+	if err := i.rt.SaveApp(runtimeApp); err != nil {
+		return err
+	}
+
+	// Ouvrir les ports UFW marqués firewall:true (ex: SIP 5060/udp)
+	if ufwPorts := manifestToUFWPorts(manifest); len(ufwPorts) > 0 {
+		fmt.Println("  → Ouverture des ports UFW...")
+		for _, e := range ufw.OpenPorts(ufwPorts) {
+			fmt.Printf("    ⚠ %v\n", e)
+		}
+	}
+
+	_ = i.emitter.AppInstalled(opts.AppID)
+	audit.Log(audit.ActionInstall, opts.AppID, "OK:appliance")
+
+	fmt.Printf("\n✅ Appliance %s : VM '%s' créée.\n", manifest.Name, vmName)
+	fmt.Printf("   ⏳ L'installation automatique tourne dans la VM (quelques minutes),\n")
+	fmt.Printf("      puis l'appliance se configure au premier démarrage.\n")
+	fmt.Printf("   🖥️  Console : VNC (127.0.0.1) — via l'UI Caleope ou virt-manager.\n")
+	return nil
+}
+
+// removeAppliance supprime la VM d'une app de type "appliance".
+func (i *Installer) removeAppliance(app *types.RuntimeApp) error {
+	fmt.Println("  [1/2] Suppression de la VM...")
+	if err := i.vm.Delete(app.VMName); err != nil {
+		fmt.Printf("  ⚠️  Erreur suppression VM: %v\n", err)
+	}
+	fmt.Println("  [2/2] Libération des ressources...")
+	if ufwPorts := runtimeToUFWPorts(app.Ports); len(ufwPorts) > 0 {
+		for _, e := range ufw.ClosePorts(ufwPorts) {
+			fmt.Printf("         ⚠ %v\n", e)
+		}
+	}
+	_ = i.rt.RemoveApp(app.ID)
+	_ = i.emitter.AppRemoved(app.ID)
+	audit.Log(audit.ActionRemove, app.ID, "OK:appliance")
+	fmt.Printf("\n✅ %s supprimé (VM détruite)\n", app.ID)
 	return nil
 }
 
@@ -962,6 +1078,11 @@ func (i *Installer) Remove(appID string, keepData bool) error {
 	// Marquer comme "en cours de suppression"
 	app.Status = types.StatusRemoving
 	_ = i.rt.SaveApp(app)
+
+	// Appliance (VM) : chemin de suppression dédié (pas de containers/compose)
+	if app.VMName != "" && i.vm != nil {
+		return i.removeAppliance(app)
+	}
 
 	// Arrêter les containers
 	fmt.Println("  [1/4] Arrêt des containers...")

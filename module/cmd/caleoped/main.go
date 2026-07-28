@@ -104,12 +104,13 @@ func main() {
 	dc := docker.NewClient()
 	em := events.NewEmitter(*baseDir)
 
-	installer := install.NewInstaller(rt, st, dc, em, *baseDir)
+	vmMgr := vms.NewManager(*baseDir)
+	isPro := func() bool { return strings.EqualFold(licMgr.Status().Edition, "pro") }
+	installer := install.NewInstaller(rt, st, dc, em, *baseDir, vmMgr, isPro)
 	bkp := backup.NewManager(rt, dc, *baseDir)
 	col := metrics.NewCollector(rt, *baseDir)
 	net := network.NewManager(*baseDir)
 	sh := shares.NewManager(*baseDir)
-	vmMgr := vms.NewManager(*baseDir)
 
 	// Endpoint Prometheus sur :9100/metrics (pour Grafana)
 	go func() {
