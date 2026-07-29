@@ -222,3 +222,62 @@ func TestMachineHashStableAndNonEmpty(t *testing.T) {
 		t.Fatalf("MachineHash non déterministe: %q vs %q", a, b)
 	}
 }
+
+// TestRecuperationHorsLigne verrouille le chemin de récupération d'un client qui
+// a perdu sa machine. C'est LE scénario qui laissait les gens bloqués : jeton
+// perdu (réinstallation, nouveau serveur, restauration d'une sauvegarde Caleope
+// qui n'incluait pas core/license), réactivation refusée par un 409 renvoyant
+// vers /api/transfer — un endpoint qu'aucun client n'appelle.
+//
+// La propriété testée ici est délibérée : un jeton authentique est accepté sur
+// N'IMPORTE QUELLE machine, parce que Verify() ne contrôle que la signature. Le
+// jeton utilisé porte l'empreinte d'une autre machine (VM .15) et doit tout de
+// même s'importer. Ne « corrigez » pas ce comportement en ajoutant un contrôle
+// d'empreinte : ce serait rendre les clients captifs d'un serveur de licences
+// qui peut être éteint pendant des mois.
+func TestRecuperationHorsLigne(t *testing.T) {
+	// Machine d'origine
+	m1 := NewManager(t.TempDir())
+	if _, err := m1.ImportToken(realServerToken); err != nil {
+		t.Fatalf("import initial: %v", err)
+	}
+	if !m1.IsActivated() {
+		t.Fatal("licence inactive après import")
+	}
+
+	// L'utilisateur met sa licence à l'abri
+	exported, err := m1.ExportToken()
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if exported != strings.TrimSpace(realServerToken) {
+		t.Fatal("le jeton exporté diffère du jeton installé")
+	}
+
+	// Nouvelle machine, AUCUN réseau disponible : la restauration doit suffire.
+	m2 := NewManager(t.TempDir())
+	p, err := m2.ImportToken(exported)
+	if err != nil {
+		t.Fatalf("récupération sur une nouvelle machine: %v", err)
+	}
+	if p.Edition != "pro" || !m2.IsActivated() {
+		t.Fatalf("édition=%q activée=%v", p.Edition, m2.IsActivated())
+	}
+
+	// Le jeton doit rester protégé sur le disque.
+	fi, err := os.Stat(m2.TokenPath())
+	if err != nil {
+		t.Fatalf("jeton absent: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0600 {
+		t.Errorf("permissions du jeton = %o, attendu 600", perm)
+	}
+
+	// Un jeton falsifié doit être refusé, et ne doit PAS écraser le jeton valide.
+	if _, err := m2.ImportToken(exported[:len(exported)-6] + "AAAAAA"); err == nil {
+		t.Fatal("un jeton falsifié a été accepté")
+	}
+	if !m2.IsActivated() {
+		t.Fatal("un import refusé a détruit la licence valide en place")
+	}
+}

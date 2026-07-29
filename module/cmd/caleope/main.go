@@ -313,7 +313,6 @@ func cmdConfigure(args []string) {
 		die("Usage: caleope configure <app>\n  Ex:    caleope configure arr-stack")
 	}
 
-
 	switch args[0] {
 	case "arr-stack":
 		if notes := cmdConfigureArrStack(); notes != "" {
@@ -1563,6 +1562,8 @@ func cmdLicense(args []string) {
 		fmt.Println("Usage:")
 		fmt.Println("  caleope license activate <CALP-XXXX-XXXX-XXXX>")
 		fmt.Println("  caleope license status")
+		fmt.Println("  caleope license export [fichier]   — mettre sa licence à l'abri")
+		fmt.Println("  caleope license import <fichier>   — la restaurer sur une autre machine")
 		os.Exit(1)
 	}
 
@@ -1581,6 +1582,46 @@ func cmdLicense(args []string) {
 			edition, _ = data["edition"].(string)
 		}
 		fmt.Printf("✓ Licence %s activée avec succès\n", strings.ToUpper(edition))
+		// Dire tout de suite comment ne jamais se retrouver bloqué plus tard.
+		fmt.Println()
+		fmt.Println("💾 Mettez votre licence à l'abri — c'est un simple fichier signé :")
+		fmt.Println("      caleope license export ~/licence-caleope.token")
+		fmt.Println("   Conservé ailleurs que sur ce serveur, il vous permet de réinstaller")
+		fmt.Println("   ou de changer de machine sans dépendre de quoi que ce soit :")
+		fmt.Println("      caleope license import licence-caleope.token")
+
+	case "export":
+		resp := callDaemon("license.export", nil)
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		data, _ := resp.Data.(map[string]interface{})
+		token, _ := data["token"].(string)
+		if len(args) >= 2 {
+			if err := os.WriteFile(args[1], []byte(token+"\n"), 0600); err != nil {
+				die("❌ écriture impossible : " + err.Error())
+			}
+			fmt.Printf("✓ Licence exportée dans %s\n", args[1])
+			fmt.Println("  Conservez ce fichier hors de ce serveur : il EST votre licence.")
+		} else {
+			fmt.Println(token)
+		}
+
+	case "import":
+		if len(args) < 2 {
+			die("❌ Usage: caleope license import <fichier>")
+		}
+		raw, err := os.ReadFile(args[1])
+		if err != nil {
+			die("❌ lecture impossible : " + err.Error())
+		}
+		resp := callDaemon("license.import", map[string]string{"token": strings.TrimSpace(string(raw))})
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		data, _ := resp.Data.(map[string]interface{})
+		edition, _ := data["edition"].(string)
+		fmt.Printf("✓ Licence %s restaurée — aucune connexion n'a été nécessaire\n", strings.ToUpper(edition))
 
 	case "status":
 		resp := callDaemon("license.status", nil)

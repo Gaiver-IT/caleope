@@ -202,15 +202,25 @@ func (s *Server) handleConnection(conn net.Conn) {
 		data, err = s.handleLicenseActivate(req.Args)
 	case "license.status":
 		data, err = s.handleLicenseStatus()
+	case "license.export":
+		data, err = s.handleLicenseExport()
+	case "license.import":
+		data, err = s.handleLicenseImport(req.Args)
 	case "install":
-		// Les composants core (crowdsec, authentik) font partie de
-		// l'infrastructure Caleope et se déploient sans licence — comme
-		// ensureCoreApps qui passe par l'installateur interne. Seules les
-		// apps du catalogue sont soumises à la licence.
-		if !s.lic.IsActivated() && !isCoreApp(req.Args["app"]) {
-			err = fmt.Errorf("licence non activée — activez d'abord avec : caleope license activate <clé>")
-			break
-		}
+		// ⚠️ NE PAS REMETTRE DE VERROU DE LICENCE ICI.
+		//
+		// Cette commande était autrefois refusée en l'absence de licence activée.
+		// Conséquences constatées, toutes mauvaises :
+		//   • l'édition Community, qui est GRATUITE, devenait inutilisable dès que
+		//     le jeton manquait — réinstallation, nouveau serveur, ou simple
+		//     restauration d'une sauvegarde Caleope (core/license n'y était pas) ;
+		//   • le produit gratuit dépendait donc du serveur de licences pour
+		//     fonctionner, ce qui interdisait de l'éteindre ;
+		//   • et l'utilisateur bloqué n'avait aucun recours en autonomie.
+		//
+		// La règle est désormais simple et tient en une phrase : la licence ne
+		// conditionne QUE les fonctions Pro (cf. vmRequirePro dans vms.go).
+		// Installer une application du catalogue est gratuit, pour tout le monde.
 		data, err = s.handleInstall(req.Args)
 	case "store-params":
 		data, err = s.handleStoreParams(req.Args)
@@ -1945,17 +1955,6 @@ var coreApps = []struct {
 	{"authentik", ""},
 }
 
-// isCoreApp indique si l'app fait partie de l'infrastructure core Caleope
-// (déployable sans licence, cf. ensureCoreApps).
-func isCoreApp(id string) bool {
-	for _, app := range coreApps {
-		if app.id == id {
-			return true
-		}
-	}
-	return false
-}
-
 // ensureCoreApps installe silencieusement les composants core manquants.
 // Appelé à chaque upgrade — idempotent si l'app est déjà installée.
 func (s *Server) ensureCoreApps() {
@@ -1997,6 +1996,39 @@ func (s *Server) handleLicenseActivate(args map[string]string) (interface{}, err
 		"activated": true,
 		"edition":   st.Edition,
 		"message":   fmt.Sprintf("Licence %s activée avec succès", strings.ToUpper(st.Edition)),
+	}, nil
+}
+
+// handleLicenseExport renvoie le jeton signé pour que l'utilisateur le mette à
+// l'abri. C'est son filet de récupération : il fonctionne hors ligne et ne
+// dépend pas du serveur de licences.
+func (s *Server) handleLicenseExport() (interface{}, error) {
+	token, err := s.lic.ExportToken()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"token": token,
+		"path":  s.lic.TokenPath(),
+	}, nil
+}
+
+// handleLicenseImport réinstalle un jeton conservé par l'utilisateur, sans
+// aucun échange réseau. Permet de récupérer sa licence sur une nouvelle machine
+// même si le serveur de licences est indisponible.
+func (s *Server) handleLicenseImport(args map[string]string) (interface{}, error) {
+	token, ok := args["token"]
+	if !ok || strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("argument 'token' manquant")
+	}
+	payload, err := s.lic.ImportToken(token)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"activated": true,
+		"edition":   payload.Edition,
+		"message":   fmt.Sprintf("Licence %s restaurée depuis votre sauvegarde", strings.ToUpper(payload.Edition)),
 	}, nil
 }
 

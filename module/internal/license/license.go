@@ -38,7 +38,7 @@ type Payload struct {
 // Status est retourné par Status() pour l'affichage CLI et l'API.
 type Status struct {
 	Activated   bool   `json:"activated"`
-	Edition     string `json:"edition"`   // "community", "pro", ""
+	Edition     string `json:"edition"` // "community", "pro", ""
 	LicenseKey  string `json:"license_key"`
 	MachineHash string `json:"machine_hash"`
 	IssuedAt    int64  `json:"issued_at"`
@@ -55,6 +55,52 @@ func NewManager(baseDir string) *Manager {
 
 func (m *Manager) tokenPath() string {
 	return filepath.Join(m.baseDir, "core", "license", "license.token")
+}
+
+// TokenPath expose l'emplacement du jeton de licence.
+//
+// Ce chemin est délibérément public : le jeton EST la licence. Il est signé,
+// vérifiable hors ligne, et il n'est lié à aucun matériel — Verify() ne contrôle
+// que la signature. Un utilisateur qui conserve ce fichier peut donc réinstaller
+// ou changer de serveur sans dépendre du serveur de licences, même si celui-ci
+// est éteint. C'est le chemin de récupération le plus robuste du produit, et il
+// faut le dire à l'utilisateur plutôt que le lui cacher.
+func (m *Manager) TokenPath() string { return m.tokenPath() }
+
+// ExportToken renvoie le jeton courant, après vérification de sa signature.
+func (m *Manager) ExportToken() (string, error) {
+	data, err := os.ReadFile(m.tokenPath())
+	if err != nil {
+		return "", fmt.Errorf("aucune licence installée sur cette machine")
+	}
+	token := strings.TrimSpace(string(data))
+	if _, err := verifyToken(token); err != nil {
+		return "", fmt.Errorf("le jeton stocké est invalide: %w", err)
+	}
+	return token, nil
+}
+
+// ImportToken installe un jeton fourni par l'utilisateur (récupéré d'une
+// sauvegarde ou d'une ancienne machine). La signature est vérifiée AVANT
+// écriture : un jeton falsifié est refusé, un jeton authentique est accepté
+// quelle que soit la machine d'origine.
+func (m *Manager) ImportToken(token string) (*Payload, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("jeton vide")
+	}
+	payload, err := verifyToken(token)
+	if err != nil {
+		return nil, fmt.Errorf("jeton invalide: %w", err)
+	}
+	dir := filepath.Dir(m.tokenPath())
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("impossible de créer le répertoire licence: %w", err)
+	}
+	if err := os.WriteFile(m.tokenPath(), []byte(token+"\n"), 0600); err != nil {
+		return nil, fmt.Errorf("impossible d'écrire le jeton: %w", err)
+	}
+	return payload, nil
 }
 
 // MachineHash retourne SHA256(/etc/machine-id) encodé en base64url.
