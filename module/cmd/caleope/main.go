@@ -1211,7 +1211,73 @@ func cmdRestore(args []string) {
 
 func cmdBackupList(args []string) {
 	if len(args) == 0 {
-		die("Usage: caleope backups <app>")
+		die("Usage: caleope backups <app>\n" +
+			"       caleope backups retention [--keep-last N] [--keep-days N]\n" +
+			"       caleope backups prune <app>")
+	}
+
+	// Sous-commandes de rétention. Placées ici pour rester découvrables depuis
+	// « caleope backups », là où l'utilisateur cherche naturellement.
+	switch args[0] {
+	case "retention":
+		apiArgs := map[string]string{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--keep-last":
+				if i+1 < len(args) {
+					apiArgs["keep_last"] = args[i+1]
+					i++
+				}
+			case "--keep-days":
+				if i+1 < len(args) {
+					apiArgs["keep_days"] = args[i+1]
+					i++
+				}
+			}
+		}
+		cmd := "retention.get"
+		if len(apiArgs) > 0 {
+			cmd = "retention.set"
+		}
+		resp := callDaemon(cmd, apiArgs)
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		d, _ := resp.Data.(map[string]interface{})
+		kl, _ := d["keep_last"].(float64)
+		kd, _ := d["keep_days"].(float64)
+		fmt.Println("Politique de rétention des sauvegardes :")
+		if kl > 0 {
+			fmt.Printf("  • conserver les %d sauvegardes les plus récentes\n", int(kl))
+		}
+		if kd > 0 {
+			fmt.Printf("  • conserver aussi tout ce qui a moins de %d jours\n", int(kd))
+		}
+		if kl == 0 && kd == 0 {
+			fmt.Println("  • aucune purge — les sauvegardes s'accumulent sans limite")
+			fmt.Println("    ⚠ sur une sauvegarde planifiée, le disque finira par se remplir")
+		} else {
+			fmt.Println("  La sauvegarde la plus récente n'est jamais supprimée.")
+			fmt.Println("  La purge s'exécute après chaque sauvegarde réussie.")
+		}
+		return
+
+	case "prune":
+		if len(args) < 2 {
+			die("Usage: caleope backups prune <app>")
+		}
+		resp := callDaemon("retention.apply", map[string]string{"app": args[1]})
+		if !resp.Success {
+			die("❌ " + resp.Error)
+		}
+		d, _ := resp.Data.(map[string]interface{})
+		n, _ := d["count"].(float64)
+		if int(n) == 0 {
+			fmt.Println("✓ Rien à purger — tout est dans la politique.")
+		} else {
+			fmt.Printf("✓ %d sauvegarde(s) supprimée(s).\n", int(n))
+		}
+		return
 	}
 
 	resp := callDaemon("backup-list", map[string]string{"app": args[0]})

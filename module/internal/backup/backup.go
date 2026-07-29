@@ -126,6 +126,16 @@ func (m *Manager) BackupWithScope(appID string, scope types.BackupScope) (string
 		return "", fmt.Errorf("écriture manifest: %w", err)
 	}
 
+	// Purge des sauvegardes hors politique, APRÈS succès uniquement.
+	// Non bloquante : la sauvegarde est faite, c'est ce qui compte. Un ménage
+	// qui échoue ne doit jamais transformer une sauvegarde réussie en erreur.
+	if deleted, err := m.ApplyRetention(appID); err != nil {
+		fmt.Printf("  ⚠ rétention non appliquée : %v\n", err)
+	} else if len(deleted) > 0 {
+		fmt.Printf("  🧹 Rétention : %d ancienne(s) sauvegarde(s) supprimée(s) (%s)\n",
+			len(deleted), strings.Join(deleted, ", "))
+	}
+
 	return backupDir, nil
 }
 

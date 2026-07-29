@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -202,6 +203,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 		data, err = s.handleLicenseActivate(req.Args)
 	case "license.status":
 		data, err = s.handleLicenseStatus()
+	case "retention.get":
+		data = s.bkp.Retention()
+	case "retention.set":
+		data, err = s.handleRetentionSet(req.Args)
+	case "retention.apply":
+		data, err = s.handleRetentionApply(req.Args)
 	case "license.export":
 		data, err = s.handleLicenseExport()
 	case "license.import":
@@ -1997,6 +2004,43 @@ func (s *Server) handleLicenseActivate(args map[string]string) (interface{}, err
 		"edition":   st.Edition,
 		"message":   fmt.Sprintf("Licence %s activée avec succès", strings.ToUpper(st.Edition)),
 	}, nil
+}
+
+// handleRetentionSet enregistre la politique de rétention des sauvegardes.
+func (s *Server) handleRetentionSet(args map[string]string) (interface{}, error) {
+	p := s.bkp.Retention()
+	if v, ok := args["keep_last"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("keep_last doit être un entier positif ou nul")
+		}
+		p.KeepLast = n
+	}
+	if v, ok := args["keep_days"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("keep_days doit être un entier positif ou nul")
+		}
+		p.KeepDays = n
+	}
+	if err := s.bkp.SetRetention(p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// handleRetentionApply purge immédiatement les sauvegardes hors politique.
+// Utile pour récupérer de la place sans attendre la prochaine sauvegarde.
+func (s *Server) handleRetentionApply(args map[string]string) (interface{}, error) {
+	appID, ok := args["app"]
+	if !ok || appID == "" {
+		return nil, fmt.Errorf("argument 'app' manquant")
+	}
+	deleted, err := s.bkp.ApplyRetention(appID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"deleted": deleted, "count": len(deleted)}, nil
 }
 
 // handleLicenseExport renvoie le jeton signé pour que l'utilisateur le mette à

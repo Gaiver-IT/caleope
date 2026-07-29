@@ -132,6 +132,29 @@ type StatsSnapshot struct {
 // BACKUP — manifest d'une sauvegarde
 // ─────────────────────────────────────────────
 
+// RetentionPolicy décrit combien de sauvegardes conserver par application.
+//
+// Sans rétention, une sauvegarde planifiée finit mécaniquement par remplir le
+// disque du serveur — panne d'autant plus pénible qu'elle survient sans témoin
+// et qu'elle emporte les applications avec elle.
+//
+// Les deux critères se CUMULENT : une sauvegarde est conservée si elle satisfait
+// l'un OU l'autre. C'est la convention des outils de sauvegarde (restic, borg) et
+// c'est le sens le plus sûr — en cas d'ambiguïté, on garde.
+//
+// Un zéro désactive le critère correspondant. Les deux à zéro = aucune purge.
+type RetentionPolicy struct {
+	KeepLast int `json:"keep_last"` // nombre de sauvegardes récentes à conserver
+	KeepDays int `json:"keep_days"` // conserver aussi tout ce qui est plus jeune que N jours
+}
+
+// DefaultRetention : une semaine de sauvegardes quotidiennes. Volontairement
+// modeste — mieux vaut un défaut que l'utilisateur augmente qu'un disque plein.
+func DefaultRetention() RetentionPolicy { return RetentionPolicy{KeepLast: 7} }
+
+// Enabled indique si la politique purge effectivement quelque chose.
+func (r RetentionPolicy) Enabled() bool { return r.KeepLast > 0 || r.KeepDays > 0 }
+
 type BackupManifest struct {
 	App            string    `json:"app"`
 	AppName        string    `json:"app_name"`
