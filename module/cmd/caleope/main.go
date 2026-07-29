@@ -92,6 +92,8 @@ func main() {
 		cmdUpdate(args)
 	case "upgrade":
 		cmdUpgrade(args)
+	case "rollback":
+		cmdRollback(args)
 	case "version", "--version", "-v":
 		fmt.Printf("caleope %s (commit: %s)\n", version.Version, version.Commit)
 	case "ping":
@@ -1549,6 +1551,7 @@ Commandes:
   upgrade           Mettre à jour Caleope vers la dernière version
     --check         Vérifier sans installer
     --alpha         Installer la dernière pré-release alpha
+  rollback          Revenir à la version précédente (après une mise à jour)
   token             Afficher le token d'accès à l'API REST (:8765)
   version           Afficher la version installée
   ping              Vérifier que le daemon est actif
@@ -1803,5 +1806,44 @@ func cmdPack(args []string) {
 			ms = append(ms, fmt.Sprint(m))
 		}
 		fmt.Printf("⚠ Absentes du catalogue (non installées) : %s\n", strings.Join(ms, ", "))
+	}
+}
+
+// cmdRollback remet en service la version conservée avant la dernière mise à
+// jour. Recours quand une mise à jour démarre correctement mais casse quelque
+// chose de fonctionnel — le contrôle de santé automatique ne voit que « le
+// daemon répond », pas « tout fonctionne comme avant ».
+func cmdRollback(args []string) {
+	force := false
+	for _, a := range args {
+		if a == "--yes" || a == "-y" {
+			force = true
+		}
+	}
+	if !force {
+		fmt.Println("⚠️  Retour arrière : les binaires de la version précédente seront remis en service,")
+		fmt.Println("    puis caleoped et caleope-ui redémarreront.")
+		fmt.Println()
+		fmt.Print("    Confirmer ? [o/N] ")
+		r := bufio.NewReader(os.Stdin)
+		line, _ := r.ReadString('\n')
+		line = strings.ToLower(strings.TrimSpace(line))
+		if line != "o" && line != "oui" && line != "y" && line != "yes" {
+			fmt.Println("Annulé.")
+			return
+		}
+	}
+	resp := callDaemon("rollback", nil)
+	if !resp.Success {
+		die("❌ " + resp.Error)
+	}
+	d, _ := resp.Data.(map[string]interface{})
+	if msg, ok := d["message"].(string); ok {
+		fmt.Println("✓ " + msg)
+	}
+	if lst, ok := d["restored"].([]interface{}); ok && len(lst) > 0 {
+		for _, b := range lst {
+			fmt.Printf("   • %v\n", b)
+		}
 	}
 }

@@ -203,6 +203,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		data, err = s.handleLicenseActivate(req.Args)
 	case "license.status":
 		data, err = s.handleLicenseStatus()
+	case "rollback":
+		data, err = s.handleRollback()
 	case "retention.get":
 		data = s.bkp.Retention()
 	case "retention.set":
@@ -1304,6 +1306,31 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 		}
 	}
 
+	fmt.Printf("[3/8] Vérification des fichiers téléchargés...\n")
+
+	// Contrôle AVANT bascule : on refuse d'écraser un binaire en service par un
+	// fichier qui n'est pas un exécutable plausible. Un téléchargement tronqué ou
+	// une page d'erreur enregistrée à la place du binaire passaient sans bruit
+	// et laissaient la machine sans daemon.
+	for _, bin := range []string{"caleoped.new", "caleope.new", "caleope-ui.new"} {
+		p := filepath.Join(binDir, bin)
+		if err := preflightBinary(p); err != nil {
+			// On nettoie les .new pour ne pas laisser de fichiers douteux traîner.
+			for _, c := range []string{"caleoped.new", "caleope.new", "caleope-ui.new"} {
+				_ = os.Remove(filepath.Join(binDir, c))
+			}
+			return nil, fmt.Errorf("mise à jour annulée, rien n'a été remplacé — %s : %w", bin, err)
+		}
+	}
+
+	fmt.Printf("[3/8] Conservation de la version actuelle (retour arrière possible)...\n")
+
+	// Sauvegarde des binaires en service. C'est ce qui rend le retour arrière
+	// possible ; sans elle, une release cassée laisse la machine sans recours.
+	if err := backupBinaries(); err != nil {
+		return nil, fmt.Errorf("mise à jour annulée : impossible de conserver la version actuelle (%w)", err)
+	}
+
 	fmt.Printf("[3/8] Installation des binaires...\n")
 
 	// Remplacer les binaires (move atomique)
@@ -1354,25 +1381,53 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// sur toute installation complète.
 	s.ensureCoreApps()
 
-	fmt.Printf("[8/8] Redémarrage des services dans 2 secondes...\n")
+	fmt.Printf("[8/8] Redémarrage des services + contrôle de santé...\n")
 
 	// Redémarrer via un script shell indépendant de ce processus.
-	// On ne peut pas faire les deux restarts dans une goroutine : quand
+	// On ne peut pas faire les restarts dans une goroutine : quand
 	// "systemctl restart caleoped" s'exécute, il tue ce processus et la
 	// goroutine meurt avec lui — caleope-ui ne serait jamais redémarré.
-	// caleoped d'abord : Requires=caleoped dans caleope-ui.service
-	// implique que si caleoped s'arrête, caleope-ui s'arrête aussi.
-	// En redémarrant caleoped en premier puis caleope-ui ensuite, on évite
-	// que le restart de caleoped ne stoppe caleope-ui sans le relancer.
-	_ = exec.Command("bash", "-c",
-		"sleep 2 && systemctl restart caleoped && sleep 2 && systemctl restart caleope-ui",
-	).Start()
+	// caleoped d'abord : Requires=caleoped dans caleope-ui.service implique que
+	// si caleoped s'arrête, caleope-ui s'arrête aussi.
+	//
+	// Le script fait plus que redémarrer : il VÉRIFIE que le daemon répond, et
+	// restaure les binaires précédents s'il ne répond pas. Cette logique doit
+	// vivre hors du processus qu'on remplace, sinon elle meurt avec lui.
+	upgradeLog := filepath.Join(s.baseDir, "core", "upgrade.log")
+	_ = os.MkdirAll(filepath.Dir(upgradeLog), 0755)
+	_ = exec.Command("bash", "-c", upgradeWatchdogScript(upgradeLog)).Start()
 
 	return map[string]string{
-		"status":  "upgraded",
-		"from":    current,
-		"to":      latest,
-		"message": fmt.Sprintf("Mis à jour %s → %s, redémarrage en cours...", current, latest),
+		"status": "upgraded",
+		"from":   current,
+		"to":     latest,
+		"log":    upgradeLog,
+		"message": fmt.Sprintf("Mis à jour %s → %s. Redémarrage et contrôle de santé en cours ; "+
+			"retour arrière automatique en cas d'échec (journal : %s)", current, latest, upgradeLog),
+	}, nil
+}
+
+// handleRollback remet en service les binaires conservés avant la dernière mise
+// à jour. Recours manuel quand la mise à jour « a réussi » du point de vue du
+// contrôle de santé mais casse quelque chose de fonctionnel.
+func (s *Server) handleRollback() (interface{}, error) {
+	restored, err := restorePreviousBinaries()
+	if err != nil {
+		return nil, err
+	}
+	// Même logique que la mise à jour : le redémarrage se fait dans un processus
+	// détaché, puisqu'il tue celui-ci.
+	logPath := filepath.Join(s.baseDir, "core", "upgrade.log")
+	_ = os.MkdirAll(filepath.Dir(logPath), 0755)
+	_ = exec.Command("bash", "-c", fmt.Sprintf(
+		`sleep 1; printf '[%%s] retour arrière manuel demandé\n' "$(date -Is)" >> %q 2>/dev/null; `+
+			`systemctl restart caleoped >/dev/null 2>&1; sleep 2; systemctl restart caleope-ui >/dev/null 2>&1`,
+		logPath)).Start()
+
+	return map[string]interface{}{
+		"restored": restored,
+		"message": fmt.Sprintf("%d binaire(s) restauré(s), redémarrage en cours. "+
+			"Utilisez « caleope upgrade » pour réessayer la mise à jour.", len(restored)),
 	}, nil
 }
 
