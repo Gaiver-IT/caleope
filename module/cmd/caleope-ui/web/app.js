@@ -10615,22 +10615,27 @@ function showLicenseModal() {
   if (!m) {
     m = document.createElement('div');
     m.id = 'license-modal';
-    m.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)';
+    // Bandeau discret, PAS une modale bloquante : depuis le retrait du verrou
+    // d'installation, une licence n'est plus nécessaire pour se servir de
+    // Caleope. Barrer l'écran pour réclamer une clé facultative serait
+    // mensonger — et c'est exactement ce qui laissait des utilisateurs
+    // convaincus d'être bloqués.
+    m.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:9999;max-width:340px';
     m.innerHTML = `
-      <div style="background:var(--bg2);border:1px solid var(--border1);border-radius:12px;padding:32px;max-width:420px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.5)">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
-          <i class="ti ti-license" style="font-size:20px;color:var(--vio-b)"></i>
+      <div style="background:var(--bg2);border:1px solid var(--border1);border-radius:12px;padding:18px;box-shadow:0 6px 24px rgba(0,0,0,.45)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <i class="ti ti-license" style="font-size:18px;color:var(--vio-b)"></i>
           <div>
-            <div style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--text1)">ACTIVATION REQUISE</div>
-            <div style="font-size:9px;color:var(--text3);margin-top:2px">Caleope n'est pas encore activé sur ce serveur</div>
+            <div style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--text1)">LICENCE</div>
+            <div style="font-size:9px;color:var(--text3);margin-top:2px">Aucune clé enregistrée sur ce serveur</div>
           </div>
         </div>
-        <div style="font-size:9px;color:var(--text3);margin-bottom:14px">Entrez votre clé de licence (Community ou Pro) pour activer. Sans licence, l'installation d'apps est désactivée.</div>
+        <div style="font-size:9px;color:var(--text3);margin-bottom:14px">Caleope fonctionne normalement sans clé : le catalogue d'applications est gratuit. Une clé Pro débloque les machines virtuelles. Vous pouvez aussi restaurer une licence existante avec <code style="color:var(--text2)">caleope license import</code>.</div>
         <input id="lic-key-input" class="param-input" type="text" placeholder="CALP-XXXX-XXXX-XXXX" style="width:100%;margin-bottom:10px;font-family:monospace;text-transform:uppercase">
         <div id="lic-modal-err" style="display:none;font-size:9px;color:var(--red-b);margin-bottom:8px"></div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-vio" onclick="activateLicenseModal()" style="flex:1"><i class="ti ti-check"></i>ACTIVER</button>
-          <button class="btn" onclick="document.getElementById('license-modal').style.display='none'" style="font-size:9px">Plus tard</button>
+          <button class="btn" onclick="document.getElementById('license-modal').style.display='none'" style="font-size:9px">Fermer</button>
         </div>
         <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border1);font-size:8px;color:var(--text3)">
           Pas de licence ? <a href="https://caleope-pay.gaiver-it.fr" target="_blank" style="color:var(--vio-b)">Obtenir une clé</a> — Community est gratuit.
@@ -10638,7 +10643,7 @@ function showLicenseModal() {
       </div>`;
     document.body.appendChild(m);
   }
-  m.style.display = 'flex';
+  m.style.display = 'block';
   setTimeout(() => document.getElementById('lic-key-input')?.focus(), 50);
 }
 
