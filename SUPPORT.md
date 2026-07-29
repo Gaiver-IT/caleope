@@ -11,9 +11,10 @@ vaut une attente juste qu'une promesse tenue à moitié.
 |---|---|
 | **Documentation** | Première et principale ressource. Elle est faite pour répondre sans intermédiaire. |
 | **Signalements** | GitHub Issues, en public. |
-| **Rythme de traitement** | Une fenêtre de maintenance **par mois**. Pas de délai garanti. |
-| **Astreinte, SLA, support téléphonique** | **Non fournis**, à aucun niveau, y compris Pro. |
-| **Licence Pro** | Donne accès à des fonctionnalités et soutient le projet. **Elle n'achète pas du support.** |
+| **Rythme de traitement** | Par sessions, **environ une fois par mois**. |
+| **Licence Pro** | Vos demandes sont traitées **en priorité** sur les autres. |
+| **Délai** | **Aucun délai garanti**, à aucun niveau — y compris Pro. La priorité porte sur l'**ordre** de traitement, pas sur la vitesse. |
+| **Astreinte, SLA, support téléphonique** | **Non fournis.** |
 
 ## Avant de demander de l'aide
 
@@ -53,9 +54,20 @@ Ce n'est pas de la mauvaise volonté : c'est ce qui rend le reste tenable.
   c'est le cas — sinon on cherche à deux dans la mauvaise direction.
 - **Les demandes de fonctionnalités sur mesure**, la formation, l'aide à la
   migration, l'accompagnement projet.
-- **Les urgences.** Il n'existe aucun canal prioritaire. Si votre activité dépend
-  d'une disponibilité garantie, Caleope n'est pas le bon choix : prenez un
-  hébergeur avec un contrat.
+- **Les urgences.** Aucun délai n'est garanti, y compris avec une licence Pro.
+  Si votre activité dépend d'une disponibilité garantie, Caleope n'est pas le bon
+  choix : prenez un hébergeur avec un contrat.
+
+## Ce que la licence Pro change, précisément
+
+Elle donne accès à des fonctionnalités, elle soutient le projet, et **vos
+demandes passent devant les autres dans la file**.
+
+Ce qu'elle ne fait pas : accélérer le temps. Le projet est relu par sessions,
+espacées d'environ un mois. Une licence Pro vous place en tête de la file au
+moment où cette file est traitée — elle ne déclenche pas de session, elle ne crée
+pas d'astreinte, et elle ne s'accompagne d'aucun engagement de délai. C'est une
+priorité réelle, formulée pour être tenue.
 
 ## Comment signaler utilement
 

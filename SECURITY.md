@@ -10,8 +10,11 @@ ce sont des compromis assumés, qu'il vaut mieux connaître avant de déployer.
 
 **N'ouvrez pas de ticket public** pour une vulnérabilité.
 
-Écrivez à **security@gaiver-it.fr**. Si vous n'obtenez aucune réponse sous
-30 jours, vous êtes libre de publier.
+Utilisez le **signalement privé de GitHub** : onglet **Security** du dépôt →
+**Report a vulnerability**. Le canal est confidentiel entre vous et le
+mainteneur, et il évite qu'une faille non corrigée soit visible de tous.
+
+Si vous n'obtenez aucune réponse sous **30 jours**, vous êtes libre de publier.
 
 Un signalement exploitable contient :
 
