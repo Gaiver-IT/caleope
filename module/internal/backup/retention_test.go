@@ -199,3 +199,78 @@ func TestApplyRetentionSurDisque(t *testing.T) {
 		t.Fatalf("app sans sauvegarde: %v", err)
 	}
 }
+
+// Régression : avec une planification mixte (config quotidienne + complète
+// hebdomadaire), la purge supprimait la dernière sauvegarde CONTENANT DES
+// DONNÉES et ne laissait que des archives de configuration — pendant que la
+// restauration annonçait un succès sans rien restaurer.
+func TestProtegeLaDerniereSauvegardeAvecDonnees(t *testing.T) {
+	now := time.Now()
+	var all []types.BackupManifest
+	// 8 sauvegardes « config » récentes…
+	for i := 0; i < 8; i++ {
+		all = append(all, types.BackupManifest{
+			Timestamp: now.Add(-time.Duration(i) * 24 * time.Hour),
+			Dir:       "cfg-" + string(rune('a'+i)), HasConfig: true,
+		})
+	}
+	// …et une sauvegarde COMPLÈTE plus ancienne
+	complete := types.BackupManifest{
+		Timestamp: now.Add(-8 * 24 * time.Hour),
+		Dir:       "complete", HasData: true, HasConfig: true,
+	}
+	all = append(all, complete)
+
+	expired := selectExpired(all, types.DefaultRetention(), now)
+	if dirsOf(expired)["complete"] {
+		t.Fatal("la dernière sauvegarde contenant des données a été purgée")
+	}
+}
+
+// Régression : si l'horloge recule (NTP, VM restaurée), la sauvegarde qu'on
+// vient d'écrire devient la « plus ancienne » et se détruit elle-même.
+func TestProtectionParIdentite(t *testing.T) {
+	base := t.TempDir()
+	m := &Manager{baseDir: base}
+	if err := m.SetRetention(types.RetentionPolicy{KeepLast: 2}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	mkDir := func(name string, ts time.Time) {
+		d := filepath.Join(base, "backups", "demo", name)
+		_ = os.MkdirAll(d, 0755)
+		b, _ := json.Marshal(types.BackupManifest{App: "demo", Timestamp: ts, HasData: true})
+		_ = os.WriteFile(filepath.Join(d, "manifest.json"), b, 0644)
+	}
+	mkDir("recente-1", now)
+	mkDir("recente-2", now.Add(-time.Hour))
+	mkDir("recente-3", now.Add(-2*time.Hour))
+	// horloge en retard : la nouvelle sauvegarde paraît la plus ancienne
+	mkDir("nouvelle", now.Add(-99*time.Hour))
+
+	deleted, err := m.ApplyRetention("demo", "nouvelle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range deleted {
+		if d == "nouvelle" {
+			t.Fatal("la sauvegarde protégée a été supprimée")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(base, "backups", "demo", "nouvelle")); err != nil {
+		t.Fatal("la sauvegarde qu'on vient d'écrire a disparu")
+	}
+}
+
+// La traversée de chemin doit être fermée sur les DEUX composants.
+func TestDeleteBackupRefuseLaTraversee(t *testing.T) {
+	m := &Manager{baseDir: t.TempDir()}
+	for _, c := range [][2]string{
+		{"..", "x"}, {"demo", ".."}, {".", "x"}, {"demo", "."},
+		{"demo", "../../etc"}, {"a/b", "x"},
+	} {
+		if err := m.DeleteBackup(c[0], c[1]); err == nil {
+			t.Errorf("DeleteBackup(%q,%q) aurait dû être refusé", c[0], c[1])
+		}
+	}
+}

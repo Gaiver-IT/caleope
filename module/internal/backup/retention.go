@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/gaiver-it/caleope/pkg/types"
@@ -80,10 +81,29 @@ func selectExpired(manifests []types.BackupManifest, p types.RetentionPolicy, no
 	if !p.Enabled() || len(manifests) <= 1 {
 		return nil
 	}
+
+	// Les sauvegardes n'ont pas toutes la même valeur : une archive « config »
+	// pèse quelques kilo-octets, une archive « data » contient tout le travail de
+	// l'utilisateur. Avec une planification mixte — le produit la documente lui-même
+	// (« task add backup-configs --scope config ») — garder les N plus récentes
+	// TOUS SCOPES CONFONDUS supprime la dernière sauvegarde complète et ne laisse
+	// que des archives de configuration. L'utilisateur voit une liste rassurante,
+	// et la restauration annonce un succès sans restaurer la moindre donnée.
+	// On protège donc la plus récente de CHAQUE nature, pas seulement le rang 0.
+	firstData, firstConfig := -1, -1
+	for i, bm := range manifests {
+		if firstData < 0 && bm.HasData {
+			firstData = i
+		}
+		if firstConfig < 0 && bm.HasConfig {
+			firstConfig = i
+		}
+	}
+
 	var expired []types.BackupManifest
 	for i, bm := range manifests {
-		// Règle 2 : la plus récente est intouchable.
-		if i == 0 {
+		// Règle 2 : la plus récente est intouchable, quelle que soit sa nature.
+		if i == 0 || i == firstData || i == firstConfig {
 			continue
 		}
 		keep := false
@@ -108,7 +128,12 @@ func selectExpired(manifests []types.BackupManifest, p types.RetentionPolicy, no
 
 // ApplyRetention supprime les sauvegardes hors politique pour une application
 // et renvoie les répertoires effectivement supprimés.
-func (m *Manager) ApplyRetention(appID string) ([]string, error) {
+// Le paramètre variadique `protect` désigne des répertoires à ne jamais purger,
+// identifiés par leur NOM et non par leur rang. Il sert au cas de l'horloge qui
+// recule (NTP, VM restaurée) : la sauvegarde qu'on vient d'écrire se retrouve
+// alors classée comme la plus ancienne et se fait détruire par sa propre purge —
+// et plus aucune sauvegarde ne survit jamais, en silence.
+func (m *Manager) ApplyRetention(appID string, protect ...string) ([]string, error) {
 	p := m.Retention()
 	if !p.Enabled() {
 		return nil, nil
@@ -121,6 +146,9 @@ func (m *Manager) ApplyRetention(appID string) ([]string, error) {
 	var deleted []string
 	for _, bm := range expired {
 		if bm.Dir == "" {
+			continue
+		}
+		if slices.Contains(protect, bm.Dir) {
 			continue
 		}
 		if err := m.DeleteBackup(appID, bm.Dir); err != nil {

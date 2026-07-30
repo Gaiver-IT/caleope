@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gaiver-it/caleope/internal/audit"
@@ -1145,6 +1146,11 @@ func isClosedError(err error) bool {
 }
 
 func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
+	if !upgradeMu.TryLock() {
+		return nil, fmt.Errorf("une mise à jour ou un retour arrière est déjà en cours")
+	}
+	defer upgradeMu.Unlock()
+
 	// Canal : arg explicite > caleope.conf > stable
 	channel := args["channel"]
 	if channel == "" {
@@ -1394,8 +1400,9 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	// restaure les binaires précédents s'il ne répond pas. Cette logique doit
 	// vivre hors du processus qu'on remplace, sinon elle meurt avec lui.
 	upgradeLog := filepath.Join(s.baseDir, "core", "upgrade.log")
-	_ = os.MkdirAll(filepath.Dir(upgradeLog), 0755)
-	_ = exec.Command("bash", "-c", upgradeWatchdogScript(upgradeLog)).Start()
+	if err := s.launchUpgradeWatchdog(upgradeLog); err != nil {
+		fmt.Printf("⚠️  filet de surveillance non lancé (%v) — pas de retour arrière automatique\n", err)
+	}
 
 	return map[string]string{
 		"status": "upgraded",
@@ -1407,14 +1414,30 @@ func (s *Server) handleUpgrade(args map[string]string) (interface{}, error) {
 	}, nil
 }
 
+// upgradeMu sérialise mise à jour et retour arrière. Sans lui, deux exécutions
+// concurrentes écrasent le .prev avec la version qu'on veut justement pouvoir
+// abandonner — le point de retour disparaît au moment où il devient utile.
+var upgradeMu sync.Mutex
+
 // handleRollback remet en service les binaires conservés avant la dernière mise
 // à jour. Recours manuel quand la mise à jour « a réussi » du point de vue du
 // contrôle de santé mais casse quelque chose de fonctionnel.
 func (s *Server) handleRollback() (interface{}, error) {
+	if !upgradeMu.TryLock() {
+		return nil, fmt.Errorf("une mise à jour ou un retour arrière est déjà en cours")
+	}
+	defer upgradeMu.Unlock()
+
 	restored, err := restorePreviousBinaries()
 	if err != nil {
 		return nil, err
 	}
+	// Mémoriser la version qu'on abandonne. Sans ce marqueur, la tâche planifiée
+	// « upgrade » réinstalle la nuit suivante exactement la release que
+	// l'utilisateur vient de rejeter, en boucle. Le processus qui exécute ce
+	// retour arrière EST la version abandonnée : version.Version est la bonne valeur.
+	_ = os.WriteFile(filepath.Join(s.baseDir, "core", "upgrade-blocked"),
+		[]byte(version.Version), 0644)
 	// Même logique que la mise à jour : le redémarrage se fait dans un processus
 	// détaché, puisqu'il tue celui-ci.
 	logPath := filepath.Join(s.baseDir, "core", "upgrade.log")

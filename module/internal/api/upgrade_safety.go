@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -159,13 +160,46 @@ func restorePreviousBinaries() ([]string, error) {
 	return restored, nil
 }
 
-// upgradeWatchdogScript construit le script détaché qui redémarre les services,
-// vérifie que le daemon répond, et restaure les binaires précédents sinon.
+// launchUpgradeWatchdog écrit le script de surveillance sur disque et le lance
+// dans un cgroup INDÉPENDANT via systemd-run.
+//
+// ⚠️ POURQUOI systemd-run ET PAS un simple exec.Command("bash", …) : caleoped.service
+// n'a pas de KillMode explicite, donc systemd utilise « control-group » par défaut.
+// Un processus lancé par le daemon appartient à son cgroup et se fait TUER par le
+// « systemctl restart caleoped » que le script déclenche lui-même — le filet ne
+// s'exécuterait jamais au-delà de sa première ligne utile, tout en donnant
+// l'illusion d'exister. Le dépôt connaît déjà ce piège et le résout de la même
+// façon pour la finalisation d'installation (cmd/caleope-ui/main.go).
+//
+// Repli sur bash si systemd-run est absent : mieux vaut un filet fragile que pas
+// de filet, et l'appelant journalise la dégradation.
+func (s *Server) launchUpgradeWatchdog(logPath string) error {
+	scriptPath := filepath.Join(s.baseDir, "core", "upgrade-watchdog.sh")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(scriptPath, []byte(upgradeWatchdogScript(logPath)), 0700); err != nil {
+		return err
+	}
+	if _, err := exec.LookPath("systemd-run"); err == nil {
+		cmd := exec.Command("systemd-run",
+			"--unit=caleope-upgrade-watchdog", "--collect",
+			"/bin/bash", scriptPath)
+		if err := cmd.Start(); err == nil {
+			return nil
+		}
+	}
+	// Repli dégradé : le script risque d'être tué avec le daemon.
+	return exec.Command("bash", scriptPath).Start()
+}
+
+// upgradeWatchdogScript construit le script qui redémarre les services, vérifie
+// que le daemon répond, et restaure les binaires précédents sinon.
 //
 // Il doit être autonome : au moment où il tourne, le processus qui l'a lancé est
 // mort (systemctl restart caleoped le tue). Il n'utilise donc que des outils du
 // système et des chemins absolus, et il journalise tout — c'est la seule trace
-// disponible si la machine redémarre seule pendant une absence.
+// disponible si la machine se répare seule pendant une absence.
 func upgradeWatchdogScript(logPath string) string {
 	return fmt.Sprintf(`set -u
 LOG=%[1]q
@@ -174,15 +208,40 @@ log() { printf '[%%s] %%s\n' "$(date -Is)" "$*" >> "$LOG" 2>/dev/null || true; }
 
 restore() {
   log "RETOUR ARRIÈRE : le daemon n'a pas répondu, restauration de la version précédente"
+  n=0
+  attendus=0
   for b in caleoped caleope caleope-ui; do
     if [ -f "$BIN/$b.prev" ]; then
-      cp -f "$BIN/$b.prev" "$BIN/$b" && chmod 755 "$BIN/$b" && log "  restauré : $b"
+      attendus=$((attendus+1))
+      # Copie vers un temporaire puis renommage : on ne laisse jamais un binaire
+      # à moitié écrit à la place d'un binaire qui, lui, démarrait au moins.
+      if cp -f "$BIN/$b.prev" "$BIN/$b.restore" && chmod 755 "$BIN/$b.restore" \
+         && mv -f "$BIN/$b.restore" "$BIN/$b"; then
+        n=$((n+1)); log "  restauré : $b"
+      else
+        rm -f "$BIN/$b.restore" 2>/dev/null
+        log "  ⚠ ÉCHEC de la restauration de $b"
+      fi
     fi
   done
   systemctl restart caleoped >/dev/null 2>&1 || log "  ⚠ restart caleoped a échoué"
   sleep 3
   systemctl restart caleope-ui >/dev/null 2>&1 || log "  ⚠ restart caleope-ui a échoué"
-  log "RETOUR ARRIÈRE terminé — la machine tourne sur la version précédente"
+
+  # Ne pas annoncer un succès qu'on n'a pas constaté : on revérifie réellement.
+  ok2=0
+  for j in $(seq 1 10); do
+    if systemctl is-active --quiet caleoped && "$BIN/caleope" ping >/dev/null 2>&1; then
+      ok2=1; break
+    fi
+    sleep 3
+  done
+  if [ "$n" -eq "$attendus" ] && [ "$ok2" = "1" ]; then
+    log "RETOUR ARRIÈRE terminé — la machine tourne sur la version précédente"
+  else
+    log "ÉTAT CRITIQUE : $n/$attendus binaires restaurés, daemon répond=$ok2"
+    log "  → intervention manuelle nécessaire : caleope rollback, ou réinstallation"
+  fi
 }
 
 sleep 2

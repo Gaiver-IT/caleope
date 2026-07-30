@@ -68,6 +68,17 @@ func (m *Manager) BackupWithScope(appID string, scope types.BackupScope) (string
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
 		return "", fmt.Errorf("création dossier backup: %w", err)
 	}
+	// Une sauvegarde interrompue laissait un répertoire sans manifest.json :
+	// invisible pour ListBackups, jamais compté, jamais purgé — donc une fuite
+	// d'espace permanente, exactement la panne de disque plein que la rétention
+	// est censée empêcher. Le répertoire vient d'être créé par cette exécution,
+	// on ne détruit rien d'autre que notre propre travail inachevé.
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(backupDir)
+		}
+	}()
 
 	steps := 2
 	if scope == types.BackupScopeAll {
@@ -129,13 +140,14 @@ func (m *Manager) BackupWithScope(appID string, scope types.BackupScope) (string
 	// Purge des sauvegardes hors politique, APRÈS succès uniquement.
 	// Non bloquante : la sauvegarde est faite, c'est ce qui compte. Un ménage
 	// qui échoue ne doit jamais transformer une sauvegarde réussie en erreur.
-	if deleted, err := m.ApplyRetention(appID); err != nil {
+	if deleted, err := m.ApplyRetention(appID, filepath.Base(backupDir)); err != nil {
 		fmt.Printf("  ⚠ rétention non appliquée : %v\n", err)
 	} else if len(deleted) > 0 {
 		fmt.Printf("  🧹 Rétention : %d ancienne(s) sauvegarde(s) supprimée(s) (%s)\n",
 			len(deleted), strings.Join(deleted, ", "))
 	}
 
+	success = true
 	return backupDir, nil
 }
 
@@ -349,9 +361,14 @@ func (m *Manager) DeleteBackup(appID, dir string) error {
 	if appID == "" || dir == "" {
 		return fmt.Errorf("app et dir requis")
 	}
-	// Sécurité : dir ne doit pas contenir de séparateur de chemin
-	if strings.ContainsAny(dir, "/\\") {
-		return fmt.Errorf("nom de backup invalide")
+	// Sécurité : ni séparateur, ni « . », ni « .. », sur LES DEUX composants.
+	// Le garde ne portait que sur dir : un appID valant ".." faisait remonter le
+	// chemin d'un cran et un appel pouvait détruire toutes les sauvegardes de
+	// toutes les applications, voire des données vives.
+	for _, part := range []string{appID, dir} {
+		if part == "." || part == ".." || strings.ContainsAny(part, "/\\") {
+			return fmt.Errorf("nom de backup invalide")
+		}
 	}
 	backupDir := filepath.Join(m.baseDir, "backups", appID, dir)
 	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
