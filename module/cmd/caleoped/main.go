@@ -40,6 +40,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/shares"
 	"github.com/gaiver-it/caleope/internal/store"
+	"github.com/gaiver-it/caleope/internal/supervisor"
 	"github.com/gaiver-it/caleope/internal/vms"
 )
 
@@ -142,6 +143,17 @@ func main() {
 	server.SetScheduler(sched)
 	sched.Start()
 	defer sched.Stop()
+
+	// Supervision des applications : relance ce qui devait tourner et n'a pas
+	// survécu, et remet d'aplomb les statuts qui ne correspondent plus à la
+	// réalité. Docker ne le fait PAS : sa politique `unless-stopped` abandonne
+	// définitivement un conteneur dont le démarrage a échoué une fois.
+	sup := supervisor.New(rt, dc, supervisor.NewMounts(net), func(format string, args ...any) {
+		fmt.Printf("  "+format+"\n", args...)
+	})
+	sup.Start()
+	defer sup.Stop()
+	fmt.Println("✓ Supervision des applications active (vérification chaque minute)")
 
 	// API REST HTTP
 	go func() {
