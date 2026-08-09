@@ -39,6 +39,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/scheduler"
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/shares"
+	"github.com/gaiver-it/caleope/internal/sso"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/internal/supervisor"
 	"github.com/gaiver-it/caleope/internal/vms"
@@ -137,6 +138,19 @@ func main() {
 	server.EnsureSecurityHeaders()
 	// Ré-appliquer la priorité ressources des apps (oom_score_adj perdu après un reboot hôte).
 	go server.EnsureAppPriorities()
+
+	// Garantir le prérequis du SSO : 18 applications du magasin lisent
+	// AUTHENTIK_DOMAIN dans le secrets.env d'Authentik pour se câbler. Ce
+	// fichier n'est écrit qu'à l'installation d'Authentik et ne se met jamais à
+	// jour : une installation antérieure à l'ajout de cette clé laissait donc
+	// toutes les apps suivantes s'installer SANS authentification unique.
+	if added, err := sso.EnsureAuthentikDomain(*baseDir, rt, func(f string, a ...any) {
+		fmt.Printf("  "+f+"\n", a...)
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  SSO: %v\n", err)
+	} else if added {
+		fmt.Println("✓ Prérequis SSO complété (AUTHENTIK_DOMAIN)")
+	}
 
 	// Planificateur de tâches (backup auto, upgrade, update store)
 	sched := scheduler.New(*baseDir, server)
