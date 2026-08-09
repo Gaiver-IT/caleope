@@ -1891,15 +1891,32 @@ func (s *Server) handleReconfigure(args map[string]string) (interface{}, error) 
 	return map[string]string{"status": "reconfigured", "app": appID}, nil
 }
 
-// EnsureSecurityHeaders écrit un middleware Traefik avec les en-têtes de sécurité HTTP.
-// Le middleware "secure-headers" est disponible pour toutes les apps qui l'activent.
-// Idempotent — peut être appelé à chaque démarrage.
-func (s *Server) EnsureSecurityHeaders() {
-	traefikDir := filepath.Join(s.baseDir, "data", "traefik", "dynamic")
-	if err := os.MkdirAll(traefikDir, 0755); err != nil {
-		return
-	}
-	content := `http:
+// securityHeadersFile est le fichier de configuration dynamique écrit par le daemon.
+const securityHeadersFile = "security-headers.yml"
+
+// staleSecurityHeaderFiles liste les anciens noms de ce même fichier, laissés
+// derrière par les versions précédentes. Ils définissent le MÊME middleware
+// "secure-headers" : tant qu'ils traînent dans le répertoire dynamique, lequel
+// des deux l'emporte est indéterminé — et un correctif porté ici peut rester
+// sans effet, sans le moindre message. Ils sont donc supprimés au démarrage.
+var staleSecurityHeaderFiles = []string{"secure-headers.yml"}
+
+// securityHeadersConfig produit la configuration des middlewares d'en-têtes.
+//
+// ⚠️ PAS de frameDeny ici. Ce middleware est appliqué GLOBALEMENT sur les
+// entryPoints (cf install.sh), donc il s'impose à toutes les apps : un
+// frameDeny global n'ajoute pas une protection, il ÉCRASE la politique de
+// cadrage que chaque app publie elle-même. Nextcloud annonce "SAMEORIGIN"
+// et "frame-ancestors 'self'" ; Traefik le remplaçait par "DENY", ce qui
+// casse toute app qui s'affiche dans un cadre — OnlyOffice (deux cadres
+// imbriqués), Collabora, et jusqu'à l'éditeur interne de Nextcloud, sans
+// aucune erreur visible : le cadre reste blanc. (Constaté le 2026-08-09.)
+//
+// Le middleware "frame-deny" reste disponible pour les apps qui ne publient
+// aucune politique de cadrage : elles l'activent par label Traefik
+// (traefik.http.routers.<nom>.middlewares=frame-deny@file), au cas par cas.
+func securityHeadersConfig() string {
+	return `http:
   middlewares:
     secure-headers:
       headers:
@@ -1907,7 +1924,6 @@ func (s *Server) EnsureSecurityHeaders() {
         stsIncludeSubdomains: true
         stsPreload: true
         forceSTSHeader: true
-        frameDeny: true
         contentTypeNosniff: true
         browserXssFilter: true
         referrerPolicy: "strict-origin-when-cross-origin"
@@ -1915,8 +1931,28 @@ func (s *Server) EnsureSecurityHeaders() {
         customResponseHeaders:
           X-Powered-By: ""
           Server: ""
+
+    frame-deny:
+      headers:
+        frameDeny: true
 `
-	_ = os.WriteFile(filepath.Join(traefikDir, "security-headers.yml"), []byte(content), 0644)
+}
+
+// EnsureSecurityHeaders écrit les middlewares Traefik d'en-têtes de sécurité et
+// nettoie les fichiers laissés par les versions antérieures.
+// Idempotent — peut être appelé à chaque démarrage.
+func (s *Server) EnsureSecurityHeaders() {
+	traefikDir := filepath.Join(s.baseDir, "data", "traefik", "dynamic")
+	if err := os.MkdirAll(traefikDir, 0755); err != nil {
+		return
+	}
+	for _, stale := range staleSecurityHeaderFiles {
+		if stale == securityHeadersFile {
+			continue // garde-fou : ne jamais supprimer le fichier courant
+		}
+		_ = os.Remove(filepath.Join(traefikDir, stale))
+	}
+	_ = os.WriteFile(filepath.Join(traefikDir, securityHeadersFile), []byte(securityHeadersConfig()), 0644)
 }
 
 // EnsureAppPriorities ré-applique la priorité ressources (cpu_shares + oom_score_adj) à
