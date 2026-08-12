@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 )
 
@@ -39,7 +40,12 @@ func cmdTemoin(args []string) {
 		if len(passage) > 16 {
 			passage = passage[:16]
 		}
-		if raison == "" {
+		// L'horodatage ISO garde un « T » entre la date et l'heure : lisible par
+		// une machine, pas par un humain qui lit un tableau.
+		passage = strings.Replace(passage, "T", " ", 1)
+		// strField rend « - » quand le champ est absent : un verdict « sain »
+		// n'a pas de raison, et « - » ne dit rien à personne.
+		if raison == "" || raison == "-" {
 			raison = "écrit, relu, identique"
 		}
 		fmt.Fprintf(w, "%s\t%s %s\t%s\t%s\t%s\n",
