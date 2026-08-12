@@ -42,6 +42,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/sso"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/internal/supervisor"
+	"github.com/gaiver-it/caleope/internal/temoin"
 	"github.com/gaiver-it/caleope/internal/vms"
 )
 
@@ -168,6 +169,23 @@ func main() {
 	sup.Start()
 	defer sup.Stop()
 	fmt.Println("✓ Supervision des applications active (vérification chaque minute)")
+
+	// Témoin : vérifie que ce que Caleope écrit sur un Emplacement réseau y est
+	// réellement arrivé. Il écrit un motif connu, le relit en contournant le
+	// cache, et compare. Sans cette relecture, un montage défaillant peut avaler
+	// des écritures pendant des semaines sans qu'aucune erreur n'apparaisse
+	// nulle part — c'est arrivé, et ça a coûté des dizaines de gigaoctets.
+	//
+	// Il CONSTATE et PRÉVIENT (journal + événements `emplacement.*`). Il ne
+	// répare rien, et le gel qu'il calcule n'est pas encore appliqué : on
+	// observe d'abord des verdicts réels avant de laisser un automatisme
+	// retirer des droits d'écriture.
+	tem := temoin.New(*baseDir, net, em, func(format string, args ...any) {
+		fmt.Printf("  "+format+"\n", args...)
+	})
+	tem.Start()
+	defer tem.Stop()
+	fmt.Println("✓ Témoin actif (relecture des Emplacements réseau chaque heure)")
 
 	// API REST HTTP
 	go func() {

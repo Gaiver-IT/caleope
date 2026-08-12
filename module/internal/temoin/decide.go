@@ -5,7 +5,7 @@
 // mur a bougé. Le contrat de ce module est le même — il constate, il prouve, il
 // prévient. Il ne corrige pas.
 //
-// POURQUOI IL EXISTE
+// # POURQUOI IL EXISTE
 //
 // Entre le 18/07 et le 03/08/2026, chez un utilisateur, 30 à 60 Go de fichiers
 // ont été troués de blocs de 1 Mio entièrement nuls, écrits à travers un montage
@@ -167,9 +167,14 @@ func Decide(c Constat, prec Verdict, bons int) Decision {
 
 	// 10. Ce passage est bon, mais on sort d'un incident : il en faut plusieurs
 	//     d'affilée avant de rendre sa confiance.
-	if (prec == VerdictRompu || prec == VerdictSuspect) && bons < BonsPassagesPourDegeler {
+	//
+	//     `bons` compte les passages irréprochables DÉJÀ accumulés ; celui-ci
+	//     s'y ajoute, d'où le `bons+1`. Sans ce détail, « trois passages
+	//     dégèlent » en demandait quatre — un décalage qu'on ne voit pas en
+	//     lisant le code, seulement en comptant sur ses doigts.
+	if (prec == VerdictRompu || prec == VerdictSuspect) && bons+1 < BonsPassagesPourDegeler {
 		return Decision{VerdictSuspect, true, fmt.Sprintf(
-			"en rétablissement (%d/%d passages irréprochables)", bons, BonsPassagesPourDegeler)}
+			"en rétablissement (%d/%d passages irréprochables)", bons+1, BonsPassagesPourDegeler)}
 	}
 
 	// 11. Écrit, relu, identique. Prouvé.

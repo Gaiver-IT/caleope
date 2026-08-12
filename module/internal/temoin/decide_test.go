@@ -143,15 +143,24 @@ func TestDecide(t *testing.T) {
 			verdict: VerdictSuspect, gel: false,
 		},
 		{
-			nom:     "sortie d'incident : deux bons passages ne suffisent pas à dégeler",
+			// bons=0 : ce passage est le PREMIER bon. 1/3 → on reste gelé.
+			nom:     "sortie d'incident : le premier bon passage ne dégèle pas",
 			constat: sain,
-			prec:    VerdictRompu, bons: 2,
+			prec:    VerdictRompu, bons: 0,
 			verdict: VerdictSuspect, gel: true,
 		},
 		{
-			nom:     "sortie d'incident : trois bons passages dégèlent",
+			// bons=1 : ce passage est le DEUXIÈME. 2/3 → toujours gelé.
+			nom:     "sortie d'incident : le deuxième non plus",
 			constat: sain,
-			prec:    VerdictRompu, bons: 3,
+			prec:    VerdictSuspect, bons: 1,
+			verdict: VerdictSuspect, gel: true,
+		},
+		{
+			// bons=2 : ce passage est le TROISIÈME. 3/3 → dégel.
+			nom:     "sortie d'incident : le troisième bon passage dégèle",
+			constat: sain,
+			prec:    VerdictSuspect, bons: 2,
 			verdict: VerdictSain, gel: false,
 		},
 	}
