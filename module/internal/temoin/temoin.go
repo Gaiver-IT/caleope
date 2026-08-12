@@ -125,9 +125,17 @@ func (t *Temoin) Verifier(loc types.NetworkLocation) Etat {
 		c.OptionSoft = ContientOption(opts, "soft")
 
 		compteurs = LireMountstats()[loc.MountPoint]
-		d := compteurs.Delta(etat.Compteurs)
-		c.DeltaErrWrite = d.WriteErrs
-		c.DeltaErrRead = d.ReadErrs
+		// ⚠️ Au TOUT PREMIER passage, il n'y a pas de relevé précédent : le delta
+		// vaudrait le cumul depuis le montage. Sur une machine qui a vécu, ça
+		// remonte des milliers d'erreurs vieilles de plusieurs semaines et le
+		// module annonce « 106 erreurs depuis le dernier passage » — ce qui est
+		// faux et détruit la confiance qu'on lui accorde dès sa première minute.
+		// Le premier passage établit une RÉFÉRENCE, il ne juge pas les compteurs.
+		if etat.Passages > 0 {
+			d := compteurs.Delta(etat.Compteurs)
+			c.DeltaErrWrite = d.WriteErrs
+			c.DeltaErrRead = d.ReadErrs
+		}
 
 		if c.Sentinelle && !c.SondeEnCours {
 			// Drapeau posé AVANT de sonder : si la sonde ne revient jamais

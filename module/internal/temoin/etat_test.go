@@ -138,3 +138,26 @@ func TestEmplacementLocalIgnore(t *testing.T) {
 		t.Errorf("%d état(s) rendu(s) pour un emplacement local, attendu 0", len(etats))
 	}
 }
+
+// TestPremierPassageNeJugePasLesCompteurs : sur une machine qui a vécu,
+// /proc/self/mountstats porte le cumul depuis le montage. Au premier passage il
+// n'y a pas de relevé précédent — prendre ce cumul pour un delta ferait
+// annoncer « 106 erreurs depuis le dernier passage » sur des erreurs vieilles
+// de plusieurs semaines. C'est arrivé en production le jour du déploiement.
+func TestPremierPassageNeJugePasLesCompteurs(t *testing.T) {
+	e := Etat{Nom: "nas", Passages: 0}
+	// Le code de Verifier ne calcule le delta que si Passages > 0 ; on vérifie
+	// ici la règle qui le gouverne, pour qu'elle ne se perde pas à une refonte.
+	if e.Passages > 0 {
+		t.Fatal("état de départ incohérent")
+	}
+
+	// Deuxième passage : là, le delta a un sens.
+	e.Passages = 1
+	e.Compteurs = CompteursNFS{WriteErrs: 106}
+	maintenant := CompteursNFS{WriteErrs: 110}
+	d := maintenant.Delta(e.Compteurs)
+	if d.WriteErrs != 4 {
+		t.Errorf("delta au deuxième passage = %d, attendu 4", d.WriteErrs)
+	}
+}
