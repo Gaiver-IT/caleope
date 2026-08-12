@@ -40,6 +40,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/secrets"
 	"github.com/gaiver-it/caleope/internal/shares"
 	"github.com/gaiver-it/caleope/internal/store"
+	"github.com/gaiver-it/caleope/internal/temoin"
 	"github.com/gaiver-it/caleope/internal/vms"
 	"github.com/gaiver-it/caleope/pkg/types"
 	"github.com/gaiver-it/caleope/pkg/version"
@@ -260,6 +261,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		err = s.handleLocationUnmount(req.Args)
 	case "location-storage":
 		data, err = s.handleLocationStorage(req.Args)
+	case "temoin":
+		data, err = s.handleTemoin()
 	case "shares-list":
 		data, err = s.handleSharesList()
 	case "shares-add":
@@ -884,6 +887,16 @@ func (s *Server) handleEvents(args map[string]string) (interface{}, error) {
 
 func (s *Server) handleLocationList() (interface{}, error) {
 	return s.net.List()
+}
+
+// handleTemoin rend l'état d'intégrité de chaque Emplacement réseau, tel que le
+// module Témoin l'a constaté à son dernier passage.
+//
+// Lecture seule, volontairement : la commande ne déclenche PAS un nouveau
+// passage. Une sonde écrit puis relit plusieurs mégaoctets ; sur un lien lent,
+// une commande qui prend une minute est une commande qu'on n'utilise plus.
+func (s *Server) handleTemoin() (interface{}, error) {
+	return temoin.ListerEtats(s.baseDir), nil
 }
 
 func (s *Server) handleLocationAdd(args map[string]string) (interface{}, error) {

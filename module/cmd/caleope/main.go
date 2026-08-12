@@ -68,6 +68,8 @@ func main() {
 		cmdEvents(args)
 	case "location", "locations":
 		cmdLocation(args)
+	case "temoin":
+		cmdTemoin(args)
 	case "top":
 		cmdTop(args)
 	case "stop":
@@ -312,7 +314,6 @@ func cmdConfigure(args []string) {
 	if len(args) == 0 {
 		die("Usage: caleope configure <app>\n  Ex:    caleope configure arr-stack")
 	}
-
 
 	switch args[0] {
 	case "arr-stack":
@@ -1465,6 +1466,10 @@ Commandes:
     --app <app>     Filtrer par application
     --type <type>   Filtrer par type (app_started, app_stopped, install…)
     --limit <n>     Nombre d'événements (défaut : 50)
+
+  temoin            Intégrité des Emplacements réseau : ce que Caleope y écrit
+                    est relu depuis le serveur, hors cache, puis comparé.
+                    Un Emplacement n'est « sain » que si l'aller-retour a abouti.
 
   location          Gérer les emplacements réseau (SMB, CIFS, SFTP)
   location list     Lister les emplacements configurés
