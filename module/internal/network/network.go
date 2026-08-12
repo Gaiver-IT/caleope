@@ -301,6 +301,31 @@ func fstabMarker(name string) string {
 	return fmt.Sprintf("# caleope:%s", name)
 }
 
+// optionsNFS retourne les options de montage NFS de Caleope.
+//
+// SOURCE UNIQUE, volontairement : elle sert au montage à chaud (mountNFS) ET à
+// la ligne /etc/fstab. Les deux avaient divergé, si bien qu'un durcissement
+// s'évaporait au redémarrage suivant.
+//
+// ⚠️ `hard` — ne pas remettre `soft`. Avec `soft`, une écriture qui expire rend
+// une erreur que la plupart des programmes ignorent : la donnée est perdue en
+// silence, le fichier gardant sa taille avec des zéros à la place. Constaté chez
+// un utilisateur du 18/07 au 03/08/2026 (30 à 60 Go troués, détectés six semaines
+// plus tard). Avec `hard`, un NAS malade fait attendre au lieu de faire perdre.
+// Qui veut `soft` le demande explicitement : loc.Options est ajouté après et gagne.
+func optionsNFS() []string {
+	return []string{
+		"vers=3",
+		"rw",
+		"hard",
+		"proto=tcp",
+		"mountproto=tcp",
+		"timeo=50",
+		"retrans=3",
+		"retry=0",
+	}
+}
+
 // fstabLine construit la ligne fstab pour un emplacement.
 // Pour SMB : utilise un fichier credentials séparé (pas le mdp en clair).
 // Pour NFS : pas de credentials, auth par IP côté serveur.
@@ -318,7 +343,12 @@ func (m *Manager) fstabLine(loc types.NetworkLocation) string {
 		return fmt.Sprintf("%s\t%s\tcifs\t%s\t0 0\t%s", unc, loc.MountPoint, opts, marker)
 	case types.LocationNFS:
 		export := fmt.Sprintf("%s:%s", loc.Host, "/"+strings.TrimPrefix(loc.Share, "/"))
-		opts := "vers=3,rw,soft,_netdev"
+		// ⚠️ MÊME liste que le montage à chaud (optionsNFS), sinon le durcissement
+		// disparaît au premier redémarrage sans que personne ne s'en aperçoive.
+		// C'est exactement ce qui était arrivé : le correctif v0.7.8 (proto=tcp,
+		// mountproto=tcp, timeo, retrans, retry) ne vivait que dans mountNFS,
+		// et fstab remontait le NAS en « vers=3,rw,soft,_netdev » après chaque boot.
+		opts := strings.Join(append(optionsNFS(), "_netdev"), ",")
 		if loc.Options != "" {
 			opts += "," + loc.Options
 		}
@@ -471,23 +501,28 @@ func (m *Manager) mountNFS(loc types.NetworkLocation) error {
 	// Options de montage NFS
 	// - vers=3       : NFSv3 (compatible avec la majorité des NAS)
 	// - rw           : lecture/écriture
-	// - soft         : timeout au lieu de bloquer indéfiniment si le NAS est injoignable
+	// - hard         : ⚠️ NE JAMAIS REMETTRE `soft` PAR DÉFAUT. Voir plus bas.
 	// - proto=tcp    : transport NFS sur TCP
 	// - mountproto=tcp : requête MOUNT vers mountd sur TCP au lieu d'UDP (défaut).
 	//   Sans ça, un NAS dont le mountd ne répond pas en UDP (pare-feu, backend
 	//   distant lent type storage box / mergerfs) fige le montage indéfiniment.
-	// - timeo=50,retrans=2 : avec soft, échoue en ~10-20s au lieu de bloquer.
+	// - timeo=50,retrans=3 : 5 s par tentative, 3 tentatives avant de réessayer.
 	// - retry=0      : mount.nfs abandonne tout de suite au lieu de reboucler 2 min.
-	options := []string{
-		"vers=3",
-		"rw",
-		"soft",
-		"proto=tcp",
-		"mountproto=tcp",
-		"timeo=50",
-		"retrans=2",
-		"retry=0",
-	}
+	//
+	// ⚠️ POURQUOI `hard` ET PAS `soft` — corrigé le 2026-08-12, ne pas défaire.
+	// Avec `soft`, une écriture qui expire rend une ERREUR à l'application. Or
+	// d'innombrables programmes (et `cp`, et les copies d'import) ne vérifient pas
+	// le retour de write()/close() : la donnée est alors perdue EN SILENCE et le
+	// fichier garde sa taille, rempli de zéros à l'emplacement manquant.
+	// C'est exactement ce qui s'est produit chez un utilisateur entre le 18/07 et
+	// le 03/08/2026 : 30 à 60 Go de fichiers troués de blocs nuls de 1 Mio, sans
+	// une seule erreur visible, découverts six semaines plus tard.
+	// Avec `hard`, l'opération est retentée jusqu'à ce que le serveur réponde :
+	// un NAS malade fait ATTENDRE, il ne fait plus PERDRE. C'est le compromis que
+	// recommande la documentation NFS, et le seul acceptable pour des données.
+	// L'utilisateur qui veut `soft` peut toujours le demander : loc.Options est
+	// concaténé APRÈS et gagne (`caleope location add … --options soft`).
+	options := optionsNFS()
 	if loc.Options != "" {
 		options = append(options, loc.Options)
 	}
