@@ -37,6 +37,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -135,6 +136,41 @@ func decide(recorded types.AppStatus, actuallyRunning, needsStorage, storageOK, 
 	return ActionStart
 }
 
+// fichiersCompose : les deux noms qu'un dossier d'application peut porter.
+var fichiersCompose = []string{"docker-compose.yml", "docker-compose.yaml"}
+
+// sansConteneur dit si une application n'a AUCUN conteneur par conception.
+//
+// ⚠️ Constaté le 12/08/2026 au banc d'essai. `restic` est un outil système
+// (« no_container » dans son app.json) : il installe un binaire et une tâche
+// planifiée, pas un conteneur. Le superviseur, lui, ne voyait qu'une app notée
+// « en marche » dont rien ne tournait. Il tentait donc de la relancer, `docker
+// compose` échouait faute de fichier, et l'application finissait affichée EN
+// ERREUR alors que `restic version` répondait parfaitement.
+//
+// Une croix rouge sur quelque chose qui marche, c'est le tableau de bord qui
+// ment — précisément la faute que ce paquet existe pour corriger.
+//
+// On interroge le disque plutôt qu'un champ du manifeste : le verdict vaut
+// aussi pour les applications installées AVANT que ce cas soit prévu, sans
+// migration ni réinstallation.
+//
+// Un dossier ABSENT ne rend pas « sans conteneur » : c'est une anomalie, pas
+// une conception. On préfère alors laisser le superviseur faire son travail et
+// signaler l'erreur plutôt que d'ignorer l'application en silence.
+func sansConteneur(composeDir string) bool {
+	fi, err := os.Stat(composeDir)
+	if err != nil || !fi.IsDir() {
+		return false
+	}
+	for _, n := range fichiersCompose {
+		if _, err := os.Stat(filepath.Join(composeDir, n)); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
 // ── Superviseur ──────────────────────────────────────────────────────────────
 
 type Supervisor struct {
@@ -200,6 +236,12 @@ func (s *Supervisor) Check() []Report {
 	var reports []Report
 	for _, app := range apps {
 		if app == nil || app.ComposeDir == "" {
+			continue
+		}
+
+		// Une app sans conteneur n'a rien à superviser : la relancer serait
+		// inventer une panne (voir sansConteneur).
+		if sansConteneur(app.ComposeDir) {
 			continue
 		}
 
