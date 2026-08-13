@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -550,10 +551,18 @@ func (i *Installer) runSetup(ctx context.Context, appDir, composeDir string, man
 	cmd.Dir = composeDir
 	cmd.Env = env
 	cmd.Stdin = os.Stdin // permet les prompts interactifs dans setup.sh
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// On duplique la sortie : elle continue d'aller au journal du daemon, et on
+	// en garde la fin pour la joindre à l'erreur (voir sortie_setup.go — sans
+	// ça, l'utilisateur ne reçoit qu'« exit status 1 » et perd le message que
+	// le paquet a pris soin d'écrire).
+	var fin tampon
+	cmd.Stdout = io.MultiWriter(os.Stdout, &fin)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &fin)
 
 	if err := cmd.Run(); err != nil {
+		if extrait := dernieresLignes(string(fin.octets), 12); extrait != "" {
+			return fmt.Errorf("setup.sh échoué: %w\n%s", err, extrait)
+		}
 		return fmt.Errorf("setup.sh échoué: %w", err)
 	}
 	return nil
