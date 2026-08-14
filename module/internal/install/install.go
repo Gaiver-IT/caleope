@@ -123,6 +123,15 @@ func (i *Installer) Install(opts InstallOptions) error {
 		}
 	}
 
+	// ⚠️ On relève les ports que l'app occupait AVANT d'écraser son
+	// enregistrement : le contrôle de conflit de ports (étape 4) en a besoin
+	// pour se reconnaître lui-même lors d'une réinstallation. Sans ça, monter
+	// une app qui publie un port fixe est impossible.
+	var portsPrecedents []types.AppPort
+	if prec, err := i.rt.GetApp(opts.AppID); err == nil && prec != nil {
+		portsPrecedents = prec.Ports
+	}
+
 	// Marquer l'app comme "en cours d'installation" dans le runtime
 	runtimeApp := &types.RuntimeApp{
 		ID:          manifest.ID,
@@ -158,7 +167,7 @@ func (i *Installer) Install(opts InstallOptions) error {
 	// dur → si déjà pris, « docker compose up » plante avec un message cryptique
 	// (« Bind for 0.0.0.0:53 failed: port is already allocated »). On vérifie
 	// AVANT pour refuser proprement en nommant l'app fautive.
-	if err := i.checkStaticPorts(manifest); err != nil {
+	if err := i.checkStaticPorts(manifest, portsPrecedents); err != nil {
 		audit.Log(audit.ActionInstall, opts.AppID, "DENIED:port_conflict")
 		return err
 	}
@@ -393,7 +402,36 @@ func staticHostPort(p types.AppPort) int {
 	return p.Container
 }
 
-func (i *Installer) checkStaticPorts(manifest *types.AppManifest) error {
+// occupePar dit si l'un de ces ports occupe le port hôte donné. Extrait en
+// fonction pour que la reconnaissance « c'est mon propre port » se lise d'un
+// coup d'œil — c'est elle qui décide si une montée de version est possible.
+func occupePar(ports []types.AppPort, port int) bool {
+	for _, p := range ports {
+		if !p.Dynamic && staticHostPort(p) == port {
+			return true
+		}
+	}
+	return false
+}
+
+// checkStaticPorts refuse l'installation si un port FIXE est déjà pris.
+//
+// ⚠️ portsPrecedents porte les ports que CETTE app occupait avant qu'on touche
+// à son enregistrement. Sans eux, une réinstallation était impossible dès que
+// l'app publiait un port fixe — et une réinstallation, c'est le geste d'une
+// montée de version.
+//
+// Le piège tient à l'ordre des étapes : Install écrit l'enregistrement de l'app
+// (étape 2) AVANT ce contrôle (étape 4). Le nouvel enregistrement n'a pas encore
+// de ports — ils sont alloués juste après. La reconnaissance « c'est ma propre
+// app » comparait donc contre une liste vide, ne trouvait rien, et rendait
+// « port déjà utilisé sur cet hôte (service tiers) » en désignant… l'app
+// elle-même. Pire, le rollback retirait ensuite l'app du runtime en laissant ses
+// conteneurs tourner : une app orpheline, vivante mais inconnue de Caleope.
+//
+// Mesuré le 13/08/2026 au banc : « caleope install forgejo --force » (port ssh
+// 2223) échouait systématiquement.
+func (i *Installer) checkStaticPorts(manifest *types.AppManifest, portsPrecedents []types.AppPort) error {
 	if manifest.NoContainer {
 		return nil // outil système sans conteneur → pas de bind de port hôte
 	}
@@ -410,19 +448,25 @@ func (i *Installer) checkStaticPorts(manifest *types.AppManifest) error {
 			if portFree(proto, port) {
 				continue
 			}
-			// Occupé : est-ce nous-mêmes (réinstall) ou une autre app ?
-			var culprit string
+			// Occupé : est-ce nous-mêmes (réinstallation) ou une autre app ?
+			// On interroge d'abord ce que CETTE app occupait avant qu'on touche
+			// à son enregistrement — la seule trace fiable pendant une montée.
+			if occupePar(portsPrecedents, port) {
+				continue
+			}
+			nous, culprit := false, ""
 			for _, app := range installed {
-				for _, ap := range app.Ports {
-					if ap.Dynamic || staticHostPort(ap) != port {
-						continue
-					}
-					if app.ID == manifest.ID {
-						culprit = "" // c'est notre propre app → on n'empêche pas
-						goto ownPort
-					}
-					culprit = app.ID
+				if !occupePar(app.Ports, port) {
+					continue
 				}
+				if app.ID == manifest.ID {
+					nous = true // notre propre app, enregistrée : on n'empêche pas
+					break
+				}
+				culprit = app.ID
+			}
+			if nous {
+				continue
 			}
 			if culprit != "" {
 				return fmt.Errorf("port %d/%s déjà utilisé par l'app « %s » — désinstalle-la (ou change son port) avant d'installer « %s »",
@@ -430,7 +474,6 @@ func (i *Installer) checkStaticPorts(manifest *types.AppManifest) error {
 			}
 			return fmt.Errorf("port %d/%s déjà utilisé sur cet hôte (service tiers) — libère-le avant d'installer « %s »",
 				port, proto, manifest.ID)
-		ownPort:
 		}
 	}
 	return nil
