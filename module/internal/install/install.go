@@ -233,8 +233,19 @@ func (i *Installer) Install(opts InstallOptions) error {
 		// containers VIVANTS (un AzuraCast externe encore Up ne doit pas être coupé).
 		i.docker.PruneStaleProjectContainers(opts.AppID)
 
-		// ── Étape 9 : docker compose up ──
+		// ── Étape 9 : docker compose pull puis up ──
+		// Le pull est OBLIGATOIRE ici : « up » n'irait chercher que les images
+		// absentes, donc une app sur tag glissant (latest/release/stable) ne
+		// recevrait jamais de correctif amont — voir docker.Client.Pull.
+		// Un échec n'est PAS bloquant : hors ligne, ou registre injoignable, on
+		// démarre avec les images déjà présentes plutôt que de refuser
+		// l'installation.
 		fmt.Println("  [9/12] Démarrage des containers...")
+		fmt.Println("         → tirage des images...")
+		if err := i.docker.Pull(composeDir); err != nil {
+			fmt.Printf("         ⚠ tirage incomplet : %v\n", err)
+			fmt.Println("         → démarrage avec les images locales.")
+		}
 		if err := i.docker.Up(composeDir); err != nil {
 			return err
 		}

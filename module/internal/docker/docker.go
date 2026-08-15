@@ -63,8 +63,25 @@ func (c *Client) Start(composeDir string) error {
 }
 
 // Pull télécharge les images sans démarrer les containers.
+//
+// POURQUOI c'est indispensable avant Up : « docker compose up » applique la
+// politique par défaut `pull_policy: missing` — il ne tire que les images
+// ABSENTES. Une app épinglée sur un tag glissant (latest, release, stable)
+// reste donc figée sur l'image tirée le jour de sa première installation et ne
+// reçoit AUCUN correctif amont, montée après montée. Mesuré le 15/08/2026 sur
+// la prod : le serveur Immich avait 5 semaines de retard juste après une montée
+// réussie ; 79 des 125 services du magasin portent un tag glissant.
+//
+// --ignore-pull-failures : une app peut légitimement porter une image
+// construite localement, ou viser un registre momentanément injoignable. Ça ne
+// doit jamais empêcher l'app de démarrer avec ce qu'on a déjà en local.
+//
+// Les variables de app.env sont passées comme pour Up : sans COMPOSE_PROFILES,
+// compose ne verrait pas les mêmes services et tirerait un jeu d'images
+// différent de celui qu'on va démarrer.
 func (c *Client) Pull(composeDir string) error {
-	return c.runCompose(composeDir, "pull")
+	extraEnv := allAppEnvVars(filepath.Join(composeDir, "app.env"))
+	return c.runComposeEnv(composeDir, extraEnv, "pull", "--ignore-pull-failures")
 }
 
 // Logs retourne les logs d'une stack (les 100 dernières lignes).
