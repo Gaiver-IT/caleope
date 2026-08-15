@@ -255,6 +255,18 @@ func (m *Manager) AllocatePort(appID string, min, max int) (int, error) {
 		return 0, err
 	}
 
+	// ⚠️ Si cette app détient DÉJÀ un port, on le lui rend tel quel.
+	// Sans ça, la recherche du premier port libre voyait la réservation de
+	// l'app comme « occupée » et lui en attribuait un AUTRE : le port publié
+	// changeait à chaque `install --force`, donc à chaque montée de version
+	// (mesuré sur le banc : 8001 → 8002). Marque-pages, tuiles du tableau de
+	// bord et règles de proxy pointaient alors dans le vide.
+	// On ne re-teste pas la disponibilité : le port est très probablement bindé
+	// par l'app elle-même, et un net.Listen échouerait pour cette raison.
+	if p, ok := ports[appID]; ok && p > 0 {
+		return p, nil
+	}
+
 	// Construire un set des ports déjà utilisés selon ports.json
 	used := make(map[int]bool)
 	for _, p := range ports {
