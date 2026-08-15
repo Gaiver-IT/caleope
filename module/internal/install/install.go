@@ -127,8 +127,13 @@ func (i *Installer) Install(opts InstallOptions) error {
 	// enregistrement : le contrôle de conflit de ports (étape 4) en a besoin
 	// pour se reconnaître lui-même lors d'une réinstallation. Sans ça, monter
 	// une app qui publie un port fixe est impossible.
+	// ⚠️ On retient aussi l'enregistrement COMPLET : s'il existe, cette
+	// installation est une montée de version, et un échec ne doit surtout pas
+	// faire le ménage d'une installation neuve — voir rollback().
 	var portsPrecedents []types.AppPort
+	var precedent *types.RuntimeApp
 	if prec, err := i.rt.GetApp(opts.AppID); err == nil && prec != nil {
+		precedent = prec
 		portsPrecedents = prec.Ports
 	}
 
@@ -147,10 +152,11 @@ func (i *Installer) Install(opts InstallOptions) error {
 	// Toutes les étapes suivantes sont dans un defer de rollback
 	// Si une erreur se produit, on nettoie proprement
 	success := false
+	var repli *instantane // description de la version en place (montée seulement)
 	defer func() {
 		if !success {
 			fmt.Printf("\n⚠️  Installation échouée, rollback en cours...\n")
-			i.rollback(opts.AppID, composeDir, hostPort)
+			i.rollback(opts.AppID, composeDir, hostPort, precedent, repli)
 		}
 	}()
 
@@ -182,6 +188,11 @@ func (i *Installer) Install(opts InstallOptions) error {
 	// ── Étape 5 : Création dossiers ──
 	fmt.Println("  [5/12] Création des répertoires...")
 	composeDir = filepath.Join(i.baseDir, "apps-installed", opts.AppID)
+	// Photographier la version EN PLACE avant de régénérer quoi que ce soit :
+	// c'est le seul moment où compose.yml décrit encore ce qui tourne.
+	if precedent != nil {
+		repli = prendreInstantane(composeDir)
+	}
 	if err := i.createDirs(manifest, composeDir, opts); err != nil {
 		return err
 	}
@@ -953,8 +964,23 @@ func (i *Installer) waitForStart(ctx context.Context, composeDir string) error {
 // ROLLBACK
 // ─────────────────────────────────────────────
 
-// rollback nettoie tout ce qui a été fait en cas d'échec.
-func (i *Installer) rollback(appID, composeDir string, hostPort int) {
+// rollback rattrape un échec d'installation.
+//
+// Deux situations RADICALEMENT différentes :
+//
+//   - installation NEUVE (precedent == nil) : on fait le ménage complet, il n'y
+//     a rien à préserver.
+//   - MONTÉE de version d'une app existante (precedent != nil) : on ne détruit
+//     RIEN. On remet en place la description de l'ancienne version et son
+//     enregistrement, et on tente de la redémarrer. Le ménage complet ici
+//     supprimait `apps-installed/<app>` et désinscrivait une app qui marchait
+//     avant qu'on y touche — la « protection » coûtait l'app.
+func (i *Installer) rollback(appID, composeDir string, hostPort int, precedent *types.RuntimeApp, repli *instantane) {
+	if precedent != nil {
+		i.reprendreVersionPrecedente(appID, composeDir, precedent, repli)
+		return
+	}
+
 	fmt.Println("  → Arrêt des containers...")
 	if composeDir != "" {
 		_ = i.docker.Down(composeDir)
@@ -973,6 +999,52 @@ func (i *Installer) rollback(appID, composeDir string, hostPort int) {
 	audit.Log(audit.ActionInstall, appID, "ERREUR: rollback effectué")
 
 	fmt.Println("  ✓ Rollback terminé")
+}
+
+// reprendreVersionPrecedente remet l'app dans l'état où la montée l'a trouvée.
+// Elle VÉRIFIE son résultat et le dit tel qu'il est : un rattrapage qui annonce
+// une réussite sans regarder transforme trois minutes de panne en trois jours.
+func (i *Installer) reprendreVersionPrecedente(appID, composeDir string, precedent *types.RuntimeApp, repli *instantane) {
+	fmt.Println("  → Montée échouée : retour à la version précédente (rien n'est supprimé).")
+
+	if repli != nil && composeDir != "" {
+		if err := repli.restaurer(composeDir); err != nil {
+			fmt.Printf("  ⚠ Restauration de la description impossible : %v\n", err)
+		} else {
+			fmt.Printf("  ✓ Description précédente restaurée (%d fichier(s)).\n", repli.nombreFichiers())
+		}
+	} else {
+		fmt.Println("  ⚠ Pas de description précédente à restaurer : la stack reste en l'état.")
+	}
+
+	// L'enregistrement a été écrasé au début de l'installation (statut
+	// « installing ») : on remet celui d'avant, ports compris.
+	if err := i.rt.SaveApp(precedent); err != nil {
+		fmt.Printf("  ⚠ Enregistrement non restauré : %v\n", err)
+	}
+	// Le port n'est PAS libéré : l'app le détient toujours.
+
+	enMarche := false
+	if composeDir != "" {
+		if err := i.docker.Up(composeDir); err != nil {
+			fmt.Printf("  ⚠ Redémarrage refusé : %v\n", err)
+		}
+		if ok, err := i.docker.IsRunning(composeDir); err == nil {
+			enMarche = ok
+		}
+	}
+
+	if enMarche {
+		fmt.Println("  ✓ Ancienne version redémarrée et vérifiée en marche.")
+		_ = i.emitter.AppError(appID, "montée échouée, version précédente reprise")
+		audit.Log(audit.ActionInstall, appID, "ERREUR: montée échouée, version précédente reprise")
+	} else {
+		fmt.Printf("  ✗ L'app '%s' ne tourne PAS après la reprise — à regarder :\n", appID)
+		fmt.Printf("      caleope logs %s\n", appID)
+		fmt.Println("      les données (app-data/, app-config/) n'ont pas été touchées.")
+		_ = i.emitter.AppError(appID, "montée échouée, reprise incomplète : app arrêtée")
+		audit.Log(audit.ActionInstall, appID, "ERREUR: montée échouée, reprise INCOMPLETE (app arretee)")
+	}
 }
 
 // ─────────────────────────────────────────────
