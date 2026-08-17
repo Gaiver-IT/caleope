@@ -1,6 +1,7 @@
 package temoin
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,15 +38,16 @@ type Journal interface {
 // d'écrire) n'est PAS branchée dans cette version — on observe d'abord une
 // semaine de verdicts réels avant de laisser un automatisme retirer des droits.
 type Temoin struct {
-	baseDir    string
-	emp        Emplacements
-	journal    Journal
-	logf       func(string, ...any)
-	intervalle time.Duration
-	tailleMio  int
-	now        func() time.Time
-	stop       chan struct{}
-	stopOnce   sync.Once
+	baseDir     string
+	emp         Emplacements
+	journal     Journal
+	logf        func(string, ...any)
+	intervalle  time.Duration
+	tailleMio   int
+	budgetRonde int64
+	now         func() time.Time
+	stop        chan struct{}
+	stopOnce    sync.Once
 }
 
 func New(baseDir string, emp Emplacements, journal Journal, logf func(string, ...any)) *Temoin {
@@ -53,14 +55,15 @@ func New(baseDir string, emp Emplacements, journal Journal, logf func(string, ..
 		logf = func(string, ...any) {}
 	}
 	return &Temoin{
-		baseDir:    baseDir,
-		emp:        emp,
-		journal:    journal,
-		logf:       logf,
-		intervalle: IntervalleDefaut,
-		tailleMio:  TailleSondeMio,
-		now:        time.Now,
-		stop:       make(chan struct{}),
+		baseDir:     baseDir,
+		emp:         emp,
+		journal:     journal,
+		logf:        logf,
+		intervalle:  IntervalleDefaut,
+		tailleMio:   TailleSondeMio,
+		budgetRonde: BudgetRondeDefaut,
+		now:         time.Now,
+		stop:        make(chan struct{}),
 	}
 }
 
@@ -156,6 +159,17 @@ func (t *Temoin) Verifier(loc types.NetworkLocation) Etat {
 		}
 	}
 
+	// ── Ronde sur les données réelles ────────────────────────────────────────
+	// Elle vient APRÈS la sonde et n'entre PAS dans le verdict : la sonde juge
+	// le lien, la ronde regarde ce qui est déjà écrit. Mélanger les deux
+	// laisserait un faux positif de ronde condamner un Emplacement sain.
+	// Elle ne tourne que si la sentinelle est là : sans elle, on lirait le
+	// dossier local nu qui se trouve sous un montage absent, et on déclarerait
+	// « 0 fichier abîmé » sur une bibliothèque qu'on n'a même pas ouverte.
+	if c.Monte && c.Sentinelle {
+		t.faireRonde(&etat, loc.Name, loc.MountPoint, maintenant)
+	}
+
 	d := Decide(c, precedent, etat.BonsConsecutifs)
 	etat.Appliquer(d, c, compteurs, maintenant)
 	if err := EnregistrerEtat(t.baseDir, etat); err != nil {
@@ -200,4 +214,72 @@ func estPointDeMontage(chemin string) bool {
 	defer f.Close()
 	_, ok := ParseMounts(f)[abs]
 	return ok
+}
+
+// faireRonde exécute une tranche de ronde et range ce qu'elle a vu dans l'état.
+//
+// Isolée du reste pour être éprouvable : le contrôle « est-ce monté » lit
+// /proc/self/mounts et rend toujours faux sur un poste de développement, ce qui
+// rendrait ce chemin de code impossible à tester s'il restait en ligne.
+func (t *Temoin) faireRonde(etat *Etat, nom, racine string, maintenant time.Time) {
+	r := Ronde(racine, etat.RondeCurseur, t.budgetRonde, t.now)
+	if r.Erreur != nil {
+		t.logf("témoin[%s] : ronde interrompue : %v", nom, r.Erreur)
+		return
+	}
+	etat.RondeCurseur = r.Curseur
+	etat.RondeFichiers += r.Fichiers
+	etat.RondeOctets += r.Octets
+	etat.RondeDerniere = maintenant
+	if r.Termine {
+		etat.RondeTours++
+	}
+	if len(r.Trouvailles) == 0 {
+		return
+	}
+	// ⚠️ On ne signale QUE les fichiers encore inconnus. Sans ça, chaque tour de
+	// ronde re-crierait sur les mêmes fichiers et l'alerte finirait ignorée —
+	// exactement le sort qu'a connu l'affichage « tout est vert » de l'incident.
+	deja := map[string]bool{}
+	for _, a := range etat.RondeAbimes {
+		deja[a.Chemin] = true
+	}
+	var inedites []Trouvaille
+	for _, tr := range r.Trouvailles {
+		if !deja[tr.Chemin] {
+			inedites = append(inedites, tr)
+		}
+	}
+	etat.RondeAbimes = fusionnerTrouvailles(etat.RondeAbimes, r.Trouvailles)
+	if len(inedites) == 0 {
+		return
+	}
+	t.logf("témoin[%s] : %d fichier(s) troué(s) repéré(s), dont %s",
+		nom, len(inedites), inedites[0].Chemin)
+	if t.journal != nil {
+		_ = t.journal.Emit("emplacement.donnees_abimees", nom, map[string]string{
+			"fichiers": fmt.Sprint(len(inedites)),
+			"exemple":  inedites[0].Chemin,
+			"lus":      fmt.Sprint(r.Fichiers),
+		})
+	}
+}
+
+// fusionnerTrouvailles garde une liste bornée, sans doublon de chemin, la plus
+// récente d'abord. Sans dédoublonnage, un fichier abîmé serait re-signalé à
+// chaque tour de ronde et finirait par chasser tous les autres de la liste.
+func fusionnerTrouvailles(anciennes, nouvelles []Trouvaille) []Trouvaille {
+	vus := map[string]bool{}
+	out := make([]Trouvaille, 0, MaxTrouvaillesRetenues)
+	for _, t := range append(append([]Trouvaille{}, nouvelles...), anciennes...) {
+		if vus[t.Chemin] {
+			continue
+		}
+		vus[t.Chemin] = true
+		out = append(out, t)
+		if len(out) >= MaxTrouvaillesRetenues {
+			break
+		}
+	}
+	return out
 }

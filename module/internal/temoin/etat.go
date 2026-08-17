@@ -29,6 +29,18 @@ type Etat struct {
 	// TotalBlocsNuls : cumul depuis toujours, pour la valeur de preuve.
 	TotalBlocsNuls int `json:"total_blocs_nuls"`
 	Passages       int `json:"passages"`
+
+	// ── Ronde sur les données réelles ────────────────────────────────────────
+	// La sonde prouve que le lien va bien MAINTENANT ; la ronde relit les
+	// fichiers déjà là. Son avancement doit survivre au redémarrage du daemon,
+	// sinon elle recommencerait éternellement par le début de l'alphabet et
+	// n'atteindrait jamais la fin d'une grosse bibliothèque.
+	RondeCurseur  string       `json:"ronde_curseur,omitempty"`
+	RondeFichiers int          `json:"ronde_fichiers"`
+	RondeOctets   int64        `json:"ronde_octets"`
+	RondeTours    int          `json:"ronde_tours"`
+	RondeDerniere time.Time    `json:"ronde_derniere,omitempty"`
+	RondeAbimes   []Trouvaille `json:"ronde_abimes,omitempty"`
 }
 
 // dossierEtat range les états sous runtime/temoin/.
