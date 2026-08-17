@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,6 +51,13 @@ import (
 // occupé par heure. Assez pour faire le tour d'une bibliothèque de 40 Go en une
 // semaine, assez peu pour que personne ne le remarque.
 const BudgetRondeDefaut int64 = 256 << 20
+
+// MaxFichiersParPasse : seconde borne du passage. Le budget en octets ne
+// protège de rien face à une arborescence de vignettes — des centaines de
+// milliers de fichiers de 8 Kio pèsent trois fois rien mais coûtent une
+// métadonnée chacune, et sur le montage surveillé une métadonnée se paie en
+// dizaines de millisecondes.
+const MaxFichiersParPasse = 3000
 
 // MaxTrouvaillesRetenues borne ce qu'on garde en mémoire et sur disque : si
 // 10 000 fichiers sont abîmés, en nommer 50 suffit largement à donner l'alerte,
@@ -106,29 +114,76 @@ func AnalyserContenu(r io.Reader) (blocs int, nuls int, err error) {
 // AnalyserFichier ouvre puis analyse. Rend nil, nil pour un fichier qu'on a
 // décidé de ne pas juger (trop petit, ou creux).
 func AnalyserFichier(chemin string, info fs.FileInfo) (*Trouvaille, error) {
+	tr, _, _, err := AnalyserTranche(chemin, info, 0, 1<<62)
+	return tr, err
+}
+
+// AnalyserTranche lit AU PLUS `budget` octets d'un fichier, à partir de
+// `depuis`, et rend ce qu'elle a vu ainsi que la position d'arrêt.
+//
+// POURQUOI la tranche existe : la première version lisait chaque fichier en
+// ENTIER puis regardait si le budget du passage était dépassé. Sur une
+// bibliothèque média, un seul film de plusieurs gigaoctets occupait donc le
+// lien pendant des dizaines de minutes — mesuré sur la production, la ronde
+// lisait encore sans discontinuer 23 minutes après son démarrage, en
+// concurrence directe avec la galerie de l'utilisateur. Le budget doit être
+// respecté PENDANT la lecture, pas après.
+//
+// `depuis` est toujours un multiple de TailleBloc : c'est ce qui garantit que
+// les blocs restent alignés d'un passage à l'autre, et donc qu'un trou à cheval
+// sur deux passages soit quand même vu.
+func AnalyserTranche(chemin string, info fs.FileInfo, depuis, budget int64) (tr *Trouvaille, lus int64, fini bool, err error) {
 	// Sous un bloc complet, la signature ne peut pas apparaître.
 	if info.Size() < TailleBloc {
-		return nil, nil
+		return nil, 0, true, nil
 	}
 	// Un fichier CREUX rend des zéros à la lecture sans qu'aucune donnée n'ait
 	// été perdue : c'est le faux positif évident, on l'écarte avant de lire.
 	if estCreux(info) {
-		return nil, nil
+		return nil, 0, true, nil
 	}
 	f, err := os.Open(chemin)
 	if err != nil {
-		return nil, err
+		return nil, 0, true, err
 	}
 	defer f.Close()
+	if depuis > 0 {
+		if _, err := f.Seek(depuis, io.SeekStart); err != nil {
+			return nil, 0, true, err
+		}
+	}
 
-	blocs, nuls, err := AnalyserContenu(f)
-	if err != nil {
-		return nil, err
+	tampon := make([]byte, TailleBloc)
+	zeros := make([]byte, TailleBloc)
+	var blocs, nuls int
+	for lus < budget {
+		n, errLecture := io.ReadFull(f, tampon)
+		if n == TailleBloc {
+			blocs++
+			lus += int64(n)
+			if bytes.Equal(tampon, zeros) {
+				nuls++
+			}
+		}
+		if errLecture != nil {
+			if errLecture == io.EOF || errLecture == io.ErrUnexpectedEOF {
+				fini = true
+				break
+			}
+			return nil, lus, true, errLecture
+		}
 	}
-	if nuls == 0 {
-		return nil, nil
+	// ⚠️ Un fichier dont la taille tombe pile sur le budget sort de la boucle
+	// SANS avoir vu la fin de fichier. Sans ce rattrapage, la ronde le
+	// marquerait « à reprendre », dépenserait un passage entier à découvrir
+	// qu'il n'y a plus rien, et le compterait deux fois.
+	if depuis+lus >= info.Size() {
+		fini = true
 	}
-	return &Trouvaille{Chemin: chemin, Octets: info.Size(), BlocsNuls: nuls, Blocs: blocs}, nil
+	if nuls > 0 {
+		tr = &Trouvaille{Chemin: chemin, Octets: info.Size(), BlocsNuls: nuls, Blocs: blocs}
+	}
+	return tr, lus, fini, nil
 }
 
 // Ronde parcourt `racine` par ordre lexical, reprend après `curseur`, et
@@ -150,6 +205,7 @@ func Ronde(racine, curseur string, budget int64, maintenant func() time.Time) Re
 	}
 	debut := maintenant()
 	res := ResultatRonde{}
+	pos := decoderCurseur(curseur)
 
 	err := filepath.WalkDir(racine, func(chemin string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -169,13 +225,24 @@ func Ronde(racine, curseur string, budget int64, maintenant func() time.Time) Re
 			// Élagage : un répertoire entièrement situé AVANT le curseur ne
 			// contient que du déjà-vu. On ne descend pas dedans — c'est ce qui
 			// rend la reprise bon marché au lieu de re-parcourir tout l'arbre.
-			if curseur != "" && chemin != racine &&
-				chemin < curseur && !strings.HasPrefix(curseur, chemin+string(filepath.Separator)) {
+			if pos.chemin != "" && chemin != racine &&
+				chemin < pos.chemin && !strings.HasPrefix(pos.chemin, chemin+string(filepath.Separator)) {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if curseur != "" && chemin <= curseur {
+		var depuis int64
+		switch {
+		case pos.chemin == "":
+			// pas de curseur : on prend tout
+		case chemin == pos.chemin && pos.offset > 0:
+			// Fichier laissé à mi-chemin au passage précédent : on le reprend
+			// où on l'avait laissé plutôt que de le relire depuis le début.
+			depuis = pos.offset
+		case chemin <= pos.chemin:
+			// ⚠️ « <= » et non « < » : un curseur SANS offset désigne un fichier
+			// entièrement examiné. Le traiter comme un point de reprise le
+			// ferait relire à chaque passage, et la ronde piétinerait sur place.
 			return nil
 		}
 
@@ -183,16 +250,22 @@ func Ronde(racine, curseur string, budget int64, maintenant func() time.Time) Re
 		if errInfo != nil {
 			return nil
 		}
-		t, errAnalyse := AnalyserFichier(chemin, info)
+		t, lus, fini, errAnalyse := AnalyserTranche(chemin, info, depuis, budget-res.Octets)
 		res.Fichiers++
-		res.Curseur = chemin
-		if errAnalyse == nil && info.Size() >= TailleBloc {
-			res.Octets += info.Size()
+		res.Octets += lus
+		if errAnalyse == nil && !fini {
+			// Arrêt en plein fichier : le curseur retient l'endroit exact.
+			res.Curseur = encoderCurseur(positionRonde{chemin: chemin, offset: depuis + lus})
+		} else {
+			res.Curseur = chemin
 		}
 		if t != nil && len(res.Trouvailles) < MaxTrouvaillesRetenues {
 			res.Trouvailles = append(res.Trouvailles, *t)
 		}
-		if res.Octets >= budget {
+		// Deux bornes, pas une : les octets protègent le lien d'un gros fichier,
+		// le nombre de fichiers protège d'une arborescence de millions de
+		// vignettes qui ne pèsent rien mais coûtent une métadonnée chacune.
+		if res.Octets >= budget || res.Fichiers >= MaxFichiersParPasse {
 			return errBudgetEpuise
 		}
 		return nil
@@ -210,6 +283,40 @@ func Ronde(racine, curseur string, budget int64, maintenant func() time.Time) Re
 	}
 	res.Duree = maintenant().Sub(debut)
 	return res
+}
+
+// positionRonde : où la ronde s'est arrêtée. L'offset permet de reprendre un
+// gros fichier en plein milieu au lieu de le relire entièrement à chaque fois —
+// sans lui, un film de 8 Go ne serait jamais examiné en entier avec un budget
+// de 256 Mio, ou monopoliserait le lien pendant une demi-heure.
+type positionRonde struct {
+	chemin string
+	offset int64
+}
+
+// separateurCurseur : un octet nul ne peut pas apparaître dans un chemin, donc
+// il ne peut pas être confondu avec le nom du fichier.
+const separateurCurseur = "\x00"
+
+func encoderCurseur(p positionRonde) string {
+	if p.offset <= 0 {
+		return p.chemin
+	}
+	return p.chemin + separateurCurseur + strconv.FormatInt(p.offset, 10)
+}
+
+func decoderCurseur(s string) positionRonde {
+	i := strings.Index(s, separateurCurseur)
+	if i < 0 {
+		return positionRonde{chemin: s}
+	}
+	off, err := strconv.ParseInt(s[i+1:], 10, 64)
+	if err != nil || off < 0 {
+		// Curseur abîmé : on repart du fichier depuis le début plutôt que de
+		// sauter au hasard. Relire coûte ; sauter laisserait un trou non vu.
+		return positionRonde{chemin: s[:i]}
+	}
+	return positionRonde{chemin: s[:i], offset: off}
 }
 
 // errBudgetEpuise n'est pas une erreur : c'est le signal d'arrêt volontaire que

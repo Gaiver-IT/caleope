@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -211,5 +212,60 @@ func TestRondeRepriseNOubliePersonneDansUnArbreProfond(t *testing.T) {
 		if !vus[p] {
 			t.Fatalf("fichier jamais examiné après reprise : %s", p)
 		}
+	}
+}
+
+// Un GROS fichier ne doit pas monopoliser le lien : la ronde doit s'arrêter en
+// plein milieu et le reprendre au passage suivant. C'est le défaut qui a fait
+// tourner la ronde 23 minutes d'affilée sur la production.
+func TestRondeCoupeUnGrosFichierEtLeReprend(t *testing.T) {
+	dir := t.TempDir()
+	gros := filepath.Join(dir, "film.bin")
+	contenu := append(append(bloc(0x41), make([]byte, TailleBloc)...), bloc(0x42)...) // 3 Mio, trou au milieu
+	ecrireFichier(t, gros, contenu)
+
+	premier := Ronde(dir, "", TailleBloc, nil) // un seul bloc autorisé
+	if premier.Octets != TailleBloc {
+		t.Fatalf("la ronde a lu %d octets alors que le budget était de %d", premier.Octets, TailleBloc)
+	}
+	if premier.Termine {
+		t.Fatal("un fichier coupé en deux ne termine pas le tour")
+	}
+	if len(premier.Trouvailles) != 0 {
+		t.Fatal("le premier bloc est sain, rien ne doit être signalé")
+	}
+
+	// Le trou est dans le DEUXIÈME bloc : il doit être vu à la reprise.
+	second := Ronde(dir, premier.Curseur, TailleBloc, nil)
+	if len(second.Trouvailles) != 1 {
+		t.Fatalf("le trou n'a pas été vu à la reprise : %+v", second.Trouvailles)
+	}
+	if second.Trouvailles[0].BlocsNuls != 1 {
+		t.Fatalf("blocs nuls mal comptés : %d", second.Trouvailles[0].BlocsNuls)
+	}
+}
+
+// La borne en NOMBRE de fichiers protège des arborescences de vignettes, que le
+// budget en octets ne voit pas passer.
+func TestRondeBorneAussiLeNombreDeFichiers(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < MaxFichiersParPasse+10; i++ {
+		ecrireFichier(t, filepath.Join(dir, "v"+strconv.Itoa(100000+i)+".bin"), []byte("minuscule"))
+	}
+	res := Ronde(dir, "", 1<<30, nil)
+	if res.Fichiers > MaxFichiersParPasse {
+		t.Fatalf("%d fichiers examinés, la borne est à %d", res.Fichiers, MaxFichiersParPasse)
+	}
+	if res.Termine {
+		t.Fatal("la ronde ne peut pas avoir bouclé son tour en s'arrêtant sur la borne")
+	}
+}
+
+// Un curseur abîmé ne doit pas faire sauter le fichier : on le relit depuis le
+// début. Perdre du temps est acceptable, laisser passer un trou ne l'est pas.
+func TestDecoderCurseurAbimeRepartDuDebutDuFichier(t *testing.T) {
+	p := decoderCurseur("/chemin/film.bin\x00pasunnombre")
+	if p.chemin != "/chemin/film.bin" || p.offset != 0 {
+		t.Fatalf("curseur abîmé mal interprété : %+v", p)
 	}
 }
