@@ -8,6 +8,7 @@ package posteclient
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -324,4 +325,52 @@ func Connecter(serveur, code string) (Config, error) {
 		Profil:  fmt.Sprint(data["profil"]),
 	}
 	return c, EcrireConfig(c)
+}
+
+// ── Invitation : une seule chose à copier ───────────────────────────────────
+//
+// POURQUOI : la première version demandait de recopier l'adresse du serveur ET
+// le code, dans deux champs. Deux saisies à la main, dont une URL — c'est pénible
+// et c'est là qu'on se trompe. L'invitation encode les deux en une chaîne que
+// l'interface fabrique (elle SAIT par quelle adresse on l'atteint) et que le
+// poste décode. L'utilisateur copie une fois, colle une fois.
+//
+// Aucun secret n'est protégé par l'encodage : ce n'est pas du chiffrement, juste
+// un emballage. Le code reste à usage unique et périmé en deux heures — c'est
+// LUI qui tient la porte, pas l'obscurité de la chaîne.
+
+const prefixeInvitation = "CALEOPE1:"
+
+// FabriquerInvitation assemble adresse + code.
+func FabriquerInvitation(serveur, code string) string {
+	brut := strings.TrimRight(strings.TrimSpace(serveur), "/") + "|" + strings.TrimSpace(code)
+	return prefixeInvitation + base64.RawURLEncoding.EncodeToString([]byte(brut))
+}
+
+// LireInvitation accepte l'invitation, mais AUSSI les formes qu'un humain
+// produit naturellement : l'adresse et le code séparés par un espace, ou collés
+// depuis deux champs. Refuser ces variantes pour des raisons de pureté ferait
+// échouer l'appairage sur un détail de presse-papiers.
+func LireInvitation(texte string) (serveur, code string, err error) {
+	t := strings.TrimSpace(texte)
+	if t == "" {
+		return "", "", fmt.Errorf("invitation vide")
+	}
+	if strings.HasPrefix(t, prefixeInvitation) {
+		b, e := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(t, prefixeInvitation))
+		if e != nil {
+			return "", "", fmt.Errorf("invitation illisible — recopie-la en entier")
+		}
+		parts := strings.SplitN(string(b), "|", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", "", fmt.Errorf("invitation incomplète")
+		}
+		return parts[0], parts[1], nil
+	}
+	// Repli : « https://serveur CODE », séparés par un espace ou un saut de ligne.
+	champs := strings.Fields(t)
+	if len(champs) == 2 {
+		return strings.TrimRight(champs[0], "/"), champs[1], nil
+	}
+	return "", "", fmt.Errorf("format non reconnu : colle l'invitation affichée dans Caleope")
 }

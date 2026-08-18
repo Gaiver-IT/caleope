@@ -12073,10 +12073,16 @@ async function appairerPoste(profil) {
     const r = await api.post('/api/v1/postes/jeton', { profil });
     const code = r?.data?.jeton || '';
     const exp = r?.data?.expire ? new Date(r.data.expire).toLocaleTimeString('fr-FR') : '';
-    document.getElementById('poste-appairage-cmd').value =
-      `poste connexion ${location.origin} ${code}`;
-    document.getElementById('poste-appairage-note').textContent =
-      `Ce code ne sert qu'une fois et expire à ${exp}. Ensuite la machine tire sa configuration avec sa propre clé : elle n'a jamais besoin de ton mot de passe.`;
+    // Une SEULE chose à copier : l'invitation porte l'adresse et le code.
+    // Faire recopier deux champs, dont une URL, c'est là que ça coince — et
+    // c'est l'adresse par laquelle TU accèdes à l'interface qui est la bonne,
+    // pas un domaine deviné côté serveur.
+    const invitation = 'CALEOPE1:' + btoa(`${location.origin}|${code}`)
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    document.getElementById('poste-appairage-cmd').value = invitation;
+    document.getElementById('poste-appairage-note').innerHTML =
+      `Copie cette invitation et colle-la dans l'application <b>Poste</b> sur la machine à raccorder — l'adresse du serveur est dedans, rien d'autre à saisir.<br>`
+      + `Elle ne sert qu'une fois et expire à ${escapeHtml(exp)}. Ensuite la machine tire sa configuration avec sa propre clé : elle n'a jamais besoin de ton mot de passe.`;
     document.getElementById('poste-appairage-modal').classList.add('open');
   } catch (e) { notify(e.message || 'Échec', 'error'); }
 }

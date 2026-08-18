@@ -83,11 +83,10 @@ function ecranConnexion(e) {
   return `<div class="carte">
     <h2>Raccorder cette machine</h2>
     <p class="aide">Dans Caleope, ouvre <b>POSTES</b>, choisis un profil et clique <b>Appairer</b>.
-       Recopie ici l'adresse et le code affichés.</p>
-    <label>ADRESSE DU SERVEUR</label>
-    <input id="serveur" placeholder="https://caleope.exemple.fr" autocomplete="off" spellcheck="false"/>
-    <label>CODE D'APPAIRAGE</label>
-    <input id="code" placeholder="45e2d3fcb0492ff28c" autocomplete="off" spellcheck="false"/>
+       Copie l'invitation affichée et colle-la ici — c'est tout, l'adresse est dedans.</p>
+    <label>INVITATION</label>
+    <input id="invitation" placeholder="CALEOPE1:aHR0cHM6…" autocomplete="off" spellcheck="false"/>
+    <button class="secondaire" id="btn-coller" style="margin-top:10px">Coller depuis le presse-papiers</button>
     <button class="principal" id="btn-connexion">Se connecter</button>
     <div class="charge" id="charge">Connexion en cours…</div>
     <div class="attention">Le code ne sert qu'une fois et expire au bout de deux heures.
@@ -132,6 +131,9 @@ function ecranEtat(e) {
       <div class="rangee" style="margin-top:14px">
         <button class="secondaire" id="btn-rafraichir">Vérifier à nouveau</button>
       </div>
+      <div class="rangee" style="margin-top:10px">
+        <button class="secondaire" id="btn-terminal">Installer la commande « poste » en terminal</button>
+      </div>
       <div class="attention">Rien n'est jamais désinstallé : cette fenêtre ne fait qu'ajouter ce qui manque.</div>
     </div>${listeDossiers}`;
 }
@@ -156,10 +158,7 @@ function brancher() {
     const charge = document.getElementById("charge");
     co.disabled = true; charge.classList.add("on");
     try {
-      await api("/api/connexion", {
-        Serveur: document.getElementById("serveur").value,
-        Code: document.getElementById("code").value,
-      });
+      await api("/api/connexion", { Invitation: document.getElementById("invitation").value });
       await peindre();
     } catch (err) {
       charge.classList.remove("on"); co.disabled = false;
@@ -167,6 +166,24 @@ function brancher() {
       d.className = "erreur"; d.textContent = err.message;
       co.parentNode.insertBefore(d, charge);
     }
+  };
+
+  const cp = document.getElementById("btn-coller");
+  if (cp) cp.onclick = async () => {
+    try {
+      // Le presse-papiers n'est lisible que sur demande explicite de
+      // l'utilisateur — d'où un bouton plutôt qu'une lecture automatique.
+      document.getElementById("invitation").value = (await navigator.clipboard.readText()).trim();
+    } catch { alert("Le collage automatique a été refusé — utilise ⌘V dans le champ."); }
+  };
+
+  const ct = document.getElementById("btn-terminal");
+  if (ct) ct.onclick = async () => {
+    ct.disabled = true;
+    try {
+      const r = await api("/api/commande-terminal", {});
+      ct.textContent = "Commande installée : " + r.chemin;
+    } catch (err) { alert(err.message); ct.disabled = false; }
   };
 
   const ap = document.getElementById("btn-appliquer");

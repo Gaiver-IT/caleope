@@ -298,8 +298,8 @@ func listEmptyDisks() []emptyDiskInfo {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 func main() {
-	port    := flag.Int("port",     8766,                    "Port de l'interface web")
-	daemon  := flag.String("daemon", "http://127.0.0.1:8765", "URL du daemon caleoped")
+	port := flag.Int("port", 8766, "Port de l'interface web")
+	daemon := flag.String("daemon", "http://127.0.0.1:8765", "URL du daemon caleoped")
 	baseDir := flag.String("base-dir", "/opt/gaiver-it/caleope", "Répertoire base Caleope")
 	flag.Parse()
 
@@ -323,7 +323,7 @@ func main() {
 	store := newSessions(filepath.Join(*baseDir, "data", "ui", "sessions.json"))
 
 	// Répertoire pour le logo custom
-	logoDir  := filepath.Join(*baseDir, "data", "ui")
+	logoDir := filepath.Join(*baseDir, "data", "ui")
 	logoBase := filepath.Join(logoDir, "logo")
 
 	// ── Proxy vers caleoped ────────────────────────────────────────────────
@@ -346,8 +346,29 @@ func main() {
 	fileServer := http.FileServer(http.FS(webFS))
 
 	// ── Auth middleware ────────────────────────────────────────────────────
+	// ── Routes des postes nomades : PAS de session d'interface ────────────────
+	//
+	// Un portable qui vient s'appairer n'a évidemment pas la session du
+	// navigateur de l'administrateur. Ces trois routes portent leur PROPRE
+	// authentification côté daemon : un code à usage unique périmé en deux heures
+	// pour l'appairage, puis la clé de la machine, qui ne donne accès qu'à sa
+	// propre configuration. Les exempter est ce qui permet au poste de passer par
+	// l'adresse publique en HTTPS, au lieu d'exiger le port du daemon sur le LAN.
+	//
+	// ⚠️ Liste EXACTE et fermée, pas un préfixe : « /api/v1/postes/ » aurait
+	// aussi ouvert l'administration des profils et la liste des machines.
+	pourLePoste := map[string]bool{
+		"/api/v1/postes/appairage": true,
+		"/api/v1/postes/ma-conf":   true,
+		"/api/v1/postes/rapport":   true,
+	}
+
 	requireSession := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			if pourLePoste[r.URL.Path] {
+				next(w, r)
+				return
+			}
 			c, err := r.Cookie("caleope-session")
 			if err != nil || !store.valid(c.Value) {
 				jsonErr(w, http.StatusUnauthorized, "not authenticated")
@@ -468,15 +489,15 @@ func main() {
 	//   - portName : port hôte dans runtime/apps/{appid}.json
 	//   - containerName + containerPort : résolution IP Docker dynamique
 	type appProxyCfg struct {
-		tokenKey      string // clé token dans secrets.env (Bearer/X-Api-Key)
-		basicUserKey  string // clé username pour Basic auth
-		basicPassKey  string // clé password pour Basic auth
-		authScheme    string // "Bearer", "X-Api-Key", "Basic", "GitToken", "VaultwardenAdmin"
-		portName      string // port nommé dans runtime JSON (si pas containerName)
-		secretsApp    string // app dont lire les secrets (si différent de appID)
-		containerName string // nom du conteneur Docker à résoudre
-		containerPort int    // port du conteneur (si containerName défini)
-		hostOverride  string // Host header override (ex: nextcloud.domain.com)
+		tokenKey      string            // clé token dans secrets.env (Bearer/X-Api-Key)
+		basicUserKey  string            // clé username pour Basic auth
+		basicPassKey  string            // clé password pour Basic auth
+		authScheme    string            // "Bearer", "X-Api-Key", "Basic", "GitToken", "VaultwardenAdmin"
+		portName      string            // port nommé dans runtime JSON (si pas containerName)
+		secretsApp    string            // app dont lire les secrets (si différent de appID)
+		containerName string            // nom du conteneur Docker à résoudre
+		containerPort int               // port du conteneur (si containerName défini)
+		hostOverride  string            // Host header override (ex: nextcloud.domain.com)
 		extraHeaders  map[string]string // headers supplémentaires à ajouter
 	}
 
@@ -485,8 +506,8 @@ func main() {
 
 	appProxyMap := map[string]appProxyCfg{
 		// Apps avec token hôte mappé
-		"authentik": {tokenKey: "AUTHENTIK_BOOTSTRAP_TOKEN", authScheme: "Bearer",    portName: "web"},
-		"azuracast": {tokenKey: "AZURACAST_API_KEY",         authScheme: "X-Api-Key", portName: "web"},
+		"authentik": {tokenKey: "AUTHENTIK_BOOTSTRAP_TOKEN", authScheme: "Bearer", portName: "web"},
+		"azuracast": {tokenKey: "AZURACAST_API_KEY", authScheme: "X-Api-Key", portName: "web"},
 
 		// Nextcloud — OCS API : Basic auth + Host header requis (trusted_domains)
 		"nextcloud": {basicUserKey: "NEXTCLOUD_ADMIN_USER", basicPassKey: "NEXTCLOUD_ADMIN_PASSWORD",
@@ -503,10 +524,10 @@ func main() {
 			containerName: "vaultwarden", containerPort: 80},
 
 		// Arr-stack : chaque service via IP Docker
-		"arr-sonarr":  {tokenKey: "ARR_API_SONARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "sonarr",  containerPort: 8989},
-		"arr-radarr":  {tokenKey: "ARR_API_RADARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "radarr",  containerPort: 7878},
-		"arr-lidarr":  {tokenKey: "ARR_API_LIDARR",  authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "lidarr",  containerPort: 8686},
-		"arr-prowlarr":{tokenKey: "ARR_API_PROWLARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "prowlarr",containerPort: 9696},
+		"arr-sonarr":   {tokenKey: "ARR_API_SONARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "sonarr", containerPort: 8989},
+		"arr-radarr":   {tokenKey: "ARR_API_RADARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "radarr", containerPort: 7878},
+		"arr-lidarr":   {tokenKey: "ARR_API_LIDARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "lidarr", containerPort: 8686},
+		"arr-prowlarr": {tokenKey: "ARR_API_PROWLARR", authScheme: "X-Api-Key", secretsApp: "arr-stack", containerName: "prowlarr", containerPort: 9696},
 
 		// Grafana — Basic auth (admin user/pass)
 		"grafana": {basicUserKey: "GRAFANA_ADMIN_USER", basicPassKey: "GRAFANA_ADMIN_PASSWORD",
@@ -519,7 +540,7 @@ func main() {
 
 		// Immich — login flow avec cache (POST /api/auth/login → Bearer token)
 		"immich": {basicUserKey: "IMMICH_ADMIN_EMAIL", basicPassKey: "IMMICH_ADMIN_PASS",
-			authScheme: "ImmichLogin",
+			authScheme:    "ImmichLogin",
 			containerName: "immich-server", containerPort: 2283},
 
 		// WikiJS — Bearer token (généré dans WikiJS admin → Developer Tools)
@@ -691,7 +712,7 @@ func main() {
 			jsonErr(w, http.StatusBadRequest, "format: /ui/proxy/{appid}/{path}")
 			return
 		}
-		appID   := rest[:slash]
+		appID := rest[:slash]
 		apiPath := rest[slash:]
 
 		cfg, ok := appProxyMap[appID]
@@ -800,7 +821,7 @@ func main() {
 		// ImmichLogin : POST /api/auth/login → cache Bearer token (expiry ~24h)
 		if cfg.authScheme == "ImmichLogin" {
 			email := readEnvKey(secretsPath, cfg.basicUserKey)
-			pass  := readEnvKey(secretsPath, cfg.basicPassKey)
+			pass := readEnvKey(secretsPath, cfg.basicPassKey)
 			if email == "" || pass == "" {
 				jsonErr(w, http.StatusServiceUnavailable, appID+": credentials Immich non disponibles")
 				return
@@ -814,7 +835,9 @@ func main() {
 				loginReq.Header.Set("Accept", "application/json")
 				loginResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(loginReq)
 				if err2 == nil && loginResp != nil {
-					var loginData struct { AccessToken string `json:"accessToken"` }
+					var loginData struct {
+						AccessToken string `json:"accessToken"`
+					}
 					if json.NewDecoder(loginResp.Body).Decode(&loginData) == nil && loginData.AccessToken != "" {
 						immichToken = loginData.AccessToken
 						immichCache.token = immichToken
@@ -829,12 +852,20 @@ func main() {
 				return
 			}
 			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
-			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
-			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if ct := r.Header.Get("Content-Type"); ct != "" {
+				outReq.Header.Set("Content-Type", ct)
+			}
 			outReq.Header.Set("Authorization", "Bearer "+immichToken)
 			outReq.Header.Set("Accept", "application/json")
 			resp, err := client.Do(outReq)
-			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			if err != nil {
+				jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())
+				return
+			}
 			defer resp.Body.Close()
 			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 			w.Header().Set("X-Proxy-App", appID)
@@ -860,7 +891,9 @@ func main() {
 				loginReq.Header.Set("Accept", "application/json")
 				loginResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(loginReq)
 				if err2 == nil && loginResp != nil {
-					var loginData struct { Token string `json:"token"` }
+					var loginData struct {
+						Token string `json:"token"`
+					}
 					if json.NewDecoder(loginResp.Body).Decode(&loginData) == nil && loginData.Token != "" {
 						navToken = loginData.Token
 						navidromeCache.token = navToken
@@ -875,12 +908,20 @@ func main() {
 				return
 			}
 			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
-			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
-			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if ct := r.Header.Get("Content-Type"); ct != "" {
+				outReq.Header.Set("Content-Type", ct)
+			}
 			outReq.Header.Set("X-ND-Authorization", "Bearer "+navToken)
 			outReq.Header.Set("Accept", "application/json")
 			resp, err := client.Do(outReq)
-			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			if err != nil {
+				jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())
+				return
+			}
 			defer resp.Body.Close()
 			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 			w.Header().Set("X-Proxy-App", appID)
@@ -892,7 +933,9 @@ func main() {
 		// GLPISession : GET /apirest.php/initSession (Basic auth) → cache Session-Token
 		if cfg.authScheme == "GLPISession" {
 			user := readEnvKey(secretsPath, cfg.basicUserKey)
-			if user == "" { user = "glpi" } // fallback nom admin par défaut
+			if user == "" {
+				user = "glpi"
+			} // fallback nom admin par défaut
 			pass := readEnvKey(secretsPath, cfg.basicPassKey)
 			if pass == "" {
 				jsonErr(w, http.StatusServiceUnavailable, appID+": GLPI_ADMIN_PASSWORD non disponible")
@@ -907,7 +950,9 @@ func main() {
 				initReq.Header.Set("Content-Type", "application/json")
 				initResp, err2 := (&http.Client{Timeout: 15 * time.Second}).Do(initReq)
 				if err2 == nil && initResp != nil {
-					var initData struct { SessionToken string `json:"session_token"` }
+					var initData struct {
+						SessionToken string `json:"session_token"`
+					}
 					if json.NewDecoder(initResp.Body).Decode(&initData) == nil && initData.SessionToken != "" {
 						glpiToken = initData.SessionToken
 						glpiCache.token = glpiToken
@@ -922,12 +967,20 @@ func main() {
 				return
 			}
 			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
-			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
-			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if ct := r.Header.Get("Content-Type"); ct != "" {
+				outReq.Header.Set("Content-Type", ct)
+			}
 			outReq.Header.Set("Session-Token", glpiToken)
 			outReq.Header.Set("Accept", "application/json")
 			resp, err := client.Do(outReq)
-			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			if err != nil {
+				jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())
+				return
+			}
 			defer resp.Body.Close()
 			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 			w.Header().Set("X-Proxy-App", appID)
@@ -968,11 +1021,19 @@ func main() {
 				return
 			}
 			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
-			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
-			if ct := r.Header.Get("Content-Type"); ct != "" { outReq.Header.Set("Content-Type", ct) }
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if ct := r.Header.Get("Content-Type"); ct != "" {
+				outReq.Header.Set("Content-Type", ct)
+			}
 			outReq.Header.Set("Cookie", wgCookie)
 			resp, err := client.Do(outReq)
-			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			if err != nil {
+				jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())
+				return
+			}
 			defer resp.Body.Close()
 			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 			w.Header().Set("X-Proxy-App", appID)
@@ -994,10 +1055,16 @@ func main() {
 				targetURL += "?auth=" + url.QueryEscape(token)
 			}
 			outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
-			if err != nil { jsonErr(w, http.StatusInternalServerError, err.Error()); return }
+			if err != nil {
+				jsonErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 			outReq.Header.Set("Accept", "application/json")
 			resp, err := client.Do(outReq)
-			if err != nil { jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error()); return }
+			if err != nil {
+				jsonErr(w, http.StatusBadGateway, "proxy "+appID+": "+err.Error())
+				return
+			}
 			defer resp.Body.Close()
 			w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 			w.Header().Set("X-Proxy-App", appID)

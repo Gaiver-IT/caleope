@@ -57,3 +57,46 @@ func TestManquantsIgnoreVidesEtCommentaires(t *testing.T) {
 		t.Fatalf("lignes non pertinentes prises pour des paquets : %v", m)
 	}
 }
+
+// L'invitation doit faire l'aller-retour sans perte : c'est la seule chose que
+// l'utilisateur manipule.
+func TestInvitationAllerRetour(t *testing.T) {
+	inv := FabriquerInvitation("https://caleope.exemple.fr/", "45e2d3fcb0492ff28c")
+	s, c, err := LireInvitation(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s != "https://caleope.exemple.fr" || c != "45e2d3fcb0492ff28c" {
+		t.Fatalf("aller-retour cassé : %q / %q", s, c)
+	}
+}
+
+// Un presse-papiers ajoute volontiers des espaces et des sauts de ligne.
+func TestInvitationToleranteAuPressePapiers(t *testing.T) {
+	inv := FabriquerInvitation("https://x.fr", "abc123")
+	for _, variante := range []string{" " + inv, inv + "\n", "\n\t" + inv + "  "} {
+		if _, _, err := LireInvitation(variante); err != nil {
+			t.Fatalf("variante refusée à tort (%q) : %v", variante, err)
+		}
+	}
+}
+
+// Repli sur ce qu'un humain écrit naturellement : adresse puis code.
+func TestInvitationAccepteLesDeuxChampsSepares(t *testing.T) {
+	s, c, err := LireInvitation("https://caleope.exemple.fr/  abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s != "https://caleope.exemple.fr" || c != "abc123" {
+		t.Fatalf("repli cassé : %q / %q", s, c)
+	}
+}
+
+// Ce qui n'est pas exploitable doit produire un message utile, pas un plantage.
+func TestInvitationRefuseCeQuiNEstPasExploitable(t *testing.T) {
+	for _, mauvais := range []string{"", "   ", "CALEOPE1:pas-du-base64!!", "CALEOPE1:" + "aGVsbG8", "juste-un-mot"} {
+		if _, _, err := LireInvitation(mauvais); err == nil {
+			t.Fatalf("entrée acceptée à tort : %q", mauvais)
+		}
+	}
+}

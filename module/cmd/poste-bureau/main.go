@@ -29,7 +29,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,6 +107,13 @@ func lireEtat() etatComplet {
 }
 
 func main() {
+	// Appelée AVEC des arguments, l'application se comporte comme la commande en
+	// ligne : c'est ce qui permet à un seul binaire de servir les deux usages, et
+	// au lanceur posé dans ~/.local/bin de fonctionner sans second téléchargement.
+	if len(os.Args) > 1 {
+		enLigneDeCommande(os.Args[1:])
+		return
+	}
 	jetonLocal = fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
 
 	// Port 0 : c'est le système qui en choisit un libre. Un port fixe finirait
@@ -130,31 +139,19 @@ func main() {
 	}))
 
 	mux.HandleFunc("/api/connexion", garde(func(w http.ResponseWriter, r *http.Request) {
-		var corps struct{ Serveur, Code string }
+		var corps struct{ Invitation string }
 		if err := json.NewDecoder(r.Body).Decode(&corps); err != nil {
 			repondre(w, nil, fmt.Errorf("requête illisible"))
 			return
 		}
-		url := strings.TrimRight(strings.TrimSpace(corps.Serveur), "/")
-		if url == "" || strings.TrimSpace(corps.Code) == "" {
-			repondre(w, nil, fmt.Errorf("l'adresse du serveur et le code sont tous les deux nécessaires"))
-			return
-		}
-		sys, _ := posteclient.Systeme()
-		data, err := posteclient.Appel("POST", url+"/api/v1/postes/appairage", "", map[string]string{
-			"jeton": strings.TrimSpace(corps.Code), "machine": posteclient.NomMachine(), "systeme": sys,
-		})
+		// Un seul champ : l'invitation porte l'adresse ET le code. Deux saisies
+		// à la main, dont une URL, c'est là qu'on se trompe.
+		serveur, code, err := posteclient.LireInvitation(corps.Invitation)
 		if err != nil {
 			repondre(w, nil, err)
 			return
 		}
-		cfg := posteclient.Config{
-			Serveur: url,
-			Cle:     fmt.Sprint(data["cle"]),
-			Machine: fmt.Sprint(data["machine"]),
-			Profil:  fmt.Sprint(data["profil"]),
-		}
-		if err := posteclient.EcrireConfig(cfg); err != nil {
+		if _, err := posteclient.Connecter(serveur, code); err != nil {
 			repondre(w, nil, err)
 			return
 		}
@@ -192,6 +189,11 @@ func main() {
 		repondre(w, map[string]interface{}{"etat": etat, "echecs": echecs}, nil)
 	}))
 
+	mux.HandleFunc("/api/commande-terminal", garde(func(w http.ResponseWriter, r *http.Request) {
+		chemin, err := installerCommandeTerminal()
+		repondre(w, map[string]string{"chemin": chemin}, err)
+	}))
+
 	go func() { _ = http.Serve(ln, mux) }()
 
 	fmt.Printf("Poste — fenêtre ouverte sur %s\n", adresse)
@@ -213,5 +215,83 @@ func ouvrirNavigateur(url string) {
 	}
 	if err := c.Start(); err != nil {
 		fmt.Printf("Ouvre cette adresse à la main : %s\n", url)
+	}
+}
+
+// installerCommandeTerminal pose « poste » là où le terminal le trouvera.
+//
+// POURQUOI c'est un bouton et pas une consigne : un exécutable téléchargé
+// atterrit dans Téléchargements, sans droit d'exécution et hors du PATH. « ça
+// trouve pas » en terminal n'est pas une erreur de l'utilisateur, c'est le
+// comportement normal — et lui demander de taper chmod puis de déplacer un
+// fichier au bon endroit, c'est reproduire exactement ce qu'on cherchait à
+// éviter en faisant une fenêtre.
+//
+// On choisit un dossier PERSONNEL en premier : écrire dans /usr/local/bin
+// demande les droits d'administration, qu'une fenêtre n'a pas à réclamer.
+func installerCommandeTerminal() (string, error) {
+	maison, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	moi, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	// C'est le binaire de la FENÊTRE qui tourne ; la commande en ligne est un
+	// autre programme. On pose donc un petit lanceur qui appelle la fenêtre en
+	// mode terminal plutôt que de prétendre copier un fichier qu'on n'a pas.
+	dossier := filepath.Join(maison, ".local", "bin")
+	if err := os.MkdirAll(dossier, 0o755); err != nil {
+		return "", err
+	}
+	chemin := filepath.Join(dossier, "poste")
+	script := "#!/bin/sh\n# Lanceur posé par l'application Poste.\nexec " + strconv.Quote(moi) + " \"$@\"\n"
+	if err := os.WriteFile(chemin, []byte(script), 0o755); err != nil {
+		return "", err
+	}
+	return chemin, nil
+}
+
+// enLigneDeCommande : le même travail, sans fenêtre.
+func enLigneDeCommande(args []string) {
+	echec := func(err error) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "✗ %v\n", err)
+			os.Exit(1)
+		}
+	}
+	switch args[0] {
+	case "connexion":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage : poste connexion <invitation>")
+			os.Exit(2)
+		}
+		serveur, code, err := posteclient.LireInvitation(strings.Join(args[1:], " "))
+		echec(err)
+		c, err := posteclient.Connecter(serveur, code)
+		echec(err)
+		fmt.Printf("✓ %s connectée au profil « %s ».\n", c.Machine, c.Profil)
+	case "etat":
+		e := lireEtat()
+		if !e.Connectee {
+			fmt.Println("Cette machine n'est pas encore connectée.")
+			fmt.Println("  poste connexion <invitation>")
+			return
+		}
+		fmt.Printf("Machine : %s (%s, %s)\nProfil  : %s\n", e.Machine, e.Systeme, e.Gestion, e.Profil)
+		fmt.Printf("Logiciels demandés : %d   manquants : %d\n", e.Demandes, len(e.Manquants))
+		for _, m := range e.Manquants {
+			fmt.Printf("  + %s\n", m)
+		}
+		for _, d := range e.Dossiers {
+			fmt.Printf("  dossier %-18s %-40s %s (%s)\n", d.Nom, d.Chemin, d.Sens, d.Etat)
+		}
+	case "fenetre":
+		return // traité par main()
+	default:
+		fmt.Println("usage : poste {connexion <invitation> | etat}")
+		fmt.Println("        (sans argument : ouvre la fenêtre)")
+		os.Exit(2)
 	}
 }
