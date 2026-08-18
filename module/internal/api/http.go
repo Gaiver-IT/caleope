@@ -213,6 +213,20 @@ func (s *Server) StartHTTP(port int) error {
 	// Partages (User Shares)
 	// GET /api/v1/shares — liste ; POST /api/v1/shares — créer
 	mux.Handle("/api/v1/shares", s.auth(http.HandlerFunc(s.routeShares)))
+
+	// ── Postes nomades ──────────────────────────────────────────────────────
+	// Administration : derrière le jeton d'admin, comme le reste.
+	mux.Handle("/api/v1/postes/profils", s.auth(http.HandlerFunc(s.routePostesProfils)))
+	mux.Handle("/api/v1/postes/profils/", s.auth(http.HandlerFunc(s.routePostesProfil)))
+	mux.Handle("/api/v1/postes/machines", s.auth(http.HandlerFunc(s.routePostesMachines)))
+	mux.Handle("/api/v1/postes/machines/", s.auth(http.HandlerFunc(s.routePostesMachine)))
+	mux.Handle("/api/v1/postes/jeton", s.auth(http.HandlerFunc(s.routePostesJeton)))
+	// Le poste lui-même : PAS de jeton d'admin — il n'en a pas et ne doit pas
+	// en avoir. L'appairage est tenu par un code à usage unique ; ensuite la
+	// machine présente sa propre clé, qui ne donne accès qu'à sa configuration.
+	mux.Handle("/api/v1/postes/appairage", http.HandlerFunc(s.routePostesAppairage))
+	mux.Handle("/api/v1/postes/ma-conf", http.HandlerFunc(s.routePostesProfilDuPoste))
+	mux.Handle("/api/v1/postes/rapport", http.HandlerFunc(s.routePostesRapport))
 	// PUT/DELETE /api/v1/shares/{name}
 	mux.Handle("/api/v1/shares/", s.auth(http.HandlerFunc(s.routeShare)))
 	// POST /api/v1/network-password — poser le mot de passe réseau SMB dédié
