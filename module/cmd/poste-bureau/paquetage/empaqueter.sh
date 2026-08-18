@@ -58,7 +58,11 @@ PLIST
 done
 
 # ── Linux : raccourci de bureau ─────────────────────────────────────────────
-if [ -f "${DEST}/poste-bureau-linux-amd64" ]; then
+# Écrit systématiquement : c'est un simple fichier texte qui décrit OÙ le binaire
+# sera installé, pas un empaquetage de celui-ci. Le conditionner à la présence du
+# binaire le faisait disparaître dès que les deux cibles étaient construites par
+# des machines différentes — et la publication échouait sur un fichier manquant.
+if true; then
     cat > "${DEST}/poste.desktop" <<'DESK'
 [Desktop Entry]
 Type=Application

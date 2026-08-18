@@ -146,6 +146,15 @@ jobs:
           TITLE: ${{ steps.meta.outputs.title }}
         run: |
           ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64 dist/poste-linux-amd64 dist/poste-windows-amd64.exe dist/poste-bureau-linux-amd64 dist/poste-bureau-windows-amd64.exe dist/poste.desktop dist/Poste-macos-arm64.app.zip dist/Poste-macos-amd64.app.zip dist/poste-macos-arm64 dist/poste-macos-amd64 dist/poste-bureau-macos-arm64 dist/poste-bureau-macos-amd64"
+          MANQUANTS=""
+          for f in ${ASSETS}; do [ -f "$f" ] || MANQUANTS="${MANQUANTS} $f"; done
+          if [ -n "${MANQUANTS}" ]; then
+            # Nommer les absents : une publication qui échoue sans dire lequel
+            # des quinze fichiers manque coûte une demi-heure à chaque fois.
+            echo "::error::fichiers attendus mais absents :${MANQUANTS}"
+            ls -la dist/ || true
+            exit 1
+          fi
 
           if gh release view "${TAG}" &>/dev/null; then
             # Release existante — remplacer les assets sans interruption (pas de delete)
