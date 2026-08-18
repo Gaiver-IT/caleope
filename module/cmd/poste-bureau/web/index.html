@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Poste — Caleope</title>
+<style>
+  /* Interface volontairement sobre : une seule colonne, une action évidente à
+     chaque écran. Le défaut des outils de synchronisation est de tout montrer
+     en même temps ; ici on montre l'état, puis ce qu'il y a à faire. */
+  :root{
+    --fond:#0f1115; --carte:#171a21; --bord:#242833;
+    --texte:#e8eaf0; --texte2:#9aa3b2; --texte3:#5f6878;
+    --accent:#4f8cff; --ok:#38b26a; --attente:#d99a2b; --alerte:#e05252;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --fond:#f6f7f9; --carte:#fff; --bord:#e3e6ec;
+           --texte:#12151b; --texte2:#5a6474; --texte3:#8b95a5; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fond);color:var(--texte);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,sans-serif}
+  .barre{display:flex;align-items:center;gap:12px;padding:18px 26px;border-bottom:1px solid var(--bord)}
+  .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#8b5cf6);
+        display:grid;place-items:center;color:#fff;font-weight:700;font-size:15px}
+  .titre{font-weight:650;letter-spacing:.2px}
+  .sous{color:var(--texte3);font-size:12px}
+  main{max-width:760px;margin:0 auto;padding:26px}
+  .carte{background:var(--carte);border:1px solid var(--bord);border-radius:14px;padding:22px;margin-bottom:16px}
+  h2{margin:0 0 6px;font-size:17px;font-weight:640}
+  p.aide{margin:0 0 18px;color:var(--texte2);font-size:13.5px}
+  label{display:block;font-size:12px;color:var(--texte2);margin:14px 0 6px;font-weight:600;letter-spacing:.3px}
+  input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--bord);
+        background:var(--fond);color:var(--texte);font-size:14.5px;font-family:inherit}
+  input:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+  button{border:0;border-radius:10px;padding:12px 20px;font-size:14.5px;font-weight:620;
+         cursor:pointer;font-family:inherit;transition:filter .15s}
+  button:hover:not(:disabled){filter:brightness(1.12)}
+  button:disabled{opacity:.5;cursor:default}
+  .principal{background:var(--accent);color:#fff;width:100%;margin-top:20px}
+  .secondaire{background:transparent;color:var(--texte2);border:1px solid var(--bord)}
+  .rangee{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .pastille{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:999px;
+            font-size:12px;font-weight:620}
+  .p-ok{background:rgba(56,178,106,.15);color:var(--ok)}
+  .p-attente{background:rgba(217,154,43,.15);color:var(--attente)}
+  .p-alerte{background:rgba(224,82,82,.15);color:var(--alerte)}
+  .infos{display:grid;grid-template-columns:auto 1fr;gap:8px 18px;font-size:13.5px;margin-top:4px}
+  .infos dt{color:var(--texte3)}
+  .liste{margin-top:16px;border-top:1px solid var(--bord)}
+  .ligne{display:flex;align-items:center;gap:12px;padding:11px 2px;border-bottom:1px solid var(--bord);font-size:14px}
+  .ligne .chemin{color:var(--texte3);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .puce{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+  .erreur{background:rgba(224,82,82,.1);border:1px solid rgba(224,82,82,.3);color:var(--alerte);
+          padding:12px 14px;border-radius:10px;font-size:13.5px;margin-top:16px}
+  .attention{color:var(--texte3);font-size:12px;margin-top:14px;line-height:1.6}
+  .charge{display:none;color:var(--texte3);font-size:13px;margin-top:14px}
+  .charge.on{display:block}
+</style>
+</head>
+<body>
+  <div class="barre">
+    <div class="logo">P</div>
+    <div><div class="titre">Poste</div><div class="sous" id="sous">Chargement…</div></div>
+  </div>
+  <main id="vue"></main>
+
+<script>
+const JETON = "{{.Jeton}}";
+const api = async (chemin, corps) => {
+  const r = await fetch(chemin + "?j=" + encodeURIComponent(JETON), {
+    method: corps ? "POST" : "GET",
+    headers: { "Content-Type": "application/json", "X-Poste-Jeton": JETON },
+    body: corps ? JSON.stringify(corps) : undefined,
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.erreur || "erreur inattendue");
+  return d;
+};
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+function ecranConnexion(e) {
+  return `<div class="carte">
+    <h2>Raccorder cette machine</h2>
+    <p class="aide">Dans Caleope, ouvre <b>POSTES</b>, choisis un profil et clique <b>Appairer</b>.
+       Recopie ici l'adresse et le code affichés.</p>
+    <label>ADRESSE DU SERVEUR</label>
+    <input id="serveur" placeholder="https://caleope.exemple.fr" autocomplete="off" spellcheck="false"/>
+    <label>CODE D'APPAIRAGE</label>
+    <input id="code" placeholder="45e2d3fcb0492ff28c" autocomplete="off" spellcheck="false"/>
+    <button class="principal" id="btn-connexion">Se connecter</button>
+    <div class="charge" id="charge">Connexion en cours…</div>
+    <div class="attention">Le code ne sert qu'une fois et expire au bout de deux heures.
+      Cette machine reçoit ensuite sa propre clé : ton mot de passe Caleope n'est jamais demandé ici.</div>
+  </div>`;
+}
+
+function ecranEtat(e) {
+  const manquants = e.manquants || [];
+  const pastille = e.erreur
+    ? `<span class="pastille p-alerte">Problème</span>`
+    : (manquants.length
+        ? `<span class="pastille p-attente">${manquants.length} logiciel${manquants.length>1?"s":""} à installer</span>`
+        : `<span class="pastille p-ok">À jour</span>`);
+
+  const listeManquants = manquants.length ? `<div class="liste">${manquants.map(m =>
+      `<div class="ligne"><span class="puce" style="background:var(--attente)"></span><b>${esc(m)}</b></div>`).join("")}</div>` : "";
+
+  const couleur = { "existe":"var(--ok)", "créé":"var(--accent)", "erreur":"var(--alerte)" };
+  const listeDossiers = (e.dossiers||[]).length ? `<div class="carte"><h2>Dossiers suivis</h2>
+      <p class="aide">Créés sur cette machine. Leur contenu circule ensuite selon le sens choisi.</p>
+      <div class="liste">${e.dossiers.map(d =>
+        `<div class="ligne"><span class="puce" style="background:${couleur[d.etat]||"var(--texte3)"}"></span>
+           <div style="flex:1"><div>${esc(d.nom)} <span style="color:var(--texte3)">· ${esc(d.sens)}</span></div>
+             <div class="chemin">${esc(d.chemin)}</div></div>
+           <span style="color:var(--texte3);font-size:12px">${esc(d.etat)}</span></div>`).join("")}</div></div>` : "";
+
+  return `<div class="carte">
+      <div class="rangee" style="justify-content:space-between">
+        <h2 style="margin:0">${esc(e.machine)}</h2>${pastille}
+      </div>
+      <dl class="infos">
+        <dt>Profil</dt><dd>${esc(e.profil||"—")}</dd>
+        <dt>Système</dt><dd>${esc(e.systeme)} · ${esc(e.gestionnaire||"aucun gestionnaire reconnu")}</dd>
+        <dt>Serveur</dt><dd>${esc(e.serveur)}</dd>
+        <dt>Logiciels demandés</dt><dd>${e.demandes}</dd>
+      </dl>
+      ${e.erreur ? `<div class="erreur">${esc(e.erreur)}</div>` : ""}
+      ${listeManquants}
+      ${manquants.length ? `<button class="principal" id="btn-appliquer">Installer les ${manquants.length} logiciel${manquants.length>1?"s":""} manquant${manquants.length>1?"s":""}</button>` : ""}
+      <div class="charge" id="charge">Installation en cours — cette étape peut demander plusieurs minutes.</div>
+      <div class="rangee" style="margin-top:14px">
+        <button class="secondaire" id="btn-rafraichir">Vérifier à nouveau</button>
+      </div>
+      <div class="attention">Rien n'est jamais désinstallé : cette fenêtre ne fait qu'ajouter ce qui manque.</div>
+    </div>${listeDossiers}`;
+}
+
+async function peindre() {
+  const vue = document.getElementById("vue");
+  try {
+    const e = await api("/api/etat");
+    document.getElementById("sous").textContent = e.connectee
+      ? `${e.machine} · profil ${e.profil||"?"}` : "Machine non raccordée";
+    vue.innerHTML = e.connectee ? ecranEtat(e) : ecranConnexion(e);
+    brancher();
+  } catch (err) {
+    vue.innerHTML = `<div class="carte"><h2>Impossible de lire l'état</h2>
+      <div class="erreur">${esc(err.message)}</div></div>`;
+  }
+}
+
+function brancher() {
+  const co = document.getElementById("btn-connexion");
+  if (co) co.onclick = async () => {
+    const charge = document.getElementById("charge");
+    co.disabled = true; charge.classList.add("on");
+    try {
+      await api("/api/connexion", {
+        Serveur: document.getElementById("serveur").value,
+        Code: document.getElementById("code").value,
+      });
+      await peindre();
+    } catch (err) {
+      charge.classList.remove("on"); co.disabled = false;
+      const d = document.createElement("div");
+      d.className = "erreur"; d.textContent = err.message;
+      co.parentNode.insertBefore(d, charge);
+    }
+  };
+
+  const ap = document.getElementById("btn-appliquer");
+  if (ap) ap.onclick = async () => {
+    const charge = document.getElementById("charge");
+    ap.disabled = true; charge.classList.add("on");
+    try {
+      const r = await api("/api/appliquer", {});
+      await peindre();
+      if ((r.echecs || []).length) {
+        const d = document.createElement("div");
+        d.className = "erreur";
+        d.textContent = "N'ont pas pu être installés : " + r.echecs.join(", ")
+          + " — le nom n'existe peut-être pas sur ce système.";
+        document.querySelector("main .carte").appendChild(d);
+      }
+    } catch (err) {
+      charge.classList.remove("on"); ap.disabled = false;
+      alert(err.message);
+    }
+  };
+
+  const rf = document.getElementById("btn-rafraichir");
+  if (rf) rf.onclick = peindre;
+}
+
+peindre();
+</script>
+</body>
+</html>

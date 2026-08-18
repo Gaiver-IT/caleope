@@ -72,6 +72,12 @@ jobs:
           GOOS=darwin  GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-macos-arm64       ./cmd/poste/
           GOOS=darwin  GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-macos-amd64       ./cmd/poste/
           GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-windows-amd64.exe ./cmd/poste/
+          # La fenêtre : même logique, autre interface.
+          GOOS=linux   GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-linux-amd64       ./cmd/poste-bureau/
+          GOOS=darwin  GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-macos-arm64       ./cmd/poste-bureau/
+          GOOS=darwin  GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-macos-amd64       ./cmd/poste-bureau/
+          GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-windows-amd64.exe ./cmd/poste-bureau/
+          bash cmd/poste-bureau/paquetage/empaqueter.sh ../dist "${VERSION}"
 
       - name: Publier la release GitHub
         env:
@@ -79,7 +85,7 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           TITLE: ${{ steps.meta.outputs.title }}
         run: |
-          ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64 dist/poste-linux-amd64 dist/poste-macos-arm64 dist/poste-macos-amd64 dist/poste-windows-amd64.exe"
+          ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64 dist/poste-linux-amd64 dist/poste-macos-arm64 dist/poste-macos-amd64 dist/poste-windows-amd64.exe dist/poste-bureau-linux-amd64 dist/poste-bureau-windows-amd64.exe dist/Poste-macos-arm64.app.zip dist/Poste-macos-amd64.app.zip dist/poste.desktop"
 
           if gh release view "${TAG}" &>/dev/null; then
             # Release existante — remplacer les assets sans interruption (pas de delete)
