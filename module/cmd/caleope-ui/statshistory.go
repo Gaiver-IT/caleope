@@ -32,10 +32,10 @@ type StatsSample struct {
 const histSize = 60 // 60 × 60s = 1 heure
 
 type statsRing struct {
-	mu   sync.RWMutex
-	buf  [histSize]StatsSample
-	pos  int
-	cnt  int
+	mu  sync.RWMutex
+	buf [histSize]StatsSample
+	pos int
+	cnt int
 }
 
 var statsHist = &statsRing{}

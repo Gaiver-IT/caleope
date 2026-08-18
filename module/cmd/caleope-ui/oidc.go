@@ -32,7 +32,6 @@ import (
 	"time"
 )
 
-
 // ── Config ────────────────────────────────────────────────────────────────────
 
 type oidcCfg struct {
@@ -93,10 +92,10 @@ func oidcSaveConfig(baseDir string, cfg oidcCfg) error {
 // ── Discovery ─────────────────────────────────────────────────────────────────
 
 type oidcDiscovery struct {
-	mu       sync.Mutex
-	issuer   string
-	authEp   string
-	tokenEp  string
+	mu        sync.Mutex
+	issuer    string
+	authEp    string
+	tokenEp   string
 	fetchedAt time.Time
 }
 
@@ -284,16 +283,16 @@ func tryAutoConfigAuthentik(baseDir string, r *http.Request) {
 
 	// Créer le provider OAuth2/OIDC
 	provResp, status, err := doJSON("POST", apiBase+"/providers/oauth2/", map[string]interface{}{
-		"name":                  "Caleope UI",
-		"authorization_flow":    flowUUID,
-		"client_type":           "confidential",
-		"sub_mode":              "hashed_user_id",
-		"redirect_uris":         redirectURI + "\n" + strings.Replace(redirectURI, "http://", "https://", 1),
-		"access_code_validity":  "minutes=1",
-		"access_token_validity": "hours=1",
+		"name":                   "Caleope UI",
+		"authorization_flow":     flowUUID,
+		"client_type":            "confidential",
+		"sub_mode":               "hashed_user_id",
+		"redirect_uris":          redirectURI + "\n" + strings.Replace(redirectURI, "http://", "https://", 1),
+		"access_code_validity":   "minutes=1",
+		"access_token_validity":  "hours=1",
 		"refresh_token_validity": "days=30",
-		"issuer_mode":           "global",
-		"signing_key":           nil,
+		"issuer_mode":            "global",
+		"signing_key":            nil,
 	})
 	if err != nil || status != 201 {
 		return

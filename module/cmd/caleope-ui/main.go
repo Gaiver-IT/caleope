@@ -332,7 +332,15 @@ func main() {
 	orig := proxy.Director
 	proxy.Director = func(r *http.Request) {
 		orig(r)
-		r.Header.Set("Authorization", "Bearer "+daemonToken)
+		// ⚠️ Un poste s'authentifie avec SA clé, pas avec le jeton d'admin.
+		// Écraser systématiquement l'en-tête faisait arriver « Bearer <admin> »
+		// au daemon à la place de « Machine <clé> » : l'appairage réussissait,
+		// puis la machine ne pouvait plus jamais tirer sa configuration — elle
+		// recevait « clé de machine requise » sans comprendre pourquoi.
+		// On ne remplace donc PAS une authentification de machine.
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Machine ") {
+			r.Header.Set("Authorization", "Bearer "+daemonToken)
+		}
 		r.Header.Del("Cookie")
 		r.Host = target.Host
 	}

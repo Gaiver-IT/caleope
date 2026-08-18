@@ -22,8 +22,9 @@ var wsUpgrader = websocket.Upgrader{
 
 // handleTerminal ouvre un terminal PTY en user-caleope via WebSocket.
 // Protocole :
-//   client → serveur : bytes bruts (input) ou JSON {"r":{"c":cols,"r":rows}} (resize)
-//   serveur → client : bytes bruts (output PTY)
+//
+//	client → serveur : bytes bruts (input) ou JSON {"r":{"c":cols,"r":rows}} (resize)
+//	serveur → client : bytes bruts (output PTY)
 func handleTerminal(w http.ResponseWriter, r *http.Request) {
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {

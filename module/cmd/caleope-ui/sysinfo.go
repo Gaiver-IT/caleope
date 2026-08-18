@@ -382,7 +382,7 @@ func handleSysJournal(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
-	unit  := r.URL.Query().Get("unit")
+	unit := r.URL.Query().Get("unit")
 	limit := r.URL.Query().Get("n")
 	if limit == "" {
 		limit = "200"
@@ -480,13 +480,13 @@ func handleSysNetstat(w http.ResponseWriter, r *http.Request) {
 // ── Top processus ──────────────────────────────────────────────────────────────
 
 type procInfo struct {
-	PID    string `json:"pid"`
-	User   string `json:"user"`
-	CPU    string `json:"cpu"`
-	Mem    string `json:"mem"`
-	VSZ    string `json:"vsz"`
-	RSS    string `json:"rss"`
-	Cmd    string `json:"cmd"`
+	PID  string `json:"pid"`
+	User string `json:"user"`
+	CPU  string `json:"cpu"`
+	Mem  string `json:"mem"`
+	VSZ  string `json:"vsz"`
+	RSS  string `json:"rss"`
+	Cmd  string `json:"cmd"`
 }
 
 func handleSysProcesses(w http.ResponseWriter, r *http.Request) {
@@ -673,10 +673,10 @@ func handleDockerPrune(w http.ResponseWriter, r *http.Request) {
 	netOut, _ := exec.Command("docker", "network", "prune", "-f").Output()
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"images":  string(imgOut),
-		"volumes": string(volOut),
+		"images":   string(imgOut),
+		"volumes":  string(volOut),
 		"networks": string(netOut),
-		"success": true,
+		"success":  true,
 	})
 }
 
@@ -740,14 +740,14 @@ func handleDockerStats(w http.ResponseWriter, r *http.Request) {
 }
 
 type certInfo struct {
-	File      string `json:"file"`
-	Subject   string `json:"subject"`
-	Issuer    string `json:"issuer"`
-	NotBefore string `json:"not_before"`
-	NotAfter  string `json:"not_after"`
-	DaysLeft  int    `json:"days_left"`
-	Expired   bool   `json:"expired"`
-	SelfSigned bool  `json:"self_signed"`
+	File       string `json:"file"`
+	Subject    string `json:"subject"`
+	Issuer     string `json:"issuer"`
+	NotBefore  string `json:"not_before"`
+	NotAfter   string `json:"not_after"`
+	DaysLeft   int    `json:"days_left"`
+	Expired    bool   `json:"expired"`
+	SelfSigned bool   `json:"self_signed"`
 }
 
 func handleSysCerts(w http.ResponseWriter, r *http.Request) {
@@ -798,7 +798,7 @@ func handleSysCerts(w http.ResponseWriter, r *http.Request) {
 func handleNetTool(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	toolType := r.URL.Query().Get("type")
-	host     := r.URL.Query().Get("host")
+	host := r.URL.Query().Get("host")
 
 	// Validate host: no spaces, no shell metacharacters
 	for _, ch := range host {
@@ -1395,13 +1395,13 @@ func handleBackupStatus(w http.ResponseWriter, r *http.Request, baseDir string) 
 		shortID = shortID[:8]
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"configured":  true,
-		"snapshots":   len(snaps),
-		"last_time":   last.Time,
-		"last_id":     shortID,
-		"last_paths":  last.Paths,
-		"last_host":   last.Hostname,
-		"success":     true,
+		"configured": true,
+		"snapshots":  len(snaps),
+		"last_time":  last.Time,
+		"last_id":    shortID,
+		"last_paths": last.Paths,
+		"last_host":  last.Hostname,
+		"success":    true,
 	})
 }
 

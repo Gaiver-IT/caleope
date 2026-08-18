@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // La liste d'exemption doit ouvrir EXACTEMENT trois chemins. Un préfixe
 // laisserait passer l'administration des profils et la liste des machines,
@@ -24,6 +27,22 @@ func TestExemptionPosteExacteEtFermee(t *testing.T) {
 	for _, p := range fermes {
 		if pourLePoste[p] {
 			t.Fatalf("chemin ouvert à tort : %s", p)
+		}
+	}
+}
+
+// Le proxy ne doit JAMAIS écraser l'authentification d'une machine par le jeton
+// d'admin : l'appairage réussirait, puis la machine ne tirerait plus rien.
+func TestProxyNEcrasePasLaCleDeMachine(t *testing.T) {
+	remplacer := func(entete string) bool {
+		return !strings.HasPrefix(entete, "Machine ")
+	}
+	if remplacer("Machine abc123") {
+		t.Fatal("la clé de machine serait remplacée par le jeton d'admin")
+	}
+	for _, e := range []string{"", "Bearer xyz", "Basic dXNlcg==", "machine abc"} {
+		if !remplacer(e) {
+			t.Fatalf("le jeton d'admin devrait être posé pour %q", e)
 		}
 	}
 }
