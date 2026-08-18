@@ -37,6 +37,21 @@ for arch in arm64 amd64; do
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+    # ── Signature du BUNDLE, pas seulement du binaire ───────────────────────
+    # L'éditeur de liens Go signe déjà l'exécutable (adhoc). Mais on vient de
+    # l'envelopper : la signature ne couvre pas Info.plist ni la structure, et
+    # macOS refuse alors l'ouverture en annonçant une application ENDOMMAGÉE,
+    # sans proposer de passer outre. Mesuré en v0.9.15 :
+    #   spctl → « code has no resources but signature indicates they must be present »
+    # Re-signer l'ensemble crée Contents/_CodeSignature/CodeResources.
+    if command -v codesign >/dev/null 2>&1; then
+        codesign --force --deep --sign - "${APP}"
+        codesign --verify --deep --strict "${APP}"
+    else
+        echo "  ✗ codesign absent : ce bundle serait refusé par macOS." >&2
+        echo "    Construis les cibles darwin sur un Mac." >&2
+        exit 1
+    fi
     ( cd "${DEST}" && zip -qry "Poste-macos-${arch}.app.zip" "Poste-macos-${arch}.app" )
     rm -rf "${APP}"
     echo "  ✓ Poste-macos-${arch}.app.zip"
