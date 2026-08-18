@@ -204,6 +204,9 @@
           <button class="nav-btn" data-section="shares" onclick="goSection('shares')">
             <i class="ti ti-folder-share" aria-hidden="true"></i>PARTAGES
           </button>
+          <button class="nav-btn" data-section="postes" onclick="goSection('postes')">
+            <i class="ti ti-devices-2" aria-hidden="true"></i>POSTES
+          </button>
           <button class="nav-btn" data-section="files" onclick="goSection('files')">
             <i class="ti ti-files" aria-hidden="true"></i>FICHIERS
           </button>
@@ -361,6 +364,7 @@
       <!-- LOCATIONS -->
       <div id="content-locations" class="section-content hidden"></div>
       <div id="content-shares" class="section-content hidden"></div>
+      <div id="content-postes" class="section-content hidden"></div>
       <div id="content-files" class="section-content hidden"></div>
       <div id="content-vms" class="section-content hidden"></div>
       <div id="content-packs" class="section-content hidden"></div>
@@ -585,6 +589,60 @@
 </div>
 
 <!-- Modal PARTAGE (créer / modifier) -->
+<!-- Postes nomades : profil (créer/modifier) -->
+<div class="modal-overlay" id="poste-profil-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-title">
+      <span id="poste-profil-title">NOUVEAU PROFIL</span>
+      <button class="modal-close" onclick="document.getElementById('poste-profil-modal').classList.remove('open')" aria-label="Fermer"><i class="ti ti-x" aria-hidden="true"></i></button>
+    </div>
+    <input type="hidden" id="poste-profil-edit" />
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div class="field full">
+        <div class="field-label">NOM DU PROFIL *</div>
+        <input class="field-input" id="poste-profil-nom" placeholder="portable" autocomplete="off" />
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">Sans espace ni barre oblique — il voyage dans une adresse</div>
+      </div>
+      <div class="field full">
+        <div class="field-label">DESCRIPTION</div>
+        <input class="field-input" id="poste-profil-desc" placeholder="Mon portable de travail" autocomplete="off" />
+      </div>
+      <div class="field full">
+        <div class="field-label">LOGICIELS — un par ligne</div>
+        <textarea class="field-input" id="poste-profil-paquets" rows="6" spellcheck="false" placeholder="git&#10;ripgrep=rg&#10;!coreutils=gls"></textarea>
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">« nom » suffit d'ordinaire. « nom=commande » quand les deux diffèrent (ripgrep=rg). « !nom » exige le gestionnaire de paquets même si le système fournit déjà la commande.</div>
+      </div>
+      <div class="field full">
+        <div class="field-label">DOSSIERS — un par ligne : chemin | sens | étiquette</div>
+        <textarea class="field-input" id="poste-profil-dossiers" rows="4" spellcheck="false" placeholder="~/Images/Fonds|deux-sens|Fonds d'écran"></textarea>
+        <div style="font-size:9px;color:var(--text3);margin-top:3px">Sens : « descendre » (le serveur fait autorité), « sauvegarder » (le poste fait autorité), « deux-sens »</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn-sm" onclick="document.getElementById('poste-profil-modal').classList.remove('open')">ANNULER</button>
+      <button class="btn-sm primary" onclick="enregistrerProfilPoste()"><i class="ti ti-check"></i>ENREGISTRER</button>
+    </div>
+  </div>
+</div>
+
+<!-- Postes nomades : le code d'appairage -->
+<div class="modal-overlay" id="poste-appairage-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-title">
+      <span>APPAIRER UNE MACHINE</span>
+      <button class="modal-close" onclick="document.getElementById('poste-appairage-modal').classList.remove('open')" aria-label="Fermer"><i class="ti ti-x" aria-hidden="true"></i></button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <div style="font-size:12px;color:var(--text2)">Sur la machine à raccorder, installe l'exécutable <b>poste</b>, puis lance&nbsp;:</div>
+      <input class="field-input" id="poste-appairage-cmd" readonly onclick="this.select()" style="font-family:monospace" />
+      <div id="poste-appairage-note" style="font-size:9px;color:var(--text3)"></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end">
+      <button class="btn-sm" onclick="document.getElementById('poste-appairage-modal').classList.remove('open')">FERMER</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="share-modal" role="dialog" aria-modal="true">
   <div class="modal" style="max-width:560px">
     <div class="modal-title">

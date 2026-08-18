@@ -6187,6 +6187,7 @@ const SECTIONS = {
   storage:   { label: 'STOCKAGE',        num: '/14', load: loadStorage,    content: 'content-storage',    btn: null },
   journal:   { label: 'JOURNAL',         num: '/15', load: loadJournal,    content: 'content-journal',    btn: null },
   shares:    { label: 'PARTAGES',        num: '/16', load: loadShares,     content: 'content-shares',     btn: { icon: 'ti-plus',          label: 'NOUVEAU PARTAGE', action: "openAddShareModal()" } },
+  postes:    { label: 'POSTES',           num: '/17', load: loadPostes,     content: 'content-postes',     btn: { icon: 'ti-plus',          label: 'NOUVEAU PROFIL', action: "openProfilPosteModal()" } },
   files:     { label: 'FICHIERS',        num: '/17', load: loadFiles,      content: 'content-files',      btn: null },
   vms:       { label: 'MACHINES VIRT.',  num: '/18', load: loadVMs,        content: 'content-vms',        btn: { icon: 'ti-plus', label: 'NOUVELLE VM', action: "openCreateVMModal()" } },
   packs:     { label: 'PACKS',           num: '/19', load: loadPacks,      content: 'content-packs',      btn: null },
@@ -11893,3 +11894,142 @@ async function saveQuickMemo() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POSTES NOMADES
+//
+// Deux objets à l'écran, et pas un de plus :
+//   — les PROFILS : ce qu'une machine doit avoir (logiciels, dossiers) ;
+//   — les MACHINES appairées, avec ce qui leur manque.
+//
+// Le geste central est le bouton « APPAIRER » : il fabrique un code court que
+// l'utilisateur recopie dans l'exécutable installé sur la machine. C'est le
+// seul moment où il tape quelque chose.
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _profilsCache = [];
+
+async function loadPostes() {
+  const c = document.getElementById('content-postes');
+  if (!c) return;
+  const [pr, ma] = await Promise.all([
+    api.get('/api/v1/postes/profils'),
+    api.get('/api/v1/postes/machines'),
+  ]);
+  _profilsCache = Array.isArray(pr?.data) ? pr.data : [];
+  const machines = Array.isArray(ma?.data) ? ma.data : [];
+
+  const blocMachines = machines.length
+    ? `<div class="loc-list">${machines.map(posteMachineRow).join('')}</div>`
+    : `<div class="empty-state"><div class="empty-icon"><i class="ti ti-device-laptop"></i></div>
+         <div class="empty-title">AUCUNE MACHINE</div>
+         <div class="empty-sub">Crée un profil, puis appaire une machine : installe l'exécutable « poste » dessus et recopie le code.</div></div>`;
+
+  const blocProfils = _profilsCache.length
+    ? `<div class="loc-list">${_profilsCache.map(posteProfilRow).join('')}</div>`
+    : `<div class="empty-state" style="padding:18px"><div class="empty-sub">Aucun profil pour l'instant.</div></div>`;
+
+  c.innerHTML = `
+    <div style="margin-bottom:10px;opacity:.7;font-size:12px">MACHINES</div>
+    ${blocMachines}
+    <div style="margin:22px 0 10px;opacity:.7;font-size:12px">PROFILS</div>
+    ${blocProfils}`;
+}
+
+function posteMachineRow(m) {
+  // « Jamais vue » n'est pas la même chose que « à jour » : une machine éteinte
+  // depuis un mois ne doit pas s'afficher en vert parce qu'elle ne manque de rien.
+  const vu = m.dernier_vu && !m.dernier_vu.startsWith('0001')
+    ? new Date(m.dernier_vu).toLocaleString('fr-FR')
+    : 'jamais vue';
+  const etat = (!m.dernier_vu || m.dernier_vu.startsWith('0001'))
+    ? '<span class="loc-type-badge" style="opacity:.45">EN ATTENTE</span>'
+    : (m.manquants > 0
+        ? `<span class="loc-type-badge" style="background:#8a5a00">${m.manquants} MANQUANT${m.manquants > 1 ? 'S' : ''}</span>`
+        : '<span class="loc-type-badge">À JOUR</span>');
+  return `<div class="loc-row">${etat}
+      <div class="loc-info"><div class="loc-name">${escapeHtml(m.nom)}</div>
+        <div class="loc-meta">${escapeHtml(m.systeme || '?')} · profil « ${escapeHtml(m.profil)} » · vue ${escapeHtml(vu)}</div></div>
+      <div class="backup-actions">
+        <button class="btn-sm danger" onclick="oublierPoste('${escapeHtml(m.empreinte)}','${escapeHtml(m.nom)}')"><i class="ti ti-trash"></i>OUBLIER</button>
+      </div></div>`;
+}
+
+function posteProfilRow(p) {
+  const nbPaquets = (p.paquets || []).length;
+  const nbDossiers = (p.dossiers || []).length;
+  return `<div class="loc-row"><span class="loc-type-badge">PROFIL</span>
+      <div class="loc-info"><div class="loc-name">${escapeHtml(p.nom)}</div>
+        <div class="loc-meta">${p.description ? escapeHtml(p.description) + ' — ' : ''}${nbPaquets} logiciel(s) · ${nbDossiers} dossier(s)</div></div>
+      <div class="backup-actions">
+        <button class="btn-sm" onclick="appairerPoste('${escapeHtml(p.nom)}')"><i class="ti ti-qrcode"></i>APPAIRER</button>
+        <button class="btn-sm" onclick="openProfilPosteModal('${escapeHtml(p.nom)}')"><i class="ti ti-edit"></i>MODIFIER</button>
+        <button class="btn-sm danger" onclick="supprimerProfilPoste('${escapeHtml(p.nom)}')"><i class="ti ti-trash"></i>SUPPRIMER</button>
+      </div></div>`;
+}
+
+function openProfilPosteModal(nom = '') {
+  const p = _profilsCache.find(x => x.nom === nom) || { nom: '', description: '', paquets: [], dossiers: [] };
+  document.getElementById('poste-profil-title').textContent = nom ? 'MODIFIER LE PROFIL' : 'NOUVEAU PROFIL';
+  document.getElementById('poste-profil-edit').value = nom;
+  const elNom = document.getElementById('poste-profil-nom');
+  elNom.value = p.nom; elNom.disabled = !!nom;
+  document.getElementById('poste-profil-desc').value = p.description || '';
+  document.getElementById('poste-profil-paquets').value = (p.paquets || []).join('\n');
+  document.getElementById('poste-profil-dossiers').value =
+    (p.dossiers || []).map(d => `${d.chemin}|${d.sens}|${d.nom || ''}`).join('\n');
+  document.getElementById('poste-profil-modal').classList.add('open');
+}
+
+async function enregistrerProfilPoste() {
+  const nom = document.getElementById('poste-profil-nom').value.trim();
+  if (!nom) { notify('Le profil doit avoir un nom', 'error'); return; }
+  const paquets = document.getElementById('poste-profil-paquets').value
+    .split('\n').map(s => s.trim()).filter(Boolean);
+  const dossiers = document.getElementById('poste-profil-dossiers').value
+    .split('\n').map(s => s.trim()).filter(Boolean).map(l => {
+      const [chemin, sens, etiquette] = l.split('|').map(x => (x || '').trim());
+      return { chemin, sens: sens || 'deux-sens', nom: etiquette || chemin };
+    });
+  try {
+    await api.post('/api/v1/postes/profils', {
+      nom, description: document.getElementById('poste-profil-desc').value.trim(), paquets, dossiers,
+    });
+    document.getElementById('poste-profil-modal').classList.remove('open');
+    notify('Profil enregistré');
+    loadPostes();
+  } catch (e) { notify(e.message || 'Échec', 'error'); }
+}
+
+async function supprimerProfilPoste(nom) {
+  if (!confirm(`Supprimer le profil « ${nom} » ?`)) return;
+  try {
+    await api.req('DELETE', `/api/v1/postes/profils/${encodeURIComponent(nom)}`);
+    notify('Profil supprimé'); loadPostes();
+  } catch (e) {
+    // Le serveur refuse de supprimer un profil encore utilisé : on montre
+    // pourquoi, plutôt qu'un « échec » qui laisserait deviner.
+    notify(e.message || 'Suppression refusée', 'error');
+  }
+}
+
+async function appairerPoste(profil) {
+  try {
+    const r = await api.post('/api/v1/postes/jeton', { profil });
+    const code = r?.data?.jeton || '';
+    const exp = r?.data?.expire ? new Date(r.data.expire).toLocaleTimeString('fr-FR') : '';
+    document.getElementById('poste-appairage-cmd').value =
+      `poste connexion ${location.origin} ${code}`;
+    document.getElementById('poste-appairage-note').textContent =
+      `Ce code ne sert qu'une fois et expire à ${exp}. Ensuite la machine tire sa configuration avec sa propre clé : elle n'a jamais besoin de ton mot de passe.`;
+    document.getElementById('poste-appairage-modal').classList.add('open');
+  } catch (e) { notify(e.message || 'Échec', 'error'); }
+}
+
+async function oublierPoste(empreinte, nom) {
+  if (!confirm(`Oublier « ${nom} » ? Sa clé sera révoquée : elle ne pourra plus rien tirer.`)) return;
+  try {
+    await api.req('DELETE', `/api/v1/postes/machines/${encodeURIComponent(empreinte)}`);
+    notify('Machine oubliée'); loadPostes();
+  } catch (e) { notify(e.message || 'Échec', 'error'); }
+}

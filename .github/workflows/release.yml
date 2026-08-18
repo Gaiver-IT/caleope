@@ -54,13 +54,32 @@ jobs:
           go build -ldflags "${LDFLAGS}" -o ../dist/caleope-linux-amd64     ./cmd/caleope/
           go build -ldflags "${LDFLAGS}" -o ../dist/caleope-ui-linux-amd64  ./cmd/caleope-ui/
 
+      # ── L'exécutable des postes nomades ─────────────────────────────────
+      # Il ne tourne PAS sur le serveur : c'est celui qu'on installe sur son
+      # Mac, son Ubuntu, son Windows. Il est donc compilé pour les trois, et
+      # publié avec le reste — sinon il faudrait le construire à la main pour
+      # chaque machine, ce qui ruine l'idée d'« un exécutable à installer ».
+      - name: Build de l'exécutable poste (3 systèmes)
+        working-directory: module
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          COMMIT="${GITHUB_SHA::7}"
+          LDFLAGS="-s -w -X github.com/gaiver-it/caleope/pkg/version.Version=${VERSION} -X github.com/gaiver-it/caleope/pkg/version.Commit=${COMMIT}"
+          mkdir -p ../dist
+          GOOS=linux   GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-linux-amd64       ./cmd/poste/
+          GOOS=darwin  GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-macos-arm64       ./cmd/poste/
+          GOOS=darwin  GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-macos-amd64       ./cmd/poste/
+          GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-windows-amd64.exe ./cmd/poste/
+
       - name: Publier la release GitHub
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.meta.outputs.tag }}
           TITLE: ${{ steps.meta.outputs.title }}
         run: |
-          ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64"
+          ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64 dist/poste-linux-amd64 dist/poste-macos-arm64 dist/poste-macos-amd64 dist/poste-windows-amd64.exe"
 
           if gh release view "${TAG}" &>/dev/null; then
             # Release existante — remplacer les assets sans interruption (pas de delete)
