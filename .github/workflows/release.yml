@@ -8,8 +8,64 @@ permissions:
   contents: write
 
 jobs:
+  # ── macOS : le bundle DOIT être assemblé puis signé sur un Mac ─────────────
+  # Le job Linux ne peut pas s'en charger : codesign n'existe que sur macOS, et
+  # un bundle .app dont la signature ne couvre pas la structure est refusé par
+  # le système à l'ouverture — « l'application est endommagée », sans possibilité
+  # de passer outre. C'est exactement ce qui est arrivé en v0.9.15 : le binaire
+  # était signé par l'éditeur de liens Go, mais l'enveloppe .app ajoutée APRÈS
+  # laissait spctl répondre « code has no resources but signature indicates they
+  # must be present ».
+  bundle-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: module/go.mod
+          cache-dependency-path: module/go.sum
+
+      - name: Version
+        id: v
+        run: echo "version=$(grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' module/pkg/version/version.go | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Construire et signer les bundles
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd module
+          LDFLAGS="-s -w -X github.com/gaiver-it/caleope/pkg/version.Version=${{ steps.v.outputs.version }}"
+          for arch in arm64 amd64; do
+            GOOS=darwin GOARCH=$arch go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-macos-$arch ./cmd/poste-bureau/
+            GOOS=darwin GOARCH=$arch go build -ldflags "${LDFLAGS}" -o ../dist/poste-macos-$arch        ./cmd/poste/
+          done
+          bash cmd/poste-bureau/paquetage/empaqueter.sh ../dist "${{ steps.v.outputs.version }}"
+
+      - name: Vérifier la signature (une release non vérifiée ne vaut rien)
+        run: |
+          set -euo pipefail
+          cd dist
+          for z in Poste-macos-*.app.zip; do
+            rm -rf ctrl && mkdir ctrl && (cd ctrl && unzip -qo "../$z")
+            APP=$(find ctrl -maxdepth 1 -name '*.app')
+            test -f "$APP/Contents/_CodeSignature/CodeResources" \
+              || { echo "::error::$z : signature du bundle absente"; exit 1; }
+            codesign --verify --deep --strict -v "$APP"
+            echo "✓ $z"
+          done
+          rm -rf ctrl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles-macos
+          path: |
+            dist/Poste-macos-*.app.zip
+            dist/poste-bureau-macos-*
+            dist/poste-macos-*
+
   build:
     runs-on: ubuntu-latest
+    needs: bundle-macos
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,15 +125,19 @@ jobs:
           LDFLAGS="-s -w -X github.com/gaiver-it/caleope/pkg/version.Version=${VERSION} -X github.com/gaiver-it/caleope/pkg/version.Commit=${COMMIT}"
           mkdir -p ../dist
           GOOS=linux   GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-linux-amd64       ./cmd/poste/
-          GOOS=darwin  GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-macos-arm64       ./cmd/poste/
-          GOOS=darwin  GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-macos-amd64       ./cmd/poste/
+          # Les cibles macOS sont construites ET SIGNÉES par le job bundle-macos :
+          # un binaire darwin produit ici ne pourrait pas l'être, et un bundle non
+          # signé est refusé à l'ouverture.
           GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-windows-amd64.exe ./cmd/poste/
           # La fenêtre : même logique, autre interface.
           GOOS=linux   GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-linux-amd64       ./cmd/poste-bureau/
-          GOOS=darwin  GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-macos-arm64       ./cmd/poste-bureau/
-          GOOS=darwin  GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-macos-amd64       ./cmd/poste-bureau/
           GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-windows-amd64.exe ./cmd/poste-bureau/
-          bash cmd/poste-bureau/paquetage/empaqueter.sh ../dist "${VERSION}"
+
+      - name: Récupérer les bundles signés sur macOS
+        uses: actions/download-artifact@v4
+        with:
+          name: bundles-macos
+          path: dist
 
       - name: Publier la release GitHub
         env:
@@ -85,7 +145,7 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           TITLE: ${{ steps.meta.outputs.title }}
         run: |
-          ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64 dist/poste-linux-amd64 dist/poste-macos-arm64 dist/poste-macos-amd64 dist/poste-windows-amd64.exe dist/poste-bureau-linux-amd64 dist/poste-bureau-windows-amd64.exe dist/Poste-macos-arm64.app.zip dist/Poste-macos-amd64.app.zip dist/poste.desktop"
+          ASSETS="dist/caleoped-linux-amd64 dist/caleope-linux-amd64 dist/caleope-ui-linux-amd64 dist/poste-linux-amd64 dist/poste-windows-amd64.exe dist/poste-bureau-linux-amd64 dist/poste-bureau-windows-amd64.exe dist/poste.desktop dist/Poste-macos-arm64.app.zip dist/Poste-macos-amd64.app.zip dist/poste-macos-arm64 dist/poste-macos-amd64 dist/poste-bureau-macos-arm64 dist/poste-bureau-macos-amd64"
 
           if gh release view "${TAG}" &>/dev/null; then
             # Release existante — remplacer les assets sans interruption (pas de delete)

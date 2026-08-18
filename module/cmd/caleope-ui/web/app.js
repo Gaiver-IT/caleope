@@ -41,6 +41,9 @@ const api = {
   patch:  (p, b)    => api.req('PATCH',  p, b),
   delete: (p)       => api.req('DELETE', p),
   del:    (p)       => api.req('DELETE', p),
+  // raw : pour ce qui n'est pas du JSON — le téléchargement d'une application
+  // rend un fichier binaire, que req() essaierait de décoder en texte.
+  raw:    (p)       => fetch(p, { method: 'GET' }),
 };
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -11933,7 +11936,59 @@ async function loadPostes() {
     <div style="margin-bottom:10px;opacity:.7;font-size:12px">MACHINES</div>
     ${blocMachines}
     <div style="margin:22px 0 10px;opacity:.7;font-size:12px">PROFILS</div>
-    ${blocProfils}`;
+    ${blocProfils}
+    <div style="margin:22px 0 10px;opacity:.7;font-size:12px">INSTALLER SUR UNE MACHINE</div>
+    <div id="postes-clients"><div class="empty-sub" style="padding:12px">Chargement des applications…</div></div>`;
+
+  chargerClientsPostes();
+}
+
+// Le téléchargement depuis l'interface : l'utilisateur est déjà connecté à SON
+// Caleope, on ne l'envoie pas chercher un fichier ailleurs en choisissant la
+// bonne architecture parmi douze.
+async function chargerClientsPostes() {
+  const z = document.getElementById('postes-clients');
+  if (!z) return;
+  try {
+    const r = await api.get('/api/v1/postes/clients');
+    const version = r?.data?.version || '';
+    const clients = r?.data?.clients || [];
+    const fenetres = clients.filter(x => x.interface === 'fenêtre');
+    const cli      = clients.filter(x => x.interface !== 'fenêtre');
+    z.innerHTML = `<div class="loc-list">${fenetres.map(clientPosteRow).join('')}</div>
+      <div style="margin:14px 0 8px;opacity:.55;font-size:11px">EN LIGNE DE COMMANDE</div>
+      <div class="loc-list">${cli.map(clientPosteRow).join('')}</div>
+      <div style="opacity:.5;font-size:11px;margin-top:12px">Version ${escapeHtml(version)} · le fichier est mis en cache au premier téléchargement.</div>`;
+  } catch (e) {
+    z.innerHTML = `<div class="empty-sub" style="padding:12px">Applications indisponibles : ${escapeHtml(e.message || e)}</div>`;
+  }
+}
+
+function clientPosteRow(c) {
+  return `<div class="loc-row">
+      <div class="loc-info"><div class="loc-name">${escapeHtml(c.nom)}</div>
+        <div class="loc-meta">${escapeHtml(c.instruction || c.fichier)}</div></div>
+      <div class="backup-actions">
+        <button class="btn-sm" onclick="telechargerClientPoste('${escapeHtml(c.cible)}')"><i class="ti ti-download"></i>TÉLÉCHARGER</button>
+      </div></div>`;
+}
+
+// Le téléchargement passe par la session de l'interface : on ne peut pas se
+// contenter d'un lien nu, l'API exige l'en-tête d'authentification.
+async function telechargerClientPoste(cible) {
+  try {
+    notify('Préparation du téléchargement…');
+    const rep = await api.raw(`/api/v1/postes/clients/${encodeURIComponent(cible)}`);
+    if (!rep.ok) throw new Error(await rep.text());
+    const blob = await rep.blob();
+    const nom = (rep.headers.get('Content-Disposition') || '').match(/filename="?([^"]+)"?/)?.[1] || cible;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = nom; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(url);
+  } catch (e) {
+    notify('Téléchargement impossible : ' + (e.message || e), 'error');
+  }
 }
 
 function posteMachineRow(m) {

@@ -221,6 +221,8 @@ func (s *Server) StartHTTP(port int) error {
 	mux.Handle("/api/v1/postes/machines", s.auth(http.HandlerFunc(s.routePostesMachines)))
 	mux.Handle("/api/v1/postes/machines/", s.auth(http.HandlerFunc(s.routePostesMachine)))
 	mux.Handle("/api/v1/postes/jeton", s.auth(http.HandlerFunc(s.routePostesJeton)))
+	mux.Handle("/api/v1/postes/clients", s.auth(http.HandlerFunc(s.routePostesClients)))
+	mux.Handle("/api/v1/postes/clients/", s.auth(http.HandlerFunc(s.routePostesTelecharger)))
 	// Le poste lui-même : PAS de jeton d'admin — il n'en a pas et ne doit pas
 	// en avoir. L'appairage est tenu par un code à usage unique ; ensuite la
 	// machine présente sa propre clé, qui ne donne accès qu'à sa configuration.
