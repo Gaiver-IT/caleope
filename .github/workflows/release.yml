@@ -132,6 +132,10 @@ jobs:
           # La fenêtre : même logique, autre interface.
           GOOS=linux   GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-linux-amd64       ./cmd/poste-bureau/
           GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o ../dist/poste-bureau-windows-amd64.exe ./cmd/poste-bureau/
+          # Le raccourci Linux est engendré ICI : il est produit sur le runner
+          # macOS aussi, mais n'y est pas téléversé — et le chercher dans un
+          # artefact d'un autre job pour un simple fichier texte serait absurde.
+          bash cmd/poste-bureau/paquetage/empaqueter.sh ../dist "${VERSION}"
 
       - name: Récupérer les bundles signés sur macOS
         uses: actions/download-artifact@v4
