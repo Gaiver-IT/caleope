@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/audit"
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
+	"github.com/gaiver-it/caleope/internal/instances"
 	"github.com/gaiver-it/caleope/internal/runtime"
 	"github.com/gaiver-it/caleope/internal/store"
 	"github.com/gaiver-it/caleope/internal/ufw"
@@ -98,7 +100,14 @@ func (i *Installer) Install(opts InstallOptions) error {
 	if err != nil {
 		return fmt.Errorf("impossible de lire les repos: %w", err)
 	}
-	appDir, repo, err := i.st.Resolve(opts.AppID, repos)
+	// ── Instances ────────────────────────────────────────────────────────────
+	// « minecraft@homestead » : on cherche le PAQUET « minecraft » dans le
+	// magasin, mais tout le reste — dossiers, données, ports, sauvegardes —
+	// reste indexé par l'identifiant COMPLET. C'est le seul endroit du code qui
+	// comprend le suffixe ; en aval, une instance est une application comme une
+	// autre.
+	paquet, _ := instances.Decouper(opts.AppID)
+	appDir, repo, err := i.st.Resolve(paquet, repos)
 	if err != nil {
 		return err
 	}
@@ -115,6 +124,15 @@ func (i *Installer) Install(opts InstallOptions) error {
 	if err != nil {
 		return err
 	}
+	// Le paquet autorise-t-il d'être installé plusieurs fois ?
+	if err := instances.Verifier(opts.AppID, manifest.MultiInstance); err != nil {
+		return err
+	}
+	// ⚠️ À partir d'ici le manifeste porte l'identifiant de L'INSTANCE. Sans
+	// cette ligne, les volumes, les ports et le dossier de compose de la
+	// deuxième instance retomberaient sur ceux de la première — et le monde de
+	// l'une écraserait celui de l'autre.
+	manifest.ID = opts.AppID
 
 	// Vérifier que l'app n'est pas déjà installée
 	if !opts.Force {
@@ -173,6 +191,12 @@ func (i *Installer) Install(opts InstallOptions) error {
 	// dur → si déjà pris, « docker compose up » plante avec un message cryptique
 	// (« Bind for 0.0.0.0:53 failed: port is already allocated »). On vérifie
 	// AVANT pour refuser proprement en nommant l'app fautive.
+	// Un port fixe peut être piloté par un paramètre : c'est ce qui permet à
+	// deux instances de la même application de coexister sur des ports
+	// différents. À faire AVANT le contrôle de conflit, qui lit ces valeurs.
+	if err := appliquerPortsParametres(manifest, opts.Params); err != nil {
+		return err
+	}
 	if err := i.checkStaticPorts(manifest, portsPrecedents); err != nil {
 		audit.Log(audit.ActionInstall, opts.AppID, "DENIED:port_conflict")
 		return err
@@ -661,11 +685,20 @@ func (i *Installer) generateCompose(appDir, composeDir string, manifest *types.A
 		BaseDir    string
 		ComposeDir string
 		AppID      string
-		Domain     string
-		Ports      []types.AppPort
-		Volumes    []types.AppVolume
+		// NomDocker : l'identifiant rendu utilisable par Docker.
+		//
+		// Une instance s'appelle « minecraft@homestead », or Docker refuse le
+		// « @ » dans un nom de conteneur ou de réseau. Un paquet compatible
+		// multi-instance doit donc écrire « container_name: {{.NomDocker}} » —
+		// avec {{.AppID}} le compose serait refusé au démarrage, et avec un nom
+		// codé en dur les deux instances se battraient pour le même conteneur.
+		NomDocker string
+		Domain    string
+		Ports     []types.AppPort
+		Volumes   []types.AppVolume
 	}{
 		BaseDir:    i.baseDir,
+		NomDocker:  strings.ReplaceAll(manifest.ID, instances.Separateur, "-"),
 		ComposeDir: composeDir,
 		AppID:      manifest.ID,
 		Domain:     opts.Domain,
@@ -1320,4 +1353,41 @@ func runtimeToUFWPorts(ports []types.AppPort) []ufw.PortSpec {
 		}
 	}
 	return specs
+}
+
+// appliquerPortsParametres remplace le port hôte d'un port fixe par la valeur
+// donnée à l'installation.
+//
+// Un paramètre absent ou vide laisse le manifeste décider : c'est le cas
+// ordinaire, l'application garde son port bien connu.
+func appliquerPortsParametres(manifest *types.AppManifest, params map[string]string) error {
+	for j := range manifest.Ports {
+		p := &manifest.Ports[j]
+		if p.Param == "" {
+			continue
+		}
+		// ⚠️ Recherche INSENSIBLE À LA CASSE : la ligne de commande met les noms
+		// de paramètres en minuscules (« mc_port ») alors que le manifeste les
+		// écrit en majuscules (« MC_PORT ». Une comparaison stricte ne trouvait
+		// donc jamais rien — et le port retombait à 0, ce qui fait attribuer un
+		// port au hasard par Docker au lieu du 25565 demandé.
+		brut := ""
+		for k, v := range params {
+			if strings.EqualFold(k, p.Param) {
+				brut = strings.TrimSpace(v)
+				break
+			}
+		}
+		if brut == "" {
+			continue
+		}
+		n, err := strconv.Atoi(brut)
+		if err != nil || n < 1 || n > 65535 {
+			// Refuser tôt et clairement : laisser passer une valeur absurde
+			// donnerait un compose que Docker rejette avec un message obscur.
+			return fmt.Errorf("port invalide pour « %s » : %q", p.Param, brut)
+		}
+		p.Host = n
+	}
+	return nil
 }

@@ -11,9 +11,9 @@ import (
 // « 2222:22 »), sinon par le port conteneur (compose « 53:53 »).
 func TestOccupePar(t *testing.T) {
 	ports := []types.AppPort{
-		{Name: "web", Container: 3000, Dynamic: true},          // dynamique : jamais « à nous »
+		{Name: "web", Container: 3000, Dynamic: true}, // dynamique : jamais « à nous »
 		{Name: "ssh", Container: 22, Host: 2223, Dynamic: false},
-		{Name: "dns", Container: 53, Dynamic: false},           // host absent → c'est 53
+		{Name: "dns", Container: 53, Dynamic: false}, // host absent → c'est 53
 	}
 	cas := []struct {
 		nom     string

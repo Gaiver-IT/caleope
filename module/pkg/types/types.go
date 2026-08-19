@@ -33,6 +33,7 @@ type AppManifest struct {
 	SecureHeaders  bool            `json:"secure_headers,omitempty"`  // Traefik secure headers opt-in
 	AuthMiddleware bool            `json:"auth_middleware,omitempty"` // Authentik forward auth opt-in
 	NoContainer    bool            `json:"no_container,omitempty"`    // true = outil système, pas de container Docker
+	MultiInstance  bool            `json:"multi_instance,omitempty"`  // true = installable plusieurs fois sous « app@instance ». Par défaut NON : se tromper dans ce sens ne casse rien, l'inverse écrase des données.
 	Priority       string          `json:"priority,omitempty"`        // critical | normal | background — priorité ressources (cpu_shares + oom_score_adj) des containers de l'app. Override par service via label compose "caleope.priority".
 }
 
@@ -55,6 +56,14 @@ type AppPort struct {
 	Dynamic   bool   `json:"dynamic"`            // true = Caleope choisit le port hôte
 	Protocol  string `json:"protocol,omitempty"` // "tcp", "udp", "any" — pour UFW
 	Firewall  bool   `json:"firewall,omitempty"` // true = ouvrir dans UFW
+	// Param : nom d'un paramètre d'installation qui FIXE le port hôte.
+	//
+	// Sans lui, un port fixe est gravé dans le manifeste — donc identique pour
+	// toutes les instances d'une même application, et la deuxième installation
+	// est refusée pour conflit sans que l'utilisateur puisse rien y faire :
+	// le contrôle de conflit lit le manifeste, pas les paramètres. Mesuré sur
+	// un second serveur Minecraft.
+	Param string `json:"param,omitempty"`
 }
 
 type AppVolume struct {
@@ -397,9 +406,9 @@ type Pack struct {
 // PackAppState = état d'une app d'un pack vis-à-vis de l'installation.
 type PackAppState struct {
 	ID        string `json:"id"`
-	Name      string `json:"name"`      // nom lisible (depuis le manifest), ID si introuvable
-	Installed bool   `json:"installed"` // déjà installée sur le système
-	InCatalog bool   `json:"in_catalog"`// présente dans le store (installable)
+	Name      string `json:"name"`       // nom lisible (depuis le manifest), ID si introuvable
+	Installed bool   `json:"installed"`  // déjà installée sur le système
+	InCatalog bool   `json:"in_catalog"` // présente dans le store (installable)
 }
 
 // PackStatus = un Pack + son préflight (ce qui est déjà là, ce qu'il reste).
