@@ -32,6 +32,7 @@ import (
 	"github.com/gaiver-it/caleope/internal/docker"
 	"github.com/gaiver-it/caleope/internal/events"
 	"github.com/gaiver-it/caleope/internal/install"
+	"github.com/gaiver-it/caleope/internal/jeux"
 	"github.com/gaiver-it/caleope/internal/license"
 	"github.com/gaiver-it/caleope/internal/metrics"
 	"github.com/gaiver-it/caleope/internal/network"
@@ -68,6 +69,7 @@ type Server struct {
 	token      string
 	lic        *license.Manager
 	postes     *postes.Gestionnaire
+	jeux       *jeux.Gestionnaire
 }
 
 func NewServer(
@@ -88,6 +90,7 @@ func NewServer(
 	s := &Server{
 		socketPath: socketPath,
 		postes:     postes.Nouveau(baseDir),
+		jeux:       jeux.Nouveau(baseDir),
 		rt:         rt,
 		st:         st,
 		installer:  installer,

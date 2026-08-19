@@ -221,6 +221,24 @@ func (s *Server) StartHTTP(port int) error {
 	mux.Handle("/api/v1/postes/machines", s.auth(http.HandlerFunc(s.routePostesMachines)))
 	mux.Handle("/api/v1/postes/machines/", s.auth(http.HandlerFunc(s.routePostesMachine)))
 	mux.Handle("/api/v1/postes/jeton", s.auth(http.HandlerFunc(s.routePostesJeton)))
+
+	// ── Serveurs de jeu ─────────────────────────────────────────────────────
+	// Toutes derrière le jeton d'admin : la console permet de prendre le
+	// contrôle du serveur (op, whitelist, arrêt).
+	mux.Handle("/api/v1/jeux", s.auth(http.HandlerFunc(s.routeJeux)))
+	mux.Handle("/api/v1/jeux-recherche", s.auth(http.HandlerFunc(s.routeJeuxRecherche)))
+	mux.Handle("/api/v1/jeux/", s.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/console"):
+			s.routeJeuConsole(w, r)
+		case strings.HasSuffix(r.URL.Path, "/proprietes"):
+			s.routeJeuProprietes(w, r)
+		case strings.HasSuffix(r.URL.Path, "/mods"):
+			s.routeJeuMods(w, r)
+		default:
+			s.httpError(w, "route inconnue", http.StatusNotFound)
+		}
+	})))
 	mux.Handle("/api/v1/postes/clients", s.auth(http.HandlerFunc(s.routePostesClients)))
 	mux.Handle("/api/v1/postes/clients/", s.auth(http.HandlerFunc(s.routePostesTelecharger)))
 	// Le poste lui-même : PAS de jeton d'admin — il n'en a pas et ne doit pas
