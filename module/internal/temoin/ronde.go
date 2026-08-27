@@ -70,7 +70,21 @@ type Trouvaille struct {
 	Octets    int64  `json:"octets"`
 	BlocsNuls int    `json:"blocs_nuls"`
 	Blocs     int    `json:"blocs"`
+	// Positions : l'offset EN OCTETS de chaque bloc nul, depuis le début du
+	// fichier.
+	//
+	// Sans elles, un signalement est invérifiable : la ronde lit par tranches,
+	// donc « 2 blocs nuls sur 256 lus » ne dit pas OÙ regarder. Constaté en
+	// vrai — une archive de 45 Go signalée, et une relecture des 256 premiers
+	// mégaoctets qui ne retrouve rien, sans qu'on puisse dire si le défaut est
+	// ailleurs dans le fichier ou n'a jamais existé. Un constat qu'on ne peut
+	// pas rejouer ne vaut rien.
+	Positions []int64 `json:"positions,omitempty"`
 }
+
+// MaxPositionsRetenues borne la liste : un fichier entièrement nul en
+// produirait des milliers, et l'état sur disque doit rester lisible.
+const MaxPositionsRetenues = 20
 
 // ResultatRonde : ce qu'un passage de ronde a constaté.
 type ResultatRonde struct {
@@ -156,13 +170,20 @@ func AnalyserTranche(chemin string, info fs.FileInfo, depuis, budget int64) (tr 
 	tampon := make([]byte, TailleBloc)
 	zeros := make([]byte, TailleBloc)
 	var blocs, nuls int
+	var positions []int64
 	for lus < budget {
 		n, errLecture := io.ReadFull(f, tampon)
 		if n == TailleBloc {
+			// Position AVANT d'incrémenter : c'est l'offset du bloc qu'on vient
+			// de lire, celui qu'on veut pouvoir rejouer.
+			position := depuis + lus
 			blocs++
 			lus += int64(n)
 			if bytes.Equal(tampon, zeros) {
 				nuls++
+				if len(positions) < MaxPositionsRetenues {
+					positions = append(positions, position)
+				}
 			}
 		}
 		if errLecture != nil {
@@ -181,7 +202,7 @@ func AnalyserTranche(chemin string, info fs.FileInfo, depuis, budget int64) (tr 
 		fini = true
 	}
 	if nuls > 0 {
-		tr = &Trouvaille{Chemin: chemin, Octets: info.Size(), BlocsNuls: nuls, Blocs: blocs}
+		tr = &Trouvaille{Chemin: chemin, Octets: info.Size(), BlocsNuls: nuls, Blocs: blocs, Positions: positions}
 	}
 	return tr, lus, fini, nil
 }

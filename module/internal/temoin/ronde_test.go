@@ -269,3 +269,46 @@ func TestDecoderCurseurAbimeRepartDuDebutDuFichier(t *testing.T) {
 		t.Fatalf("curseur abîmé mal interprété : %+v", p)
 	}
 }
+
+// Un signalement doit pouvoir être REJOUÉ : sans la position, on ne sait pas où
+// regarder dans un fichier de 45 Go, et le constat ne vaut rien.
+func TestUneTrouvailleDitOuSontLesTrous(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "gros.bin")
+	// sain | TROU | sain | TROU
+	contenu := append(bloc(0x41), make([]byte, TailleBloc)...)
+	contenu = append(contenu, bloc(0x42)...)
+	contenu = append(contenu, make([]byte, TailleBloc)...)
+	ecrireFichier(t, p, contenu)
+
+	info, _ := os.Stat(p)
+	tr, _, _, err := AnalyserTranche(p, info, 0, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr == nil || len(tr.Positions) != 2 {
+		t.Fatalf("positions manquantes : %+v", tr)
+	}
+	if tr.Positions[0] != TailleBloc || tr.Positions[1] != 3*TailleBloc {
+		t.Fatalf("positions fausses : %v (attendu %d et %d)", tr.Positions, TailleBloc, 3*TailleBloc)
+	}
+}
+
+// Reprise en plein fichier : la position doit rester ABSOLUE, sinon elle
+// désigne un endroit qui n'existe pas.
+func TestLesPositionsRestentAbsoluesApresReprise(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "gros.bin")
+	contenu := append(bloc(0x41), make([]byte, TailleBloc)...)
+	ecrireFichier(t, p, contenu)
+
+	info, _ := os.Stat(p)
+	// On reprend APRÈS le premier bloc : le trou est alors le premier lu.
+	tr, _, _, err := AnalyserTranche(p, info, TailleBloc, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr == nil || len(tr.Positions) != 1 || tr.Positions[0] != TailleBloc {
+		t.Fatalf("position relative au lieu d'absolue : %+v", tr)
+	}
+}
